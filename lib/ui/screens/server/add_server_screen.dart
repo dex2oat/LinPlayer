@@ -70,7 +70,7 @@ class _AddServerScreenState extends ConsumerState<AddServerScreen> with SingleTi
   
   Widget _buildManualTab() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(16).copyWith(bottom: 100),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -123,7 +123,7 @@ class _AddServerScreenState extends ConsumerState<AddServerScreen> with SingleTi
               ),
               child: Text(
                 _errorMessage!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+                style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer),
               ),
             ),
           ],
@@ -145,7 +145,7 @@ class _AddServerScreenState extends ConsumerState<AddServerScreen> with SingleTi
   
   Widget _buildBatchTab() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(16).copyWith(bottom: 100),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -200,6 +200,20 @@ class _AddServerScreenState extends ConsumerState<AddServerScreen> with SingleTi
               ),
               obscureText: true,
             ),
+            if (_errorMessage != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _errorMessage!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer),
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
             FilledButton(
               onPressed: _isLoading ? null : _addBatchServers,
@@ -217,7 +231,7 @@ class _AddServerScreenState extends ConsumerState<AddServerScreen> with SingleTi
     final importController = TextEditingController();
     
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(16).copyWith(bottom: 100),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -348,30 +362,42 @@ class _AddServerScreenState extends ConsumerState<AddServerScreen> with SingleTi
   void _parseBatchText() {
     final text = _batchController.text;
     if (text.isEmpty) return;
-    
+
     final lines = <ServerLine>[];
-    final lineRegex = RegExp(r'(.+?线路)\s*[:：]\s*(https?://[^\s]+)', caseSensitive: false);
+
+    // 修改正则，支持有或没有协议前缀的URL
+    final lineRegex = RegExp(r'(.+?线路)\s*[:：]\s*(?:https?://)?([^\s]+)', caseSensitive: false);
+
+    // 提取文本中声明的端口号（如"端口: 8443"）
     final portRegex = RegExp(r'端口\s*[:：]\s*(\d+)');
-    
-    var portSuffix = '';
     final portMatch = portRegex.firstMatch(text);
-    if (portMatch != null) {
-      portSuffix = ':${portMatch.group(1)}';
-    }
-    
+    final customPort = portMatch != null ? portMatch.group(1) : null;
+
     for (final match in lineRegex.allMatches(text)) {
       final name = match.group(1)?.trim() ?? '线路';
-      var url = match.group(2)?.trim() ?? '';
-      if (portSuffix.isNotEmpty && !url.contains(RegExp(r':\d+', dotAll: true))) {
-        url = '$url$portSuffix';
+      var urlPart = match.group(2)?.trim() ?? '';
+
+      // 规范化URL（添加协议和默认端口）
+      var url = _normalizeUrl(urlPart);
+
+      // 如果文本中声明了端口号，且URL中没有显式端口，则替换默认端口
+      if (customPort != null) {
+        final hasExplicitPort = RegExp(r':\d+(?:/|$)').hasMatch(urlPart);
+        if (!hasExplicitPort) {
+          url = url.replaceFirst(
+            url.startsWith('https://') ? ':443' : ':80',
+            ':$customPort',
+          );
+        }
       }
+
       lines.add(ServerLine(
         id: DateTime.now().millisecondsSinceEpoch.toString() + lines.length.toString(),
         name: name,
         url: url,
       ));
     }
-    
+
     setState(() {
       _parsedLines = lines;
     });
@@ -428,8 +454,17 @@ class _AddServerScreenState extends ConsumerState<AddServerScreen> with SingleTi
         throw Exception('服务器地址不能为空');
       }
       
-      final fullUrl = path.isNotEmpty && path != '/' ? '$url$path' : url;
-      
+      var fullUrl = _normalizeUrl(url);
+
+      if (path.isNotEmpty && path != '/') {
+        final cleanPath = path.startsWith('/') ? path : '/$path';
+        // 避免重复拼接：去掉 URL 尾部斜杠后检查是否已包含该路径
+        final urlWithoutSlash = fullUrl.endsWith('/') ? fullUrl.substring(0, fullUrl.length - 1) : fullUrl;
+        if (!urlWithoutSlash.endsWith(cleanPath)) {
+          fullUrl = '$urlWithoutSlash$cleanPath';
+        }
+      }
+
       final client = EmbyApiClient(baseUrl: fullUrl);
       
       final serverInfo = await client.server.getPublicInfo(fullUrl);
@@ -483,15 +518,59 @@ class _AddServerScreenState extends ConsumerState<AddServerScreen> with SingleTi
     }
   }
   
-  String _formatError(dynamic e) {
-    if (e is Exception) {
-      final msg = e.toString();
-      if (msg.contains('401')) return '认证失败：用户名或密码错误';
-      if (msg.contains('403')) return '访问被拒绝';
-      if (msg.contains('502')) return '服务器网关错误';
-      if (msg.contains('Connection') || msg.contains('timeout')) return '网络连接失败，请检查地址';
-      return msg.replaceAll('Exception: ', '');
+  /// 规范化服务器URL
+  /// 1. 如果没有协议前缀，默认添加 https://
+  /// 2. 如果没有显式端口号：
+  ///    - http:// 自动追加 :80
+  ///    - https:// 自动追加 :443
+  String _normalizeUrl(String url) {
+    var normalized = url.trim();
+
+    // 1. 添加协议前缀（如果没有的话）
+    if (!normalized.startsWith(RegExp(r'https?://', caseSensitive: false))) {
+      normalized = 'https://$normalized';
     }
-    return e.toString();
+
+    // 2. 检查是否有显式端口号（域名后的:数字）
+    final portInUrl = RegExp(r':(\d+)(?:/|$)').firstMatch(normalized);
+    if (portInUrl == null) {
+      // 没有显式端口，需要添加默认端口
+      final scheme = normalized.startsWith('https://') ? 'https' : 'http';
+      final hostMatch = RegExp(r'https?://([^/:]+)').firstMatch(normalized);
+      if (hostMatch != null) {
+        final host = hostMatch.group(1)!;
+        final defaultPort = scheme == 'https' ? '443' : '80';
+        final pathStart = normalized.indexOf('/', scheme.length + 3);
+        final path = pathStart != -1 ? normalized.substring(pathStart) : '';
+        normalized = '$scheme://$host:$defaultPort$path';
+      }
+    }
+
+    return normalized;
+  }
+
+  String _formatError(dynamic e) {
+    final msg = e.toString().toLowerCase();
+
+    // DNS / 域名解析错误
+    if (msg.contains('failed host lookup') ||
+        msg.contains('no address associated with hostname') ||
+        msg.contains('name or service not known') ||
+        msg.contains('errno = 7')) {
+      return '无法解析服务器地址，请检查：\n1. 域名是否拼写正确\n2. 当前网络是否能访问该域名\n3. 是否需要使用 http 而非 https';
+    }
+
+    if (msg.contains('400')) {
+      return '服务器返回 400 错误，可能原因：\n1. URL 路径重复（如 /emby/emby）\n2. 服务器不是 Emby/Jellyfin\n3. 需要修改路径（尝试将路径改为 / 或其他）\n\n请检查浏览器中能访问的完整地址，确保和输入一致';
+    }
+    if (msg.contains('401')) return '认证失败：用户名或密码错误';
+    if (msg.contains('403')) return '访问被拒绝';
+    if (msg.contains('404')) return '服务器接口不存在，请检查 URL 和路径是否正确';
+    if (msg.contains('502')) return '服务器网关错误';
+    if (msg.contains('connection') || msg.contains('timeout') || msg.contains('refused')) {
+      return '网络连接失败，请检查：\n1. 服务器地址和端口是否正确\n2. 当前网络是否能访问该服务器';
+    }
+
+    return e.toString().replaceAll('Exception: ', '');
   }
 }

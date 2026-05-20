@@ -1,8 +1,8 @@
-# LinPlayer Mobile - UI 项目
+# Linplayer Mobile - UI 项目
 
 ## 项目概述
 
-本项目是 LinPlayer 的 Flutter 移动端 UI 实现，基于 DESIGN.md 设计文档构建。
+本项目是 Linplayer 的 Flutter 移动端 UI 实现，基于 DESIGN.md 设计文档构建。
 
 ## 技术栈
 

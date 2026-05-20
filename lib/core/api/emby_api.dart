@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'api_interfaces.dart';
 
 class EmbyApiClient implements ApiClientFactory {
@@ -15,8 +16,10 @@ class EmbyApiClient implements ApiClientFactory {
   }
 
   static Dio _createDio(String baseUrl, String? authToken) {
+    // 确保 baseUrl 以 / 结尾，避免 Dio 拼接路径时丢失子路径
+    final normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
     final dio = Dio(BaseOptions(
-      baseUrl: baseUrl,
+      baseUrl: normalizedBaseUrl,
       connectTimeout: const Duration(seconds: 15),
       receiveTimeout: const Duration(seconds: 30),
       headers: {
@@ -92,6 +95,25 @@ class EmbyApiClient implements ApiClientFactory {
     _userId = null;
     _dio.options.headers.remove('X-Emby-Token');
   }
+
+  /// 包装 Dio.get，自动去掉路径开头的 /，确保 baseUrl 子路径不被丢弃
+  Future<Response<T>> get<T>(String path, {Map<String, dynamic>? queryParameters, Options? options}) {
+    return _dio.get<T>(
+      path.startsWith('/') ? path.substring(1) : path,
+      queryParameters: queryParameters,
+      options: options,
+    );
+  }
+
+  /// 包装 Dio.post，自动去掉路径开头的 /，确保 baseUrl 子路径不被丢弃
+  Future<Response<T>> post<T>(String path, {dynamic data, Map<String, dynamic>? queryParameters, Options? options}) {
+    return _dio.post<T>(
+      path.startsWith('/') ? path.substring(1) : path,
+      data: data,
+      queryParameters: queryParameters,
+      options: options,
+    );
+  }
 }
 
 // ==================== Auth ====================
@@ -102,7 +124,7 @@ class EmbyAuthApi implements AuthApi {
 
   @override
   Future<AuthResult> login({required String username, required String password}) async {
-    final resp = await _client._dio.post('/Users/AuthenticateByName', data: {
+    final resp = await _client.post('/Users/AuthenticateByName', data: {
       'Username': username,
       'Pw': password,
     });
@@ -122,7 +144,7 @@ class EmbyAuthApi implements AuthApi {
   @override
   Future<void> logout() async {
     try {
-      await _client._dio.post('/Sessions/Logout');
+      await _client.post('/Sessions/Logout');
     } finally {
       _client.clearAuth();
     }
@@ -132,7 +154,7 @@ class EmbyAuthApi implements AuthApi {
   Future<User> getCurrentUser() async {
     final uid = _client._userId;
     if (uid == null) throw Exception('Not authenticated');
-    final resp = await _client._dio.get('/Users/$uid');
+    final resp = await _client.get('/Users/$uid');
     return _parseUser(resp.data as Map<String, dynamic>);
   }
 
@@ -153,7 +175,7 @@ class EmbyUserApi implements UserApi {
 
   @override
   Future<User> getUser(String userId) async {
-    final resp = await _client._dio.get('/Users/$userId');
+    final resp = await _client.get('/Users/$userId');
     return _parseUser(resp.data as Map<String, dynamic>);
   }
 }
@@ -166,22 +188,37 @@ class EmbyServerApi implements ServerApi {
 
   @override
   Future<ServerInfo> getPublicInfo(String baseUrl) async {
-    final dio = Dio(BaseOptions(baseUrl: baseUrl));
-    final resp = await dio.get('/System/Info/Public');
-    return _parseServerInfo(resp.data as Map<String, dynamic>);
+    // 确保 baseUrl 以 / 结尾
+    final normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
+    final dio = Dio(BaseOptions(baseUrl: normalizedBaseUrl));
+    
+    debugPrint('[EmbyAPI] getPublicInfo: baseUrl=$normalizedBaseUrl');
+    
+    try {
+      final resp = await dio.get('System/Info/Public');
+      debugPrint('[EmbyAPI] getPublicInfo success: ${resp.statusCode}');
+      return _parseServerInfo(resp.data as Map<String, dynamic>);
+    } on DioException catch (e) {
+      debugPrint('[EmbyAPI] getPublicInfo failed: ${e.type} | ${e.message}');
+      debugPrint('[EmbyAPI] request URL: ${e.requestOptions.uri}');
+      debugPrint('[EmbyAPI] response: ${e.response?.statusCode} | ${e.response?.data}');
+      rethrow;
+    }
   }
 
   @override
   Future<ServerInfo> getSystemInfo() async {
-    final resp = await _client._dio.get('/System/Info');
+    final resp = await _client.get('/System/Info');
     return _parseServerInfo(resp.data as Map<String, dynamic>);
   }
 
   @override
   Future<bool> testConnection(String baseUrl) async {
     try {
-      final dio = Dio(BaseOptions(baseUrl: baseUrl, connectTimeout: const Duration(seconds: 5)));
-      await dio.get('/System/Info/Public');
+      // 确保 baseUrl 以 / 结尾
+      final normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
+      final dio = Dio(BaseOptions(baseUrl: normalizedBaseUrl, connectTimeout: const Duration(seconds: 5)));
+      await dio.get('System/Info/Public');
       return true;
     } catch (_) {
       return false;
@@ -198,7 +235,7 @@ class EmbyHomeApi implements HomeApi {
   @override
   Future<List<MediaItem>> getResumeItems() async {
     final uid = _requireUserId(_client);
-    final resp = await _client._dio.get('/Users/$uid/Items/Resume', queryParameters: {
+    final resp = await _client.get('/Users/$uid/Items/Resume', queryParameters: {
       'Limit': 12,
       'MediaTypes': 'Video',
       'Fields': 'Overview,Genres,CommunityRating,OfficialRating,PremiereDate,RunTimeTicks,ProductionYear,Tags,SeriesName,IndexNumber,ParentIndexNumber',
@@ -209,7 +246,7 @@ class EmbyHomeApi implements HomeApi {
   @override
   Future<List<MediaItem>> getNextUp() async {
     final uid = _requireUserId(_client);
-    final resp = await _client._dio.get('/Shows/NextUp', queryParameters: {
+    final resp = await _client.get('/Shows/NextUp', queryParameters: {
       'UserId': uid,
       'Limit': 12,
       'Fields': 'Overview,Genres,CommunityRating,OfficialRating,PremiereDate,RunTimeTicks,ProductionYear,Tags,SeriesName,IndexNumber,ParentIndexNumber',
@@ -220,7 +257,7 @@ class EmbyHomeApi implements HomeApi {
   @override
   Future<List<Library>> getLibraries() async {
     final uid = _requireUserId(_client);
-    final resp = await _client._dio.get('/Users/$uid/Views');
+    final resp = await _client.get('/Users/$uid/Views');
     final items = (resp.data as Map<String, dynamic>)['Items'] as List<dynamic>;
     return items.map((e) => _parseLibrary(e as Map<String, dynamic>)).toList();
   }
@@ -228,7 +265,7 @@ class EmbyHomeApi implements HomeApi {
   @override
   Future<List<MediaItem>> getLatestItems(String libraryId, {int limit = 20}) async {
     final uid = _requireUserId(_client);
-    final resp = await _client._dio.get('/Users/$uid/Items/Latest', queryParameters: {
+    final resp = await _client.get('/Users/$uid/Items/Latest', queryParameters: {
       'ParentId': libraryId,
       'Limit': limit,
       'Fields': 'Overview,Genres,CommunityRating,OfficialRating,PremiereDate,RunTimeTicks,ProductionYear,Tags,SeriesName,IndexNumber,ParentIndexNumber',
@@ -240,7 +277,7 @@ class EmbyHomeApi implements HomeApi {
   @override
   Future<List<MediaItem>> getRandomRecommendations({int limit = 8}) async {
     final uid = _requireUserId(_client);
-    final resp = await _client._dio.get('/Users/$uid/Items', queryParameters: {
+    final resp = await _client.get('/Users/$uid/Items', queryParameters: {
       'Limit': limit,
       'SortBy': 'Random',
       'IncludeItemTypes': 'Movie,Series',
@@ -278,14 +315,14 @@ class EmbyLibraryApi implements LibraryApi {
       params['SortBy'] = sortBy;
       params['SortOrder'] = sortOrder ?? 'Ascending';
     }
-    final resp = await _client._dio.get('/Users/$uid/Items', queryParameters: params);
+    final resp = await _client.get('/Users/$uid/Items', queryParameters: params);
     return _parseItemList(resp.data);
   }
 
   @override
   Future<Filters> getFilters(String libraryId) async {
     final uid = _requireUserId(_client);
-    final resp = await _client._dio.get('/Items/Filters', queryParameters: {
+    final resp = await _client.get('/Items/Filters', queryParameters: {
       'UserId': uid,
       'ParentId': libraryId,
     });
@@ -311,14 +348,14 @@ class EmbyMediaApi implements MediaApi {
       'Fields': 'Overview,Genres,CommunityRating,OfficialRating,PremiereDate,RunTimeTicks,ProductionYear,Tags,SeriesName,IndexNumber,ParentIndexNumber,People,Studios',
     };
     if (uid != null) params['UserId'] = uid;
-    final resp = await _client._dio.get('/Items/$itemId', queryParameters: params);
+    final resp = await _client.get('/Items/$itemId', queryParameters: params);
     return _parseMediaItem(resp.data as Map<String, dynamic>);
   }
 
   @override
   Future<List<MediaItem>> getSimilarItems(String itemId) async {
     final uid = _requireUserId(_client);
-    final resp = await _client._dio.get('/Items/$itemId/Similar', queryParameters: {
+    final resp = await _client.get('/Items/$itemId/Similar', queryParameters: {
       'UserId': uid,
       'Limit': 12,
       'Fields': 'Overview,Genres,CommunityRating,OfficialRating,PremiereDate,RunTimeTicks,ProductionYear,Tags',
@@ -330,7 +367,7 @@ class EmbyMediaApi implements MediaApi {
   @override
   Future<List<Season>> getSeasons(String seriesId) async {
     final uid = _requireUserId(_client);
-    final resp = await _client._dio.get('/Shows/$seriesId/Seasons', queryParameters: {
+    final resp = await _client.get('/Shows/$seriesId/Seasons', queryParameters: {
       'UserId': uid,
       'Fields': 'Overview',
     });
@@ -346,7 +383,7 @@ class EmbyMediaApi implements MediaApi {
       'Fields': 'Overview,RunTimeTicks',
     };
     if (seasonId != null) params['SeasonId'] = seasonId;
-    final resp = await _client._dio.get('/Shows/$seriesId/Episodes', queryParameters: params);
+    final resp = await _client.get('/Shows/$seriesId/Episodes', queryParameters: params);
     final items = (resp.data as Map<String, dynamic>)['Items'] as List<dynamic>;
     return items.map((e) => _parseEpisode(e as Map<String, dynamic>)).toList();
   }
@@ -354,7 +391,7 @@ class EmbyMediaApi implements MediaApi {
   @override
   Future<List<Person>> getPersonItems(String personName) async {
     final uid = _requireUserId(_client);
-    final resp = await _client._dio.get('/Persons/$personName/Items', queryParameters: {
+    final resp = await _client.get('/Persons/$personName/Items', queryParameters: {
       'UserId': uid,
       'Limit': 20,
     });
@@ -372,7 +409,7 @@ class EmbySearchApi implements SearchApi {
   @override
   Future<List<MediaItem>> getSearchHints(String query) async {
     final uid = _requireUserId(_client);
-    final resp = await _client._dio.get('/Search/Hints', queryParameters: {
+    final resp = await _client.get('/Search/Hints', queryParameters: {
       'UserId': uid,
       'SearchTerm': query,
       'Limit': 20,
@@ -384,7 +421,7 @@ class EmbySearchApi implements SearchApi {
   @override
   Future<List<MediaItem>> search(String query, {bool recursive = true}) async {
     final uid = _requireUserId(_client);
-    final resp = await _client._dio.get('/Users/$uid/Items', queryParameters: {
+    final resp = await _client.get('/Users/$uid/Items', queryParameters: {
       'SearchTerm': query,
       'Recursive': recursive,
       'Limit': 50,
@@ -396,7 +433,7 @@ class EmbySearchApi implements SearchApi {
   @override
   Future<Map<String, List<MediaItem>>> searchAggregate(String query) async {
     final uid = _requireUserId(_client);
-    final resp = await _client._dio.get('/Users/$uid/Items', queryParameters: {
+    final resp = await _client.get('/Users/$uid/Items', queryParameters: {
       'SearchTerm': query,
       'Recursive': true,
       'Limit': 50,
@@ -417,7 +454,7 @@ class EmbyPlaybackApi implements PlaybackApi {
   @override
   Future<PlaybackInfo> getPlaybackInfo(String itemId) async {
     final uid = _requireUserId(_client);
-    final resp = await _client._dio.post('/Items/$itemId/PlaybackInfo', data: {
+    final resp = await _client.post('/Items/$itemId/PlaybackInfo', data: {
       'UserId': uid,
       'StartTimeTicks': 0,
       'IsPlayback': true,
@@ -435,7 +472,7 @@ class EmbyPlaybackApi implements PlaybackApi {
 
   @override
   Future<void> reportPlaybackStart(PlaybackStartInfo info) async {
-    await _client._dio.post('/Sessions/Playing', data: {
+    await _client.post('/Sessions/Playing', data: {
       'ItemId': info.itemId,
       'MediaSourceId': info.mediaSourceId,
       'AudioStreamIndex': info.audioStreamIndex,
@@ -446,7 +483,7 @@ class EmbyPlaybackApi implements PlaybackApi {
 
   @override
   Future<void> reportPlaybackProgress(PlaybackProgressInfo info) async {
-    await _client._dio.post('/Sessions/Playing/Progress', data: {
+    await _client.post('/Sessions/Playing/Progress', data: {
       'ItemId': info.itemId,
       'MediaSourceId': info.mediaSourceId,
       'PositionTicks': info.positionTicks,
@@ -458,7 +495,7 @@ class EmbyPlaybackApi implements PlaybackApi {
 
   @override
   Future<void> reportPlaybackStopped(PlaybackStopInfo info) async {
-    await _client._dio.post('/Sessions/Playing/Stopped', data: {
+    await _client.post('/Sessions/Playing/Stopped', data: {
       'ItemId': info.itemId,
       'MediaSourceId': info.mediaSourceId,
       'PositionTicks': info.positionTicks,
@@ -475,7 +512,7 @@ class EmbyFavoriteApi implements FavoriteApi {
   @override
   Future<void> addFavorite(String itemId) async {
     final uid = _requireUserId(_client);
-    await _client._dio.post('/Users/$uid/FavoriteItems/$itemId');
+    await _client.post('/Users/$uid/FavoriteItems/$itemId');
   }
 
   @override
@@ -493,7 +530,7 @@ class EmbySessionApi implements SessionApi {
 
   @override
   Future<List<Session>> getSessions() async {
-    final resp = await _client._dio.get('/Sessions');
+    final resp = await _client.get('/Sessions');
     final items = resp.data as List<dynamic>;
     return items.map((e) => _parseSession(e as Map<String, dynamic>)).toList();
   }

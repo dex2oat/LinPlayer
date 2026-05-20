@@ -1,6 +1,6 @@
-# linplayer_mobile
+# Linplayer
 
-A new Flutter project.
+Linplayer - Emby第三方客户端移动端
 
 ## Getting Started
 
