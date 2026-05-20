@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:bonsoir/bonsoir.dart';
 import 'package:dio/dio.dart';
 import 'package:xml/xml.dart';
 
@@ -25,18 +24,17 @@ class CastDevice {
   });
 }
 
-/// 投屏服务
+/// 投屏服务（纯HTTP实现，无需mDNS插件）
 /// 
-/// 使用 mDNS (Bonsoir) 发现 DLNA/UPnP 设备
-/// 支持 Chromecast、智能电视、投屏器等
+/// 通过扫描局域网常见IP段发现DLNA设备
+/// 支持手动添加设备
 class CastService extends ChangeNotifier {
-  BonsoirDiscovery? _discovery;
   final List<CastDevice> _devices = [];
   bool _isScanning = false;
   CastDevice? _connectedDevice;
   
-  // Dio 用于发送 DLNA 控制请求
   final Dio _dio = Dio();
+  Timer? _scanTimer;
   
   List<CastDevice> get devices => List.unmodifiable(_devices);
   bool get isScanning => _isScanning;
@@ -52,171 +50,180 @@ class CastService extends ChangeNotifier {
     notifyListeners();
     
     try {
-      // 扫描 DLNA/UPnP 设备 (_services._dns-sd._udp)
-      _discovery = BonsoirDiscovery(type: '_http._tcp');
-      await _discovery!.ready;
+      // 扫描常见IP段（路由器常见分配范围）
+      await _scanNetworkRange('192.168.1');
+      await _scanNetworkRange('192.168.0');
+      await _scanNetworkRange('192.168.31'); // 小米路由
+      await _scanNetworkRange('10.0.0');
       
-      _discovery!.eventStream!.listen((event) async {
-        if (event.type == BonsoirDiscoveryEventType.discoveryServiceFound) {
-          final service = event.service!;
-          
-          // 解析服务信息 - 从 attributes 获取主机信息
-          final attributes = service.attributes;
-          String host = '';
-          if (attributes.containsKey('host')) {
-            host = attributes['host']!;
-          }
-          
-          final device = CastDevice(
-            id: '${service.name}_$host',
-            name: service.name,
-            host: host,
-            port: service.port,
-          );
-          
-          // 检查是否是媒体设备
-          if (_isMediaDevice(service.name)) {
-            _devices.add(device);
-            notifyListeners();
-            
-            // 尝试获取设备详细信息
-            if (device.host.isNotEmpty) {
-              _fetchDeviceDetails(device);
-            }
-          }
-        } else if (event.type == BonsoirDiscoveryEventType.discoveryServiceLost) {
-          final service = event.service!;
-          final host = service.attributes['host'] ?? '';
-          _devices.removeWhere((d) => d.id == '${service.name}_$host');
-          notifyListeners();
-        }
-      });
-      
-      await _discovery!.start();
-      
-      // 同时扫描特定服务类型
-      await _scanDLNAServices();
+      // 扫描特定端口上的DLNA服务
+      await _scanDLNAPorts();
       
     } catch (e) {
       debugPrint('设备扫描错误: $e');
+    } finally {
+      _isScanning = false;
+      notifyListeners();
     }
   }
   
   /// 停止扫描
-  Future<void> stopDiscovery() async {
-    if (_discovery != null) {
-      await _discovery!.stop();
-      _discovery = null;
-    }
+  void stopDiscovery() {
+    _scanTimer?.cancel();
     _isScanning = false;
     notifyListeners();
   }
   
-  /// 检查是否是媒体设备
-  bool _isMediaDevice(String name) {
-    final lower = name.toLowerCase();
-    final keywords = [
-      'tv', '电视', 'chromecast', 'dlna', 'upnp', 'media',
-      'renderer', '播放器', '小米', 'xiao', 'huawei', '华为',
-      'sony', 'samsung', 'lg', 'panasonic', 'philips',
-    ];
-    return keywords.any((k) => lower.contains(k));
+  /// 扫描网段
+  Future<void> _scanNetworkRange(String subnet) async {
+    final ports = [80, 8080, 8008, 8009];
+    
+    // 扫描1-50号设备（常见分配）
+    for (int i = 1; i <= 50; i++) {
+      if (!_isScanning) break;
+      
+      final ip = '$subnet.$i';
+      
+      for (final port in ports) {
+        try {
+          final response = await _dio.get(
+            'http://$ip:$port',
+            options: Options(
+              sendTimeout: const Duration(milliseconds: 500),
+              receiveTimeout: const Duration(milliseconds: 500),
+              validateStatus: (status) => true,
+            ),
+          );
+          
+          if (response.statusCode != null) {
+            // 尝试获取设备信息
+            await _checkDevice(ip, port);
+          }
+        } catch (_) {
+          // 忽略超时和连接错误
+        }
+      }
+      
+      // 每扫描10个IP更新一次UI
+      if (i % 10 == 0) {
+        notifyListeners();
+      }
+    }
   }
   
-  /// 扫描 DLNA 特定服务
-  Future<void> _scanDLNAServices() async {
-    final discoveryTypes = [
-      '_upnp._tcp',
-      '_dlna._tcp',
-      '_googlecast._tcp',
+  /// 扫描DLNA特定端口
+  Future<void> _scanDLNAPorts() async {
+    // 常见DLNA端口
+    final dlnaPorts = [49152, 49153, 49154, 3900, 32469];
+    
+    // 获取本机IP前缀
+    String? localIP;
+    try {
+      // 这里简化处理，扫描常见网段
+      final subnets = ['192.168.1', '192.168.0', '10.0.0'];
+      
+      for (final subnet in subnets) {
+        for (int i = 1; i <= 30; i++) {
+          if (!_isScanning) break;
+          
+          final ip = '$subnet.$i';
+          for (final port in dlnaPorts) {
+            try {
+              await _dio.get(
+                'http://$ip:$port',
+                options: Options(
+                  sendTimeout: const Duration(milliseconds: 300),
+                  receiveTimeout: const Duration(milliseconds: 300),
+                  validateStatus: (status) => true,
+                ),
+              );
+              await _checkDevice(ip, port);
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('DLNA扫描错误: $e');
+    }
+  }
+  
+  /// 检查设备详情
+  Future<void> _checkDevice(String ip, int port) async {
+    final paths = [
+      '/rootDesc.xml',
+      '/description.xml',
+      '/DeviceDescription.xml',
+      '/dmr',
+      '/upnp/dev/1/dd.xml',
     ];
     
-    for (final type in discoveryTypes) {
+    for (final path in paths) {
       try {
-        final discovery = BonsoirDiscovery(type: type);
-        await discovery.ready;
+        final response = await _dio.get(
+          'http://$ip:$port$path',
+          options: Options(
+            sendTimeout: const Duration(seconds: 1),
+            receiveTimeout: const Duration(seconds: 1),
+          ),
+        );
         
-        discovery.eventStream!.listen((event) {
-          if (event.type == BonsoirDiscoveryEventType.discoveryServiceFound) {
-            final service = event.service!;
-            final host = service.attributes['host'] ?? '';
+        if (response.statusCode == 200 && response.data.toString().contains('<deviceType>')) {
+          final xmlDoc = XmlDocument.parse(response.data);
+          
+          final deviceType = xmlDoc.findAllElements('deviceType').firstOrNull?.value ?? '';
+          
+          // 只处理媒体渲染设备
+          if (deviceType.contains('MediaRenderer') || 
+              deviceType.contains('MediaServer')) {
+            final friendlyName = xmlDoc.findAllElements('friendlyName').firstOrNull?.value ?? '未知设备';
+            final manufacturer = xmlDoc.findAllElements('manufacturer').firstOrNull?.value ?? '';
+            
             final device = CastDevice(
-              id: '${service.name}_$host',
-              name: service.name,
-              host: host,
-              port: service.port,
+              id: '${ip}_$port',
+              name: friendlyName.isNotEmpty ? friendlyName : manufacturer,
+              host: ip,
+              port: port,
+              location: 'http://$ip:$port$path',
             );
+            
+            // 提取图标
+            final iconUrl = xmlDoc.findAllElements('icon').firstOrNull?.findElements('url').firstOrNull?.value;
+            if (iconUrl != null) {
+              device.iconUrl = iconUrl.startsWith('http') 
+                  ? iconUrl 
+                  : 'http://$ip:$port$iconUrl';
+            }
             
             if (!_devices.any((d) => d.id == device.id)) {
               _devices.add(device);
               notifyListeners();
             }
           }
-        });
-        
-        await discovery.start();
-        
-        // 5秒后停止这个发现
-        Future.delayed(const Duration(seconds: 5), () => discovery.stop());
-      } catch (e) {
-        debugPrint('DLNA扫描错误 ($type): $e');
-      }
+          
+          break; // 找到有效路径后停止
+        }
+      } catch (_) {}
     }
   }
   
-  /// 获取设备详细信息
-  Future<void> _fetchDeviceDetails(CastDevice device) async {
-    try {
-      // 常见 UPnP 设备描述路径
-      final paths = [
-        '/rootDesc.xml',
-        '/dmr',
-        '/description.xml',
-        '/DeviceDescription.xml',
-      ];
-      
-      for (final path in paths) {
-        try {
-          final response = await _dio.get(
-            'http://${device.host}:${device.port}$path',
-            options: Options(
-              sendTimeout: const Duration(seconds: 2),
-              receiveTimeout: const Duration(seconds: 2),
-            ),
-          );
-          
-          if (response.statusCode == 200) {
-            final xmlDoc = XmlDocument.parse(response.data);
-            
-            // 提取设备名称
-            final friendlyName = xmlDoc.findAllElements('friendlyName').firstOrNull?.value;
-            if (friendlyName != null && friendlyName.isNotEmpty) {
-              device.name = friendlyName;
-            }
-            
-            // 提取图标
-            final iconUrl = xmlDoc.findAllElements('icon').firstOrNull?.findElements('url').firstOrNull?.value;
-            if (iconUrl != null) {
-              device.iconUrl = 'http://${device.host}:${device.port}$iconUrl';
-            }
-            
-            device.location = 'http://${device.host}:${device.port}$path';
-            notifyListeners();
-            break;
-          }
-        } catch (_) {
-          continue;
-        }
-      }
-    } catch (e) {
-      debugPrint('获取设备详情失败: $e');
+  /// 手动添加设备
+  void addDeviceManually(String name, String host, int port) {
+    final device = CastDevice(
+      id: '${host}_$port',
+      name: name,
+      host: host,
+      port: port,
+    );
+    
+    if (!_devices.any((d) => d.id == device.id)) {
+      _devices.add(device);
+      notifyListeners();
     }
   }
   
   /// 连接设备
   Future<bool> connect(CastDevice device) async {
     try {
-      // 测试连接
       await _dio.get(
         'http://${device.host}:${device.port}',
         options: Options(
@@ -255,7 +262,7 @@ class CastService extends ChangeNotifier {
   <s:Body>
     <u:SetAVTransportURI xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
       <InstanceID>0</InstanceID>
-      <CurrentURI>${Uri.encodeFull(videoUrl)}</CurrentURI>
+      <CurrentURI>$videoUrl</CurrentURI>
       <CurrentURIMetaData></CurrentURIMetaData>
     </u:SetAVTransportURI>
   </s:Body>
