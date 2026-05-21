@@ -165,7 +165,7 @@ jobs:
         if: steps.cache-aar.outputs.cache-hit != 'true'
         run: |
           cd /tmp/media3
-          ./gradlew :libraries:decoder_ffmpeg:assembleRelease
+          ./gradlew :lib-decoder-ffmpeg:assembleRelease
       
       - name: Copy AAR to project
         if: steps.cache-aar.outputs.cache-hit != 'true'

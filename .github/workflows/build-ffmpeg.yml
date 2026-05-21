@@ -149,10 +149,11 @@ jobs:
           make install
       
       # 编译 AAR
+      # 注意：media3 仓库的模块名为 lib-decoder-ffmpeg，不是 libraries:decoder_ffmpeg
       - name: Build AAR
         run: |
           cd /tmp/media3
-          ./gradlew :libraries:decoder_ffmpeg:assembleRelease
+          ./gradlew :lib-decoder-ffmpeg:assembleRelease
       
       # 上传 AAR Artifact
       - name: Upload AAR
