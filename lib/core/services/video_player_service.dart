@@ -5,27 +5,27 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/api_interfaces.dart';
 import 'player_adapter.dart';
-import 'video_player_adapter.dart';
-import 'media_kit_adapter.dart';
+import 'exo_player_adapter.dart';
+import 'mpv_player_adapter.dart';
 
 /// 播放器内核类型
 enum PlayerCoreType {
-  videoPlayer,  // ExoPlayer/AVPlayer
-  mediaKit,     // MPV原生
+  exoPlayer,  // ExoPlayer（Android 原生）
+  mpv,        // MPV（libmpv FFI）
 }
 
 /// 视频播放器服务
-/// 
+///
 /// 支持动态切换播放器内核：
-/// - video_player: 轻量稳定，适合大多数场景
-/// - media_kit: MPV原生，支持PGS/SUP图形字幕、HDR
+/// - ExoPlayer: Android 原生，轻量稳定
+/// - MPV: libmpv FFI，全格式支持、HDR、高级字幕控制
 class VideoPlayerService extends ChangeNotifier {
   PlayerAdapter? _adapter;
-  PlayerCoreType _coreType = PlayerCoreType.videoPlayer;
-  
+  PlayerCoreType _coreType = PlayerCoreType.exoPlayer;
+
   Timer? _progressTimer;
   Timer? _hideControlsTimer;
-  
+
   // 手势状态
   bool _showControls = true;
   bool _isLocked = false;
@@ -36,14 +36,14 @@ class VideoPlayerService extends ChangeNotifier {
   double _dragStartVolume = 1.0;
   double _currentBrightness = 1.0;
   double _dragStartBrightness = 1.0;
-  
+
   // 播放上报
   String? _currentItemId;
   String? _mediaSourceId;
   Function(PlaybackProgressInfo)? _onProgressReport;
   Function(PlaybackStartInfo)? _onStartReport;
   Function(PlaybackStopInfo)? _onStopReport;
-  
+
   // Getters
   bool get isPlaying => _adapter?.isPlaying ?? false;
   bool get isBuffering => _adapter?.isBuffering ?? false;
@@ -61,28 +61,46 @@ class VideoPlayerService extends ChangeNotifier {
   double get progress => _adapter?.progress ?? 0.0;
   PlayerCoreType get coreType => _coreType;
   double get brightness => _currentBrightness;
-  
+
+  /// 手势起始 X 坐标（用于判断亮度/音量区域）
+  double get dragStartX => _dragStartX;
+
+  /// 拖动方向：1=向前, -1=向后, 0=无
+  int get dragDirection {
+    if (!_isDragging) return 0;
+    final currentPos = _adapter?.position.inMilliseconds ?? 0;
+    final dx = _dragStartPosition.inMilliseconds - currentPos;
+    if (dx < -500) return 1; // 向后拖 = 快进
+    if (dx > 500) return -1; // 向前拖 = 快退
+    return 0;
+  }
+
+  /// Flutter Texture ID（用于 Texture widget 渲染视频）
+  int? get textureId => _adapter?.textureId;
+
+  /// libass 是否已就绪
+  bool get libassReady => _adapter?.libassReady ?? false;
+
   /// 设置播放器内核
   void setCoreType(PlayerCoreType type) {
     if (_coreType == type) return;
     _coreType = type;
-    // 如果正在播放，需要重新初始化
     if (_adapter?.isInitialized ?? false) {
       // TODO: 重新加载当前视频
     }
     notifyListeners();
   }
-  
+
   /// 创建适配器
   PlayerAdapter _createAdapter() {
     switch (_coreType) {
-      case PlayerCoreType.videoPlayer:
-        return VideoPlayerAdapter();
-      case PlayerCoreType.mediaKit:
-        return MediaKitAdapter();
+      case PlayerCoreType.exoPlayer:
+        return ExoPlayerAdapter();
+      case PlayerCoreType.mpv:
+        return MpvPlayerAdapter();
     }
   }
-  
+
   /// 初始化播放器
   Future<void> initialize({
     required String videoUrl,
@@ -101,17 +119,17 @@ class VideoPlayerService extends ChangeNotifier {
     _onStartReport = onStart;
     _onProgressReport = onProgress;
     _onStopReport = onStop;
-    
+
     if (coreType != null) {
       _coreType = coreType;
     }
-    
+
     // 释放旧适配器
     await _adapter?.dispose();
-    
+
     // 创建新适配器
     _adapter = _createAdapter();
-    
+
     // 设置回调
     _adapter!.setCallbacks(PlayerStateCallbacks(
       onPositionChanged: () => notifyListeners(),
@@ -131,7 +149,7 @@ class VideoPlayerService extends ChangeNotifier {
       },
       onError: () => notifyListeners(),
     ));
-    
+
     // 初始化
     await _adapter!.initialize(
       videoUrl: videoUrl,
@@ -139,63 +157,48 @@ class VideoPlayerService extends ChangeNotifier {
       dolbyVisionFix: dolbyVisionFix ?? false,
       useLibass: useLibass ?? false,
     );
-    
+
     // 开始播放
     await _adapter!.play();
-    
+
     // 上报开始
     _reportStart();
-    
+
+    // 加载 libass 字幕（如果启用）
+    if (useLibass ?? false) {
+      // 由调用方在 initialize 后手动加载字幕
+    }
+
     // 启动进度定时器
     _startProgressTimer();
-    
+
     notifyListeners();
   }
-  
+
   /// 加载外部字幕文件（通过 libass）
   Future<void> loadLibassSubtitle(String path) async {
     await _adapter?.loadLibassSubtitle(path);
   }
-  
+
   /// 加载字幕数据到内存（通过 libass）
   Future<void> loadLibassSubtitleMemory(Uint8List data, {String codec = 'ass'}) async {
     await _adapter?.loadLibassSubtitleMemory(data, codec: codec);
   }
-  
-  /// libass 是否已就绪
-  bool get libassReady => _adapter?.libassReady ?? false;
-  
-  /// 视频渲染Widget
-  Widget buildVideoWidget() {
-    if (_adapter == null) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(color: Colors.white),
-            SizedBox(height: 16),
-            Text('正在加载...', style: TextStyle(color: Colors.white70)),
-          ],
-        ),
-      );
-    }
-    return _adapter!.buildVideoWidget();
-  }
-  
+
   /// 播放
   Future<void> play() async {
     await _adapter?.play();
     _startHideControlsTimer();
     notifyListeners();
   }
-  
+
   /// 暂停
   Future<void> pause() async {
     await _adapter?.pause();
     _cancelHideControlsTimer();
     notifyListeners();
   }
-  
+
   /// 播放/暂停切换
   Future<void> togglePlay() async {
     if (isPlaying) {
@@ -204,24 +207,24 @@ class VideoPlayerService extends ChangeNotifier {
       await play();
     }
   }
-  
+
   /// 跳转到指定位置
   Future<void> seekTo(Duration position) async {
     await _adapter?.seekTo(position);
     notifyListeners();
   }
-  
+
   /// 快进/快退
   Future<void> seekBy(Duration offset) async {
     await seekTo(position + offset);
   }
-  
+
   /// 设置播放速度
   Future<void> setSpeed(double speed) async {
     await _adapter?.setSpeed(speed);
     notifyListeners();
   }
-  
+
   /// 设置音量
   Future<void> setVolume(double volume) async {
     await _adapter?.setVolume(volume);
@@ -236,36 +239,43 @@ class VideoPlayerService extends ChangeNotifier {
   /// 设置字幕同步偏移
   Future<void> setSubtitleDelay(double seconds) async {
     await _adapter?.setSubtitleDelay(seconds);
+    notifyListeners();
   }
 
   /// 设置音频同步偏移
   Future<void> setAudioDelay(double seconds) async {
     await _adapter?.setAudioDelay(seconds);
+    notifyListeners();
   }
 
   /// 设置字幕字体
   Future<void> setSubtitleFont(String fontName) async {
     await _adapter?.setSubtitleFont(fontName);
+    notifyListeners();
   }
 
   /// 设置字幕大小
   Future<void> setSubtitleSize(double size) async {
     await _adapter?.setSubtitleSize(size);
+    notifyListeners();
   }
 
   /// 设置字幕位置
   Future<void> setSubtitlePosition(double position) async {
     await _adapter?.setSubtitlePosition(position);
+    notifyListeners();
   }
 
   /// 设置画面比例
   Future<void> setAspectRatio(String ratio) async {
     await _adapter?.setAspectRatio(ratio);
+    notifyListeners();
   }
 
   /// 应用超分辨率
   Future<void> applySuperResolution(bool enable) async {
     await _adapter?.applySuperResolution(enable);
+    notifyListeners();
   }
 
   /// 设置亮度
@@ -289,7 +299,7 @@ class VideoPlayerService extends ChangeNotifier {
       notifyListeners();
     }
   }
-  
+
   /// 显示/隐藏控制栏
   void toggleControls() {
     if (_isLocked) return;
@@ -301,7 +311,7 @@ class VideoPlayerService extends ChangeNotifier {
     }
     notifyListeners();
   }
-  
+
   /// 锁定/解锁屏幕
   void toggleLock() {
     _isLocked = !_isLocked;
@@ -311,9 +321,9 @@ class VideoPlayerService extends ChangeNotifier {
     }
     notifyListeners();
   }
-  
+
   // ========== 手势控制 ==========
-  
+
   void onDragStart(DragStartDetails details, BoxConstraints constraints) {
     if (_isLocked || !isInitialized) return;
     _isDragging = true;
@@ -325,64 +335,67 @@ class VideoPlayerService extends ChangeNotifier {
     _cancelHideControlsTimer();
     notifyListeners();
   }
-  
+
   void onDragUpdate(DragUpdateDetails details, BoxConstraints constraints) {
     if (!_isDragging || _isLocked) return;
-    
+
     final dx = details.globalPosition.dx - _dragStartX;
     final dy = details.globalPosition.dy - _dragStartY;
     final width = constraints.maxWidth;
     final height = constraints.maxHeight;
-    
-    if (dx.abs() > dy.abs()) {
-      // 水平滑动：进度
-      final progressDelta = dx / width * duration.inMilliseconds;
+
+    // 手势灵敏度阈值：至少移动 10 个逻辑像素才开始响应
+    const threshold = 10.0;
+    if (dx.abs() < threshold && dy.abs() < threshold) return;
+
+    if (dx.abs() > dy.abs() * 1.5) {
+      // 水平滑动（进度调节）：需要水平移动明显大于垂直移动
+      final progressDelta = dx / width * duration.inMilliseconds * 0.5; // 降低灵敏度系数
       final newPositionMs = max(0, min(
         _dragStartPosition.inMilliseconds + progressDelta.round(),
         duration.inMilliseconds,
       ));
-      // 不实际跳转，只更新显示位置
       _dragStartPosition = Duration(milliseconds: newPositionMs);
       notifyListeners();
-    } else {
-      // 垂直滑动
+    } else if (dy.abs() > dx.abs() * 1.5) {
+      // 垂直滑动（亮度/音量）：需要垂直移动明显大于水平移动
       if (_dragStartX < width / 2) {
         // 左侧：亮度
-        final brightnessDelta = -dy / height;
+        final brightnessDelta = -dy / height * 0.7; // 降低灵敏度系数
         final newBrightness = (_dragStartBrightness + brightnessDelta).clamp(0.1, 1.0);
         setBrightness(newBrightness);
       } else {
         // 右侧：音量
-        final volumeDelta = -dy / height;
+        final volumeDelta = -dy / height * 0.7; // 降低灵敏度系数
         final newVolume = (_dragStartVolume + volumeDelta).clamp(0.0, 1.0);
         setVolume(newVolume);
       }
     }
+    // 如果移动方向不明确（水平和垂直移动差不多），则不响应，避免误触
   }
-  
+
   void onDragEnd(DragEndDetails details) {
     if (!_isDragging) return;
     _isDragging = false;
-    // 执行实际跳转
     seekTo(_dragStartPosition);
     _startHideControlsTimer();
     notifyListeners();
   }
-  
+
   // ========== 内部方法 ==========
-  
+
   void _startProgressTimer() {
     _progressTimer?.cancel();
     _progressTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       _reportProgress();
     });
   }
-  
+
   void _stopProgressTimer() {
     _progressTimer?.cancel();
     _progressTimer = null;
   }
-  
+
   void _startHideControlsTimer() {
     _cancelHideControlsTimer();
     _hideControlsTimer = Timer(const Duration(seconds: 3), () {
@@ -392,14 +405,14 @@ class VideoPlayerService extends ChangeNotifier {
       }
     });
   }
-  
+
   void _cancelHideControlsTimer() {
     _hideControlsTimer?.cancel();
     _hideControlsTimer = null;
   }
-  
+
   // ========== 播放上报 ==========
-  
+
   void _reportStart() {
     if (_onStartReport == null || _currentItemId == null) return;
     _onStartReport!(PlaybackStartInfo(
@@ -407,7 +420,7 @@ class VideoPlayerService extends ChangeNotifier {
       mediaSourceId: _mediaSourceId ?? _currentItemId!,
     ));
   }
-  
+
   void _reportProgress() {
     if (_onProgressReport == null || _currentItemId == null) return;
     _onProgressReport!(PlaybackProgressInfo(
@@ -418,7 +431,7 @@ class VideoPlayerService extends ChangeNotifier {
       volumeLevel: volume,
     ));
   }
-  
+
   void _reportStop() {
     if (_onStopReport == null || _currentItemId == null) return;
     _onStopReport!(PlaybackStopInfo(
@@ -427,7 +440,7 @@ class VideoPlayerService extends ChangeNotifier {
       positionTicks: (position.inMilliseconds * 10000).round(),
     ));
   }
-  
+
   /// 释放资源
   @override
   Future<void> dispose() async {

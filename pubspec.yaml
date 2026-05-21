@@ -32,12 +32,9 @@ dependencies:
   slang: ^3.30.0
   slang_flutter: ^3.30.0
   
-  # 视频播放 (video_player - ExoPlayer/AVPlayer)
-  video_player: ^2.8.2
-  # 视频播放 (media_kit - MPV原生)
-  media_kit: ^1.1.10+1
-  media_kit_video: ^1.2.4
-  media_kit_libs_video: ^1.0.4
+  # 原生播放器：FFI + Platform Channel（不再依赖第三方 Dart 封装库）
+  # mpv 需通过 FFI 直接调用 libmpv.so（自行编译或下载预编译库）
+  ffi: ^2.1.0
   
   # 工具
   freezed_annotation: ^2.4.1

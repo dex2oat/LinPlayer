@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/services/webdav_service.dart';
+import '../../../core/services/app_logger.dart';
 import '../../../core/utils/danmaku_filter.dart';
 
 /// 设置主页
@@ -97,15 +98,30 @@ class SettingsScreen extends ConsumerWidget {
           FilledButton(
             onPressed: () {
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('已是最新版本')),
-              );
+              _exportLogs(context);
             },
-            child: const Text('检查更新'),
+            child: const Text('导出日志'),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _exportLogs(BuildContext context) async {
+    try {
+      final path = await AppLogger().exportToFile();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('日志已导出到: $path')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导出日志失败: $e')),
+        );
+      }
+    }
   }
 
   void _showBackupRestore(BuildContext context) {

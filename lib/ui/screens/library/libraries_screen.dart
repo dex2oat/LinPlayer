@@ -206,7 +206,6 @@ class _GridView extends ConsumerWidget {
                   children: [
                     Container(
                       decoration: BoxDecoration(
-                        color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       clipBehavior: Clip.antiAlias,
@@ -215,14 +214,17 @@ class _GridView extends ConsumerWidget {
                               imageUrl: imageUrl,
                               width: double.infinity,
                               height: double.infinity,
-                              fit: BoxFit.cover,
+                              fit: BoxFit.contain,
                               borderRadius: BorderRadius.circular(12),
                             )
-                          : const Center(
-                              child: Icon(
-                                Icons.folder,
-                                size: 48,
-                                color: Color(0xFF5B8DEF),
+                          : Container(
+                              color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
+                              child: const Center(
+                                child: Icon(
+                                  Icons.folder,
+                                  size: 48,
+                                  color: Color(0xFF5B8DEF),
+                                ),
                               ),
                             ),
                     ),

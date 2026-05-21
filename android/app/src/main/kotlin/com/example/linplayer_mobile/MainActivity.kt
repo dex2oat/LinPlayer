@@ -6,11 +6,27 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
-    private val CHANNEL = "com.linplayer/libass"
+    private val LIBASS_CHANNEL = "com.linplayer/libass"
+    private var exoPlayerPlugin: ExoPlayerPlugin? = null
+    private var mpvTexturePlugin: MpvTexturePlugin? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+
+        // 注册 ExoPlayer 插件
+        exoPlayerPlugin = ExoPlayerPlugin(
+            this,
+            flutterEngine.dartExecutor.binaryMessenger,
+            flutterEngine.renderer
+        )
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.linplayer/exoplayer")
+            .setMethodCallHandler(exoPlayerPlugin)
+
+        // 注册 MPV Texture 插件
+        mpvTexturePlugin = MpvTexturePlugin.registerWith(flutterEngine)
+
+        // 注册 libass MethodChannel
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, LIBASS_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "isLibassAvailable" -> {
@@ -63,6 +79,8 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        exoPlayerPlugin?.disposeAll()
+        mpvTexturePlugin?.disposeAll()
         LibassBridge.dispose()
         super.onDestroy()
     }

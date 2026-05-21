@@ -98,12 +98,16 @@ class LibassBridge {
     int offset = 0;
     final data = raw.buffer.asByteData();
 
-    while (offset + 12 <= raw.length) {
+    while (offset + 20 <= raw.length) {
       final w = data.getInt32(offset, Endian.host);
       offset += 4;
       final h = data.getInt32(offset, Endian.host);
       offset += 4;
       final stride = data.getInt32(offset, Endian.host);
+      offset += 4;
+      final dstX = data.getInt32(offset, Endian.host);
+      offset += 4;
+      final dstY = data.getInt32(offset, Endian.host);
       offset += 4;
 
       if (w <= 0 || h <= 0) break;
@@ -118,6 +122,8 @@ class LibassBridge {
         width: w,
         height: h,
         stride: stride,
+        dstX: dstX,
+        dstY: dstY,
         pixels: pixels,
       ));
     }
@@ -129,12 +135,16 @@ class LibassBlendRect {
   final int width;
   final int height;
   final int stride;
+  final int dstX;
+  final int dstY;
   final Uint8List pixels;
 
   const LibassBlendRect({
     required this.width,
     required this.height,
     required this.stride,
+    required this.dstX,
+    required this.dstY,
     required this.pixels,
   });
 

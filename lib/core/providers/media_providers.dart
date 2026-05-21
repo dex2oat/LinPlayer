@@ -181,9 +181,6 @@ final volumeProvider = StateProvider<double>((ref) => 1.0);
 /// 播放速度
 final playbackSpeedProvider = StateProvider<double>((ref) => 1.0);
 
-/// 弹幕开关
-final danmakuEnabledProvider = StateProvider<bool>((ref) => true);
-
 /// 字幕轨道
 final subtitleTrackProvider = StateProvider<int?>((ref) => null);
 

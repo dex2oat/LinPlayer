@@ -124,6 +124,7 @@ class MediaPoster extends ConsumerWidget {
       imageUrl: imageUrl,
       width: width.isFinite ? width : null,
       height: height.isFinite ? height : null,
+      fit: BoxFit.contain,
       borderRadius: BorderRadius.circular(8),
       heroTag: heroTag,
     );

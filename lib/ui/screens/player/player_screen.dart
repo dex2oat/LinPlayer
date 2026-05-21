@@ -1,13 +1,19 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:dio/dio.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
 import '../../../core/services/video_player_service.dart';
+import '../../../core/services/libass_bridge.dart';
+import '../../../core/services/app_logger.dart';
 
 /// 播放页
 class PlayerScreen extends ConsumerStatefulWidget {
@@ -74,14 +80,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     ref.read(currentPlayingItemProvider.notifier).state = item;
 
     final coreString = ref.read(playerCoreProvider);
-    final coreType = coreString == 'media_kit'
-        ? PlayerCoreType.mediaKit
-        : PlayerCoreType.videoPlayer;
+    final coreType = coreString == 'mpv'
+        ? PlayerCoreType.mpv
+        : PlayerCoreType.exoPlayer;
 
-    final dolbyVisionFix = coreType == PlayerCoreType.mediaKit
+    final dolbyVisionFix = coreType == PlayerCoreType.mpv
         ? ref.read(mpvDolbyVisionFixProvider)
         : false;
-    final useLibass = coreType == PlayerCoreType.videoPlayer
+    final useLibass = coreType == PlayerCoreType.exoPlayer
         ? ref.read(exoLibassProvider)
         : false;
 
@@ -116,39 +122,108 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       DeviceOrientation.landscapeRight,
     ]);
 
-    if (useLibass && _playerService.libassReady && mediaSource != null) {
-      await _loadLibassSubtitles(item, mediaSource);
+    // 延迟加载字幕，确保 libass 已初始化完成
+    if (useLibass && mediaSource != null) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (_playerService.libassReady) {
+        await _loadLibassSubtitles(item, mediaSource);
+      }
     }
   }
 
   Future<void> _loadLibassSubtitles(MediaItem item, MediaSource mediaSource) async {
+    final logger = AppLogger();
     final api = ref.read(apiClientProvider);
     final subtitleStreams = mediaSource.mediaStreams
         .where((s) => s.isSubtitle)
         .toList();
-    if (subtitleStreams.isEmpty) return;
+    
+    logger.i('Player', '开始加载字幕 - 可用字幕流: ${subtitleStreams.length} 个');
+    
+    if (subtitleStreams.isEmpty) {
+      logger.w('Player', '没有可用字幕流');
+      return;
+    }
+
+    for (final stream in subtitleStreams) {
+      logger.d('Player', '字幕流: index=${stream.index}, codec=${stream.codec}, language=${stream.language}, title=${stream.displayTitle}');
+    }
 
     final preferredLang = ref.read(preferredSubtitleLanguageProvider);
+    logger.i('Player', '首选字幕语言: $preferredLang');
+    
     final target = subtitleStreams.firstWhere(
       (s) => s.language == preferredLang,
       orElse: () => subtitleStreams.first,
     );
 
     final codec = target.codec?.toLowerCase() ?? 'ass';
+    logger.i('Player', '选择字幕: index=${target.index}, codec=$codec, language=${target.language}');
+    
     final subUrl = api.playback.getSubtitleStreamUrl(
       widget.itemId,
       mediaSource.id,
       target.index,
       codec == 'ass' || codec == 'ssa' ? codec : 'ass',
     );
+    logger.d('Player', '字幕URL: $subUrl');
 
-    await _playerService.loadLibassSubtitle(subUrl);
+    try {
+      // 下载字幕到本地临时文件
+      final tempDir = await getTemporaryDirectory();
+      final ext = codec == 'srt' ? 'srt' : (codec == 'subrip' ? 'srt' : 'ass');
+      final subFile = File('${tempDir.path}/subtitle_${widget.itemId}_${target.index}.$ext');
+      
+      logger.i('Player', '字幕本地路径: ${subFile.path}');
+      
+      if (!subFile.existsSync()) {
+        logger.d('Player', '开始下载字幕...');
+        final dio = Dio(BaseOptions(
+          connectTimeout: const Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 10),
+        ));
+        final response = await dio.download(subUrl, subFile.path);
+        logger.i('Player', '字幕下载完成 - 状态码: ${response.statusCode}, 大小: ${subFile.lengthSync()} bytes');
+      } else {
+        logger.i('Player', '使用已缓存的字幕文件');
+      }
+      
+      // 验证文件内容
+      final fileSize = await subFile.length();
+      if (fileSize == 0) {
+        logger.e('Player', '字幕文件大小为0');
+        return;
+      }
+      
+      // 读取前几行用于调试
+      final firstLines = await subFile.readAsLines().then((lines) => lines.take(5).join('\n'));
+      logger.d('Player', '字幕文件前5行:\n$firstLines');
+      
+      await _playerService.loadLibassSubtitle(subFile.path);
+      logger.i('Player', '字幕加载流程完成');
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('字幕加载: ${target.language ?? '默认'} (${codec.toUpperCase()})')),
+        );
+      }
+    } catch (e, stackTrace) {
+      logger.eWithStack('Player', '字幕加载失败', e, stackTrace);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('字幕加载失败: $e')),
+        );
+      }
+    }
   }
 
   void _onPlayerUpdate() {
     setState(() {});
     _checkSkipOpening();
   }
+
+  bool _showSkipButton = false;
+  Timer? _skipButtonTimer;
 
   void _checkSkipOpening() {
     final openingStart = ref.read(skipOpeningStartProvider);
@@ -157,17 +232,30 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     if (openingStart <= 0 || openingEnd <= 0 || openingEnd <= openingStart) return;
 
     final pos = _playerService.position.inSeconds;
-    if (pos >= openingStart && pos < openingEnd) {
-      if (autoSkip) {
-        _playerService.seekTo(Duration(seconds: openingEnd));
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已自动跳过片头')),
-        );
-      } else {
-        // 显示跳过按钮 - 简化处理，直接在进度条上方显示 SnackBar
-        // 这里用 ScaffoldMessenger 可能太频繁，暂不实现浮动按钮
-      }
+    final inOpening = pos >= openingStart && pos < openingEnd;
+
+    if (inOpening && autoSkip) {
+      _playerService.seekTo(Duration(seconds: openingEnd));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已自动跳过片头')),
+      );
+    } else if (inOpening && !_showSkipButton) {
+      setState(() => _showSkipButton = true);
+      _skipButtonTimer?.cancel();
+      _skipButtonTimer = Timer(const Duration(seconds: 5), () {
+        if (mounted) setState(() => _showSkipButton = false);
+      });
+    } else if (!inOpening && _showSkipButton) {
+      setState(() => _showSkipButton = false);
+      _skipButtonTimer?.cancel();
     }
+  }
+
+  void _onSkipOpeningPressed() {
+    final openingEnd = ref.read(skipOpeningEndProvider);
+    _playerService.seekTo(Duration(seconds: openingEnd));
+    setState(() => _showSkipButton = false);
+    _skipButtonTimer?.cancel();
   }
 
   @override
@@ -183,6 +271,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     _playerService.removeListener(_onPlayerUpdate);
     _playerService.dispose();
     _longPressTimer?.cancel();
+    _skipButtonTimer?.cancel();
 
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations([
@@ -270,6 +359,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
                 // 拖动进度提示
                 if (_playerService.isDragging)
                   _buildDragIndicator(),
+
+                // 跳过片头按钮
+                if (_showSkipButton)
+                  Positioned(
+                    top: 100,
+                    right: 24,
+                    child: ElevatedButton.icon(
+                      onPressed: _onSkipOpeningPressed,
+                      icon: const Icon(Icons.skip_next, size: 18),
+                      label: const Text('跳过片头'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.black.withValues(alpha: 0.7),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      ),
+                    ),
+                  ),
               ],
             ),
           );
@@ -279,7 +385,37 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
   }
 
   Widget _buildVideoArea() {
-    return _playerService.buildVideoWidget();
+    final textureId = _playerService.textureId;
+    if (textureId == null) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(color: Colors.white),
+            SizedBox(height: 16),
+            Text('正在加载...', style: TextStyle(color: Colors.white70)),
+          ],
+        ),
+      );
+    }
+
+    final videoWidget = Texture(textureId: textureId);
+
+    // ExoPlayer 内核且启用了 libass：叠加 libass 位图字幕
+    // MPV 内核：libmpv 自行渲染字幕，无需 Dart 层叠加
+    if (_playerService.coreType == PlayerCoreType.exoPlayer && _playerService.libassReady) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          videoWidget,
+          Positioned.fill(
+            child: _LibassOverlay(playerService: _playerService),
+          ),
+        ],
+      );
+    }
+
+    return videoWidget;
   }
 
   void _onDoubleTapDown(TapDownDetails details) {
@@ -314,7 +450,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
 
   Widget _buildGestureIndicator() {
     final screenWidth = MediaQuery.of(context).size.width;
-    final dragX = screenWidth / 2; // Simplified
+    final dragX = _playerService.dragStartX;
 
     String label;
     IconData icon;
@@ -399,25 +535,22 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     return AnimatedOpacity(
       opacity: _playerService.showControls ? 1.0 : 0.0,
       duration: const Duration(milliseconds: 200),
-      child: Container(
-        color: Colors.black.withValues(alpha: 0.4),
-        child: SafeArea(
-          child: Column(
-            children: [
-              _buildTopBar(item),
-              Expanded(
-                child: Row(
-                  children: [
-                    _buildLeftSideControls(),
-                    const Spacer(),
-                    _buildRightSideControls(),
-                  ],
-                ),
+      child: SafeArea(
+        child: Column(
+          children: [
+            _buildTopBar(item),
+            Expanded(
+              child: Row(
+                children: [
+                  _buildLeftSideControls(),
+                  const Spacer(),
+                  _buildRightSideControls(),
+                ],
               ),
-              _buildProgressBar(),
-              _buildBottomBar(item),
-            ],
-          ),
+            ),
+            _buildProgressBar(),
+            _buildBottomBar(item),
+          ],
         ),
       ),
     );
@@ -425,7 +558,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
 
   Widget _buildTopBar(MediaItem? item) {
     final coreString = ref.read(playerCoreProvider);
-    final isMpv = coreString == 'media_kit';
+    final isMpv = coreString == 'mpv';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -465,12 +598,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
               color: Colors.white,
             ),
             tooltip: '硬解/软解',
-            onPressed: () {
+            onPressed: () async {
               final current = ref.read(hardwareDecodingProvider);
               ref.read(hardwareDecodingProvider.notifier).state = !current;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(!current ? '已切换硬件解码' : '已切换软件解码')),
-              );
+              // 重新初始化播放器以应用硬解/软解设置
+              final savedPosition = _playerService.position;
+              await _playerService.dispose();
+              _playerService = VideoPlayerService();
+              _playerService.addListener(_onPlayerUpdate);
+              await _initializePlayer();
+              if (savedPosition > Duration.zero) {
+                await _playerService.seekTo(savedPosition);
+              }
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(!current ? '已切换硬件解码' : '已切换软件解码')),
+                );
+              }
             },
           ),
           IconButton(
@@ -661,7 +805,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
   }
 
   Widget _buildDragIndicator() {
-    final isForward = _playerService.position > _playerService.duration ~/ 2;
+    final direction = _playerService.dragDirection;
+    final isForward = direction == 1;
+    final isBackward = direction == -1;
 
     return Center(
       child: Container(
@@ -674,7 +820,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              isForward ? Icons.forward_10 : Icons.replay_10,
+              isForward
+                  ? Icons.fast_forward
+                  : isBackward
+                      ? Icons.fast_rewind
+                      : Icons.drag_handle,
               color: Colors.white,
               size: 32,
             ),
@@ -767,71 +917,195 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
   }
 
   void _showMoreMenu() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.black87,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.route, color: Colors.white),
-              title: const Text('线路切换', style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                _showLineSelector();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.screen_rotation, color: Colors.white),
-              title: const Text('旋转屏幕', style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                _toggleOrientation();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.timer, color: Colors.white),
-              title: const Text('定时关闭', style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                _showTimerDialog();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.memory, color: Colors.white),
-              title: const Text('内核切换', style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                _showCoreSwitchDialog();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.analytics, color: Colors.white),
-              title: const Text('统计信息', style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                _showStats();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.aspect_ratio, color: Colors.white),
-              title: const Text('画面比例', style: TextStyle(color: Colors.white)),
-              onTap: () {
-                Navigator.pop(context);
-                _showAspectRatioDialog();
-              },
-            ),
-          ],
+    _showRightPanel(
+      title: '更多选项',
+      children: [
+        ListTile(
+          leading: const Icon(Icons.route, color: Colors.white),
+          title: const Text('线路切换', style: TextStyle(color: Colors.white)),
+          onTap: () {
+            Navigator.pop(context);
+            _showLineSelector();
+          },
         ),
-      ),
+        ListTile(
+          leading: const Icon(Icons.screen_rotation, color: Colors.white),
+          title: const Text('旋转屏幕', style: TextStyle(color: Colors.white)),
+          onTap: () {
+            Navigator.pop(context);
+            _toggleOrientation();
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.timer, color: Colors.white),
+          title: const Text('定时关闭', style: TextStyle(color: Colors.white)),
+          onTap: () {
+            Navigator.pop(context);
+            _showTimerDialog();
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.memory, color: Colors.white),
+          title: const Text('内核切换', style: TextStyle(color: Colors.white)),
+          onTap: () {
+            Navigator.pop(context);
+            _showCoreSwitchDialog();
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.analytics, color: Colors.white),
+          title: const Text('统计信息', style: TextStyle(color: Colors.white)),
+          onTap: () {
+            Navigator.pop(context);
+            _showStats();
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.aspect_ratio, color: Colors.white),
+          title: const Text('画面比例', style: TextStyle(color: Colors.white)),
+          onTap: () {
+            Navigator.pop(context);
+            _showAspectRatioDialog();
+          },
+        ),
+      ],
+    );
+  }
+
+  void _showRightPanel({required String title, required List<Widget> children}) {
+    final screenSize = MediaQuery.of(context).size;
+
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 250),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        return Align(
+          alignment: Alignment.centerRight,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              width: screenSize.width * 0.35,
+              constraints: BoxConstraints(
+                maxHeight: screenSize.height * 0.8,
+              ),
+              margin: const EdgeInsets.only(right: 0),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.88),
+                borderRadius: const BorderRadius.horizontal(left: Radius.circular(16)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.3),
+                    blurRadius: 20,
+                    offset: const Offset(-5, 0),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: const BorderRadius.horizontal(left: Radius.circular(16)),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 标题栏
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.5),
+                        border: Border(
+                          bottom: BorderSide(
+                            color: Colors.white.withValues(alpha: 0.1),
+                            width: 1,
+                          ),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Text(
+                            title,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const Spacer(),
+                          Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: () => Navigator.pop(dialogContext),
+                              borderRadius: BorderRadius.circular(20),
+                              child: Container(
+                                padding: const EdgeInsets.all(6),
+                                child: const Icon(
+                                  Icons.close,
+                                  color: Colors.white70,
+                                  size: 20,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // 内容区域
+                    Flexible(
+                      child: Theme(
+                        data: Theme.of(dialogContext).copyWith(
+                          listTileTheme: const ListTileThemeData(
+                            textColor: Colors.white,
+                            iconColor: Colors.white70,
+                            selectedColor: Color(0xFF5B8DEF),
+                          ),
+                          radioTheme: RadioThemeData(
+                            fillColor: WidgetStateProperty.resolveWith((states) {
+                              if (states.contains(WidgetState.selected)) {
+                                return const Color(0xFF5B8DEF);
+                              }
+                              return Colors.white54;
+                            }),
+                          ),
+                        ),
+                        child: ListView(
+                          shrinkWrap: true,
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          children: children,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        return SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(1.0, 0.0),
+            end: Offset.zero,
+          ).animate(CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+          )),
+          child: child,
+        );
+      },
     );
   }
 
   void _showSkipDialog() {
     showDialog(
       context: context,
-      builder: (context) => _SkipDialog(currentPosition: _playerService.position),
+      barrierColor: Colors.black38,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.black87,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: _SkipDialog(currentPosition: _playerService.position),
+      ),
     );
   }
 
@@ -870,109 +1144,93 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
   }
 
   void _showStats() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('播放统计'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('播放速度: ${_playerService.speed}x'),
-            Text('音量: ${(_playerService.volume * 100).toInt()}%'),
-            Text('亮度: ${(_playerService.brightness * 100).toInt()}%'),
-            Text('播放状态: ${_playerService.isPlaying ? "播放中" : "已暂停"}'),
-            Text('当前位置: ${_formatDuration(_playerService.position)} / ${_formatDuration(_playerService.duration)}'),
-          ],
+    _showRightPanel(
+      title: '播放统计',
+      children: [
+        ListTile(
+          title: const Text('播放速度', style: TextStyle(color: Colors.white70)),
+          trailing: Text('${_playerService.speed}x', style: const TextStyle(color: Colors.white)),
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭')),
-        ],
-      ),
+        ListTile(
+          title: const Text('音量', style: TextStyle(color: Colors.white70)),
+          trailing: Text('${(_playerService.volume * 100).toInt()}%', style: const TextStyle(color: Colors.white)),
+        ),
+        ListTile(
+          title: const Text('亮度', style: TextStyle(color: Colors.white70)),
+          trailing: Text('${(_playerService.brightness * 100).toInt()}%', style: const TextStyle(color: Colors.white)),
+        ),
+        ListTile(
+          title: const Text('播放状态', style: TextStyle(color: Colors.white70)),
+          trailing: Text(_playerService.isPlaying ? '播放中' : '已暂停', style: const TextStyle(color: Colors.white)),
+        ),
+        ListTile(
+          title: const Text('当前位置', style: TextStyle(color: Colors.white70)),
+          trailing: Text(
+            '${_formatDuration(_playerService.position)} / ${_formatDuration(_playerService.duration)}',
+            style: const TextStyle(color: Colors.white),
+          ),
+        ),
+      ],
     );
   }
 
   void _showDanmakuSettings() {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => const _DanmakuSettingsSheet(),
+    _showRightPanel(
+      title: '弹幕设置',
+      children: [
+        const _DanmakuSettingsContent(),
+      ],
     );
   }
 
   void _showSubtitleSettings() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.7,
-        minChildSize: 0.3,
-        maxChildSize: 0.9,
-        expand: false,
-        builder: (context, scrollController) => _SubtitleSettingsSheet(
-          scrollController: scrollController,
-        ),
-      ),
+    _showRightPanel(
+      title: '字幕设置',
+      children: [
+        _SubtitleSettingsContent(),
+      ],
     );
   }
 
   void _showAudioSettings() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.6,
-        minChildSize: 0.3,
-        maxChildSize: 0.8,
-        expand: false,
-        builder: (context, scrollController) => _AudioSettingsSheet(
-          scrollController: scrollController,
-        ),
-      ),
+    _showRightPanel(
+      title: '音频设置',
+      children: [
+        _AudioSettingsContent(),
+      ],
     );
   }
 
   void _showEpisodeSelector(MediaItem? item) {
     if (item?.seriesId == null) return;
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.7,
-        minChildSize: 0.3,
-        maxChildSize: 0.9,
-        expand: false,
-        builder: (context, scrollController) {
-          return _EpisodeSelectorSheet(
-            scrollController: scrollController,
+    _showRightPanel(
+      title: '选集',
+      children: [
+        SizedBox(
+          height: MediaQuery.of(context).size.height * 0.7,
+          child: _EpisodeSelectorContent(
             seriesId: item!.seriesId!,
             currentEpisodeId: item.id,
-          );
-        },
-      ),
+          ),
+        ),
+      ],
     );
   }
 
   void _showTimerDialog() {
     final options = [15, 30, 45, 60, 90, 120];
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('定时关闭'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: options.map((minutes) => ListTile(
-            title: Text('$minutes 分钟后关闭'),
-            onTap: () {
-              Navigator.pop(context);
-              _startSleepTimer(Duration(minutes: minutes));
-            },
-          )).toList(),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
-        ],
-      ),
+    _showRightPanel(
+      title: '定时关闭',
+      children: [
+        ...options.map((minutes) => ListTile(
+          title: Text('$minutes 分钟后关闭', style: const TextStyle(color: Colors.white)),
+          onTap: () {
+            Navigator.pop(context);
+            _startSleepTimer(Duration(minutes: minutes));
+          },
+        )),
+      ],
     );
   }
 
@@ -995,42 +1253,36 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
 
   void _showCoreSwitchDialog() {
     final currentCore = ref.read(playerCoreProvider);
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('切换播放器内核'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              title: const Text('ExoPlayer/AVPlayer'),
-              subtitle: const Text('轻量稳定', style: TextStyle(fontSize: 12)),
-              leading: currentCore == 'video_player'
-                  ? Icon(Icons.check_circle, color: Theme.of(context).colorScheme.primary)
-                  : null,
-              onTap: () {
-                Navigator.pop(context);
-                if (currentCore != 'video_player') {
-                  _switchCore('video_player');
-                }
-              },
-            ),
-            ListTile(
-              title: const Text('MPV (media_kit)'),
-              subtitle: const Text('支持PGS/SUP字幕、HDR', style: TextStyle(fontSize: 12)),
-              leading: currentCore == 'media_kit'
-                  ? Icon(Icons.check_circle, color: Theme.of(context).colorScheme.primary)
-                  : null,
-              onTap: () {
-                Navigator.pop(context);
-                if (currentCore != 'media_kit') {
-                  _switchCore('media_kit');
-                }
-              },
-            ),
-          ],
+    _showRightPanel(
+      title: '切换播放器内核',
+      children: [
+        ListTile(
+          title: const Text('ExoPlayer', style: TextStyle(color: Colors.white)),
+          subtitle: const Text('Android 原生，轻量稳定', style: TextStyle(fontSize: 12, color: Colors.white70)),
+          leading: currentCore == 'exoPlayer'
+              ? const Icon(Icons.check_circle, color: Color(0xFF5B8DEF))
+              : null,
+          onTap: () {
+            Navigator.pop(context);
+            if (currentCore != 'exoPlayer') {
+              _switchCore('exoPlayer');
+            }
+          },
         ),
-      ),
+        ListTile(
+          title: const Text('MPV', style: TextStyle(color: Colors.white)),
+          subtitle: const Text('libmpv FFI，全格式/HDR/高级字幕', style: TextStyle(fontSize: 12, color: Colors.white70)),
+          leading: currentCore == 'mpv'
+              ? const Icon(Icons.check_circle, color: Color(0xFF5B8DEF))
+              : null,
+          onTap: () {
+            Navigator.pop(context);
+            if (currentCore != 'mpv') {
+              _switchCore('mpv');
+            }
+          },
+        ),
+      ],
     );
   }
 
@@ -1046,7 +1298,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     }
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已切换到 ${core == 'media_kit' ? 'MPV' : 'ExoPlayer/AVPlayer'}')),
+        SnackBar(content: Text('已切换到 ${core == 'mpv' ? 'MPV' : 'ExoPlayer'}')),
       );
     }
   }
@@ -1061,66 +1313,63 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       }
       return;
     }
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.black87,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('选择线路', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
-            ),
-            const Divider(color: Colors.white24),
-            ...server.lines.asMap().entries.map((entry) {
-              final idx = entry.key;
-              final line = entry.value;
-              return ListTile(
-                leading: const Icon(Icons.route, color: Colors.white70),
-                title: Text(line.name, style: const TextStyle(color: Colors.white)),
-                trailing: idx == server.activeLineIndex
-                    ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
-                    : null,
-                onTap: () {
+    _showRightPanel(
+      title: '选择线路',
+      children: [
+        ...server.lines.asMap().entries.map((entry) {
+          final idx = entry.key;
+          final line = entry.value;
+          return ListTile(
+            leading: const Icon(Icons.route, color: Colors.white70),
+            title: Text(line.name, style: const TextStyle(color: Colors.white)),
+            trailing: idx == server.activeLineIndex
+                ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
+                : null,
+                onTap: () async {
                   ref.read(serverListProvider.notifier).setActiveLine(server.id, idx);
+                  // 同步更新 currentServerProvider
+                  final updatedServer = ref.read(serverListProvider).firstWhere((s) => s.id == server.id);
+                  ref.read(currentServerProvider.notifier).state = updatedServer;
                   Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('已切换到线路: ${line.name}')),
-                  );
+                  // 重新初始化播放器以应用新线路
+                  final savedPosition = _playerService.position;
+                  await _playerService.dispose();
+                  _playerService = VideoPlayerService();
+                  _playerService.addListener(_onPlayerUpdate);
+                  await _initializePlayer();
+                  if (savedPosition > Duration.zero) {
+                    await _playerService.seekTo(savedPosition);
+                  }
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('已切换到线路: ${line.name}')),
+                    );
+                  }
                 },
               );
             }),
           ],
-        ),
-      ),
-    );
+        );
   }
 
   void _showAspectRatioDialog() {
     final ratios = ['自动', '16:9', '4:3', '21:9', '全屏', '原始'];
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('画面比例'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: ratios.map((ratio) => ListTile(
-            title: Text(ratio),
-            trailing: ref.read(aspectRatioProvider) == ratio
-                ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
-                : null,
-            onTap: () {
-              ref.read(aspectRatioProvider.notifier).state = ratio;
-              _playerService.setAspectRatio(ratio);
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('画面比例: $ratio')),
-              );
-            },
-          )).toList(),
-        ),
-      ),
+    _showRightPanel(
+      title: '画面比例',
+      children: ratios.map((ratio) => ListTile(
+        title: Text(ratio, style: const TextStyle(color: Colors.white)),
+        trailing: ref.read(aspectRatioProvider) == ratio
+            ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
+            : null,
+        onTap: () {
+          ref.read(aspectRatioProvider.notifier).state = ratio;
+          _playerService.setAspectRatio(ratio);
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('画面比例: $ratio')),
+          );
+        },
+      )).toList(),
     );
   }
 }
@@ -1293,53 +1542,93 @@ class _SkipDialogState extends ConsumerState<_SkipDialog> {
   }
 }
 
-/// 弹幕设置弹窗
-class _DanmakuSettingsSheet extends StatelessWidget {
-  const _DanmakuSettingsSheet();
+/// 弹幕设置内容
+class _DanmakuSettingsContent extends ConsumerWidget {
+  const _DanmakuSettingsContent();
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('弹幕设置', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 16),
-          const Text('弹幕轨道'),
-          ListTile(
-            leading: const Icon(Icons.radio_button_checked),
-            title: const Text('中文简体（默认）'),
-            onTap: () {},
+  Widget build(BuildContext context, WidgetRef ref) {
+    final danmakuEnabled = ref.watch(danmakuEnabledProvider);
+    final danmakuOpacity = ref.watch(danmakuOpacityProvider);
+    final danmakuFontSize = ref.watch(danmakuFontSizeProvider);
+    final danmakuSpeed = ref.watch(danmakuSpeedProvider);
+    final danmakuDensity = ref.watch(danmakuDensityProvider);
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          margin: const EdgeInsets.only(bottom: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.orange.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
           ),
-          ListTile(
-            leading: const Icon(Icons.radio_button_unchecked),
-            title: const Text('中文繁体'),
-            onTap: () {},
+          child: Row(
+            children: [
+              Icon(Icons.info_outline, size: 16, color: Colors.orange.shade700),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '弹幕功能当前版本暂不支持显示，设置仅作预留',
+                  style: TextStyle(fontSize: 12, color: Colors.orange.shade700),
+                ),
+              ),
+            ],
           ),
-          const Divider(),
-          const Text('字幕大小'),
-          Slider(value: 0.5, onChanged: (_) {}),
-          const Text('字幕位置'),
-          Slider(value: 0.5, onChanged: (_) {}),
-        ],
-      ),
+        ),
+        SwitchListTile(
+          title: const Text('显示弹幕', style: TextStyle(color: Colors.white)),
+          value: danmakuEnabled,
+          onChanged: (value) {
+            ref.read(danmakuEnabledProvider.notifier).state = value;
+          },
+        ),
+        const Divider(color: Colors.white24),
+        const Text('不透明度', style: TextStyle(color: Colors.white70)),
+        Slider(
+          value: danmakuOpacity,
+          onChanged: (value) {
+            ref.read(danmakuOpacityProvider.notifier).state = value;
+          },
+        ),
+        const Text('字号', style: TextStyle(color: Colors.white70)),
+        Slider(
+          value: danmakuFontSize,
+          onChanged: (value) {
+            ref.read(danmakuFontSizeProvider.notifier).state = value;
+          },
+        ),
+        const Text('速度', style: TextStyle(color: Colors.white70)),
+        Slider(
+          value: danmakuSpeed,
+          onChanged: (value) {
+            ref.read(danmakuSpeedProvider.notifier).state = value;
+          },
+        ),
+        const Text('密度', style: TextStyle(color: Colors.white70)),
+        Slider(
+          value: danmakuDensity,
+          onChanged: (value) {
+            ref.read(danmakuDensityProvider.notifier).state = value;
+          },
+        ),
+      ],
     );
   }
 }
 
 /// 字幕设置弹窗
-class _SubtitleSettingsSheet extends ConsumerStatefulWidget {
-  final ScrollController scrollController;
-
-  const _SubtitleSettingsSheet({required this.scrollController});
+class _SubtitleSettingsContent extends ConsumerStatefulWidget {
+  const _SubtitleSettingsContent();
 
   @override
-  ConsumerState<_SubtitleSettingsSheet> createState() => _SubtitleSettingsSheetState();
+  ConsumerState<_SubtitleSettingsContent> createState() => _SubtitleSettingsContentState();
 }
 
-class _SubtitleSettingsSheetState extends ConsumerState<_SubtitleSettingsSheet> {
+class _SubtitleSettingsContentState extends ConsumerState<_SubtitleSettingsContent> {
   @override
   Widget build(BuildContext context) {
     final item = ref.watch(currentPlayingItemProvider);
@@ -1349,142 +1638,86 @@ class _SubtitleSettingsSheetState extends ConsumerState<_SubtitleSettingsSheet> 
     final subtitlePosition = ref.watch(subtitlePositionProvider);
     final subtitleFont = ref.watch(subtitleFontProvider);
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      child: subtitleAsync?.when(
-            data: (info) {
-              final subtitles = info.mediaSources.firstOrNull?.mediaStreams.where((s) => s.isSubtitle).toList() ?? [];
-              final selectedIndex = ref.watch(subtitleTrackProvider);
+    if (subtitleAsync == null) {
+      return const _SettingsSection(
+        children: [Center(child: Text('无播放信息', style: TextStyle(color: Colors.white70)))],
+      );
+    }
 
-              return ListView(
-                controller: widget.scrollController,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.grey,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
+    return subtitleAsync.when(
+      data: (info) {
+        final subtitles = info.mediaSources.firstOrNull?.mediaStreams.where((s) => s.isSubtitle).toList() ?? [];
+        final selectedIndex = ref.watch(subtitleTrackProvider);
 
-                  const Text('字幕设置', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 16),
-
-                  const Text('字幕轨道', style: TextStyle(fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 8),
-                  if (subtitles.isEmpty)
-                    const ListTile(
-                      leading: Icon(Icons.subtitles_off),
-                      title: Text('无可用字幕'),
-                    )
-                  else
-                    ...subtitles.map((stream) => RadioListTile<int>(
-                      title: Text(stream.displayTitle ?? stream.language ?? '轨道 ${stream.index}'),
-                      subtitle: stream.codec != null ? Text('编码: ${stream.codec}') : null,
-                      value: stream.index,
-                      groupValue: selectedIndex ?? subtitles.firstOrNull?.index,
-                      onChanged: (value) {
-                        ref.read(subtitleTrackProvider.notifier).state = value;
-                      },
-                    )),
-                  const SizedBox(height: 16),
-
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => _pickExternalSubtitle(),
-                          icon: const Icon(Icons.upload_file),
-                          label: const Text('导入字幕'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => _searchOnlineSubtitle(item?.name ?? ''),
-                          icon: const Icon(Icons.search),
-                          label: const Text('在线搜索'),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  const Divider(),
-
-                  const Text('字体', style: TextStyle(fontWeight: FontWeight.w600)),
-                  ListTile(
-                    title: Text(subtitleFont),
-                    trailing: const Icon(Icons.arrow_drop_down),
-                    onTap: () => _showFontSelector(context),
-                  ),
-                  const Divider(),
-
-                  const Text('字幕同步', style: TextStyle(fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.remove),
-                        onPressed: () {
-                          ref.read(subtitleDelayProvider.notifier).state = subtitleOffset - 0.5;
-                        },
-                      ),
-                      Text(
-                        '${subtitleOffset >= 0 ? "+" : ""}${subtitleOffset.toStringAsFixed(1)}s',
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.add),
-                        onPressed: () {
-                          ref.read(subtitleDelayProvider.notifier).state = subtitleOffset + 0.5;
-                        },
-                      ),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      TextButton(
-                        onPressed: () => _showCustomOffsetDialog(context),
-                        child: const Text('自定义输入'),
-                      ),
-                      TextButton(
-                        onPressed: () {
-                          ref.read(subtitleDelayProvider.notifier).state = 0.0;
-                        },
-                        child: const Text('重置'),
-                      ),
-                    ],
-                  ),
-                  const Divider(),
-
-                  const Text('字幕大小', style: TextStyle(fontWeight: FontWeight.w600)),
-                  Slider(
-                    value: subtitleSize,
-                    onChanged: (value) {
-                      ref.read(subtitleSizeProvider.notifier).state = value;
-                    },
-                  ),
-
-                  const Text('字幕位置', style: TextStyle(fontWeight: FontWeight.w600)),
-                  Slider(
-                    value: subtitlePosition,
-                    onChanged: (value) {
-                      ref.read(subtitlePositionProvider.notifier).state = value;
-                    },
-                  ),
-                ],
-              );
-            },
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (_, __) => const Center(child: Text('加载字幕信息失败')),
-          ) ??
-          const Center(child: Text('无播放信息')),
+        return _SettingsSection(
+          children: [
+            const _SectionTitle('字幕轨道'),
+            if (subtitles.isEmpty)
+              const ListTile(
+                leading: Icon(Icons.subtitles_off, color: Colors.white54),
+                title: Text('无可用字幕', style: TextStyle(color: Colors.white70)),
+              )
+            else
+              ...subtitles.map((stream) => RadioListTile<int>(
+                title: Text(
+                  stream.displayTitle ?? stream.language ?? '轨道 ${stream.index}',
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                ),
+                subtitle: stream.codec != null
+                    ? Text('编码: ${stream.codec}', style: const TextStyle(color: Colors.white54, fontSize: 12))
+                    : null,
+                value: stream.index,
+                groupValue: selectedIndex ?? subtitles.firstOrNull?.index,
+                onChanged: (value) {
+                  ref.read(subtitleTrackProvider.notifier).state = value;
+                },
+              )),
+            const SizedBox(height: 12),
+            _SettingsButton(
+              icon: Icons.upload_file,
+              label: '导入外部字幕',
+              onTap: () => _pickExternalSubtitle(),
+            ),
+            const SizedBox(height: 16),
+            const _Divider(),
+            const _SectionTitle('字体'),
+            _SettingsItem(
+              label: subtitleFont,
+              onTap: () => _showFontSelector(context),
+            ),
+            const _Divider(),
+            const _SectionTitle('字幕同步'),
+            _SyncControl(
+              value: subtitleOffset,
+              onDecrease: () => ref.read(subtitleDelayProvider.notifier).state = subtitleOffset - 0.5,
+              onIncrease: () => ref.read(subtitleDelayProvider.notifier).state = subtitleOffset + 0.5,
+              onCustom: () => _showCustomOffsetDialog(context),
+              onReset: () => ref.read(subtitleDelayProvider.notifier).state = 0.0,
+            ),
+            const _Divider(),
+            const _SectionTitle('字幕大小'),
+            Slider(
+              value: subtitleSize.clamp(0.0, 1.0),
+              onChanged: (value) => ref.read(subtitleSizeProvider.notifier).state = value,
+              activeColor: const Color(0xFF5B8DEF),
+              inactiveColor: Colors.white24,
+            ),
+            const _SectionTitle('字幕位置'),
+            Slider(
+              value: subtitlePosition.clamp(0.0, 1.0),
+              onChanged: (value) => ref.read(subtitlePositionProvider.notifier).state = value,
+              activeColor: const Color(0xFF5B8DEF),
+              inactiveColor: Colors.white24,
+            ),
+          ],
+        );
+      },
+      loading: () => const _SettingsSection(
+        children: [Center(child: CircularProgressIndicator(color: Colors.white54))],
+      ),
+      error: (_, __) => const _SettingsSection(
+        children: [Center(child: Text('加载字幕信息失败', style: TextStyle(color: Colors.white70)))],
+      ),
     );
   }
 
@@ -1512,8 +1745,41 @@ class _SubtitleSettingsSheetState extends ConsumerState<_SubtitleSettingsSheet> 
 
   void _searchOnlineSubtitle(String title) {
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('在线搜索字幕功能开发中')),
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('在线搜索字幕'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('正在搜索: $title'),
+              const SizedBox(height: 16),
+              const Center(child: CircularProgressIndicator()),
+              const SizedBox(height: 16),
+              Text(
+                '在线字幕搜索需要接入字幕 API（如 OpenSubtitles、射手网等），当前版本暂未集成。您可以先使用「导入字幕」功能加载本地字幕文件。',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).textTheme.bodySmall?.color,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('关闭'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _pickExternalSubtitle();
+              },
+              child: const Text('导入本地字幕'),
+            ),
+          ],
+        ),
       );
     }
   }
@@ -1576,112 +1842,73 @@ class _SubtitleSettingsSheetState extends ConsumerState<_SubtitleSettingsSheet> 
   }
 }
 
-/// 音频设置弹窗
-class _AudioSettingsSheet extends ConsumerStatefulWidget {
-  final ScrollController scrollController;
-
-  const _AudioSettingsSheet({required this.scrollController});
+/// 音频设置内容
+class _AudioSettingsContent extends ConsumerStatefulWidget {
+  const _AudioSettingsContent();
 
   @override
-  ConsumerState<_AudioSettingsSheet> createState() => _AudioSettingsSheetState();
+  ConsumerState<_AudioSettingsContent> createState() => _AudioSettingsContentState();
 }
 
-class _AudioSettingsSheetState extends ConsumerState<_AudioSettingsSheet> {
+class _AudioSettingsContentState extends ConsumerState<_AudioSettingsContent> {
   @override
   Widget build(BuildContext context) {
     final item = ref.watch(currentPlayingItemProvider);
     final audioAsync = item != null ? ref.watch(playbackInfoProvider(item.id)) : null;
     final audioOffset = ref.watch(audioDelayProvider);
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      child: audioAsync?.when(
-            data: (info) {
-              final audios = info.mediaSources.firstOrNull?.mediaStreams.where((s) => s.isAudio).toList() ?? [];
-              final selectedIndex = ref.watch(audioTrackProvider);
+    if (audioAsync == null) {
+      return const _SettingsSection(
+        children: [Center(child: Text('无播放信息', style: TextStyle(color: Colors.white70)))],
+      );
+    }
 
-              return ListView(
-                controller: widget.scrollController,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.grey,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
+    return audioAsync.when(
+      data: (info) {
+        final audios = info.mediaSources.firstOrNull?.mediaStreams.where((s) => s.isAudio).toList() ?? [];
+        final selectedIndex = ref.watch(audioTrackProvider);
 
-                  const Text('音频设置', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 16),
-
-                  const Text('音频轨道', style: TextStyle(fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 8),
-                  if (audios.isEmpty)
-                    const ListTile(
-                      leading: Icon(Icons.audiotrack, color: Colors.grey),
-                      title: Text('无可用音轨'),
-                    )
-                  else
-                    ...audios.map((stream) => RadioListTile<int>(
-                      title: Text(stream.displayTitle ?? stream.language ?? '轨道 ${stream.index}'),
-                      subtitle: stream.codec != null ? Text('编码: ${stream.codec}') : null,
-                      value: stream.index,
-                      groupValue: selectedIndex ?? audios.firstOrNull?.index,
-                      onChanged: (value) {
-                        ref.read(audioTrackProvider.notifier).state = value;
-                      },
-                    )),
-                  const Divider(),
-
-                  const Text('音频同步', style: TextStyle(fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.remove),
-                        onPressed: () {
-                          ref.read(audioDelayProvider.notifier).state = audioOffset - 0.5;
-                        },
-                      ),
-                      Text(
-                        '${audioOffset >= 0 ? "+" : ""}${audioOffset.toStringAsFixed(1)}s',
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.add),
-                        onPressed: () {
-                          ref.read(audioDelayProvider.notifier).state = audioOffset + 0.5;
-                        },
-                      ),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      TextButton(
-                        onPressed: () => _showCustomOffsetDialog(context),
-                        child: const Text('自定义输入'),
-                      ),
-                      TextButton(
-                        onPressed: () {
-                          ref.read(audioDelayProvider.notifier).state = 0.0;
-                        },
-                        child: const Text('重置'),
-                      ),
-                    ],
-                  ),
-                ],
-              );
-            },
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (_, __) => const Center(child: Text('加载音频信息失败')),
-          ) ??
-          const Center(child: Text('无播放信息')),
+        return _SettingsSection(
+          children: [
+            const _SectionTitle('音频轨道'),
+            if (audios.isEmpty)
+              const ListTile(
+                leading: Icon(Icons.audiotrack, color: Colors.white54),
+                title: Text('无可用音轨', style: TextStyle(color: Colors.white70)),
+              )
+            else
+              ...audios.map((stream) => RadioListTile<int>(
+                title: Text(
+                  stream.displayTitle ?? stream.language ?? '轨道 ${stream.index}',
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                ),
+                subtitle: stream.codec != null
+                    ? Text('编码: ${stream.codec}', style: const TextStyle(color: Colors.white54, fontSize: 12))
+                    : null,
+                value: stream.index,
+                groupValue: selectedIndex ?? audios.firstOrNull?.index,
+                onChanged: (value) {
+                  ref.read(audioTrackProvider.notifier).state = value;
+                },
+              )),
+            const _Divider(),
+            const _SectionTitle('音频同步'),
+            _SyncControl(
+              value: audioOffset,
+              onDecrease: () => ref.read(audioDelayProvider.notifier).state = audioOffset - 0.5,
+              onIncrease: () => ref.read(audioDelayProvider.notifier).state = audioOffset + 0.5,
+              onCustom: () => _showCustomOffsetDialog(context),
+              onReset: () => ref.read(audioDelayProvider.notifier).state = 0.0,
+            ),
+          ],
+        );
+      },
+      loading: () => const _SettingsSection(
+        children: [Center(child: CircularProgressIndicator(color: Colors.white54))],
+      ),
+      error: (_, __) => const _SettingsSection(
+        children: [Center(child: Text('加载音频信息失败', style: TextStyle(color: Colors.white70)))],
+      ),
     );
   }
 
@@ -1721,23 +1948,21 @@ class _AudioSettingsSheetState extends ConsumerState<_AudioSettingsSheet> {
   }
 }
 
-/// 选集弹窗
-class _EpisodeSelectorSheet extends ConsumerStatefulWidget {
-  final ScrollController scrollController;
+/// 选集内容
+class _EpisodeSelectorContent extends ConsumerStatefulWidget {
   final String seriesId;
   final String currentEpisodeId;
 
-  const _EpisodeSelectorSheet({
-    required this.scrollController,
+  const _EpisodeSelectorContent({
     required this.seriesId,
     required this.currentEpisodeId,
   });
 
   @override
-  ConsumerState<_EpisodeSelectorSheet> createState() => _EpisodeSelectorSheetState();
+  ConsumerState<_EpisodeSelectorContent> createState() => _EpisodeSelectorContentState();
 }
 
-class _EpisodeSelectorSheetState extends ConsumerState<_EpisodeSelectorSheet> {
+class _EpisodeSelectorContentState extends ConsumerState<_EpisodeSelectorContent> {
   String? _selectedSeasonId;
   bool _isGridView = false;
 
@@ -1746,60 +1971,45 @@ class _EpisodeSelectorSheetState extends ConsumerState<_EpisodeSelectorSheet> {
     final seasonsAsync = ref.watch(seasonsProvider(widget.seriesId));
     final api = ref.read(apiClientProvider);
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          // 拖拽指示条
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey,
-                borderRadius: BorderRadius.circular(2),
-              ),
+    return Column(
+      children: [
+        // 头部控制栏
+        Row(
+          children: [
+            // 季选择
+            seasonsAsync.when(
+              data: (seasons) {
+                if (seasons.isEmpty) return const SizedBox.shrink();
+                return DropdownButton<String>(
+                  value: _selectedSeasonId ?? seasons.first.id,
+                  items: seasons.map((season) => DropdownMenuItem(
+                    value: season.id,
+                    child: Text(season.name, style: const TextStyle(color: Colors.white)),
+                  )).toList(),
+                  onChanged: (value) {
+                    setState(() => _selectedSeasonId = value);
+                  },
+                  dropdownColor: Colors.black87,
+                );
+              },
+              loading: () => const SizedBox.shrink(),
+              error: (_, __) => const SizedBox.shrink(),
             ),
-          ),
-          const SizedBox(height: 16),
+            const Spacer(),
+            // 视图切换
+            IconButton(
+              icon: Icon(_isGridView ? Icons.view_list : Icons.grid_view, color: Colors.white),
+              onPressed: () => setState(() => _isGridView = !_isGridView),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
 
-          // 头部控制栏
-          Row(
-            children: [
-              // 季选择
-              seasonsAsync.when(
-                data: (seasons) {
-                  if (seasons.isEmpty) return const SizedBox.shrink();
-                  return DropdownButton<String>(
-                    value: _selectedSeasonId ?? seasons.first.id,
-                    items: seasons.map((season) => DropdownMenuItem(
-                      value: season.id,
-                      child: Text(season.name),
-                    )).toList(),
-                    onChanged: (value) {
-                      setState(() => _selectedSeasonId = value);
-                    },
-                  );
-                },
-                loading: () => const SizedBox.shrink(),
-                error: (_, __) => const SizedBox.shrink(),
-              ),
-              const Spacer(),
-              // 视图切换
-              IconButton(
-                icon: Icon(_isGridView ? Icons.view_list : Icons.grid_view),
-                onPressed: () => setState(() => _isGridView = !_isGridView),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-
-          // 集列表
-          Expanded(
-            child: _buildEpisodesList(api),
-          ),
-        ],
-      ),
+        // 集列表
+        Expanded(
+          child: _buildEpisodesList(api),
+        ),
+      ],
     );
   }
 
@@ -1813,7 +2023,6 @@ class _EpisodeSelectorSheetState extends ConsumerState<_EpisodeSelectorSheet> {
       data: (episodes) {
         if (_isGridView) {
           return GridView.builder(
-            controller: widget.scrollController,
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 5,
               childAspectRatio: 1,
@@ -1865,7 +2074,6 @@ class _EpisodeSelectorSheetState extends ConsumerState<_EpisodeSelectorSheet> {
         }
 
         return ListView.builder(
-          controller: widget.scrollController,
           itemCount: episodes.length,
           itemBuilder: (context, index) {
             final episode = episodes[index];
@@ -1921,6 +2129,304 @@ class _EpisodeSelectorSheetState extends ConsumerState<_EpisodeSelectorSheet> {
       },
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (_, __) => const Center(child: Text('加载失败')),
+    );
+  }
+}
+
+/// libass 字幕位图叠加层
+class _LibassOverlay extends StatefulWidget {
+  final VideoPlayerService playerService;
+
+  const _LibassOverlay({required this.playerService});
+
+  @override
+  State<_LibassOverlay> createState() => _LibassOverlayState();
+}
+
+class _LibassOverlayState extends State<_LibassOverlay> {
+  List<LibassBlendRect>? _rects;
+  List<ui.Image>? _images;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 41), (_) => _render());
+  }
+
+  Future<void> _render() async {
+    if (!mounted || !widget.playerService.libassReady) return;
+    final ptsMs = widget.playerService.position.inMilliseconds;
+    final rects = await LibassBridge.renderFrame(ptsMs);
+    if (rects == null || rects.isEmpty || !mounted) {
+      if (_images != null && _images!.isNotEmpty && mounted) {
+        for (final img in _images!) {
+          img.dispose();
+        }
+        setState(() {
+          _rects = null;
+          _images = null;
+        });
+      }
+      return;
+    }
+
+    final images = <ui.Image>[];
+    for (final rect in rects) {
+      final image = await rect.toImage();
+      images.add(image);
+    }
+
+    if (!mounted) {
+      for (final img in images) {
+        img.dispose();
+      }
+      return;
+    }
+
+    final oldImages = _images;
+    setState(() {
+      _rects = rects;
+      _images = images;
+    });
+
+    for (final img in oldImages ?? <ui.Image>[]) {
+      img.dispose();
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    for (final img in _images ?? <ui.Image>[]) {
+      img.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_images == null || _images!.isEmpty) return const SizedBox.shrink();
+    return CustomPaint(
+      painter: _LibassPainter(_images!, _rects!),
+      size: Size.infinite,
+    );
+  }
+}
+
+class _LibassPainter extends CustomPainter {
+  final List<ui.Image> images;
+  final List<LibassBlendRect> rects;
+
+  _LibassPainter(this.images, this.rects);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (int i = 0; i < images.length && i < rects.length; i++) {
+      final paint = Paint()..filterQuality = FilterQuality.medium;
+      final offset = Offset(rects[i].dstX.toDouble(), rects[i].dstY.toDouble());
+      canvas.drawImage(images[i], offset, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _LibassPainter oldDelegate) => true;
+}
+
+/// 设置区块容器
+class _SettingsSection extends StatelessWidget {
+  final List<Widget> children;
+  const _SettingsSection({required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
+    );
+  }
+}
+
+/// 分组标题
+class _SectionTitle extends StatelessWidget {
+  final String text;
+  const _SectionTitle(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+/// 分隔线
+class _Divider extends StatelessWidget {
+  const _Divider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Divider(
+      color: Colors.white.withValues(alpha: 0.1),
+      height: 1,
+      indent: 16,
+      endIndent: 16,
+    );
+  }
+}
+
+/// 设置按钮
+class _SettingsButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _SettingsButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Material(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(
+              children: [
+                Icon(icon, color: Colors.white70, size: 20),
+                const SizedBox(width: 12),
+                Text(
+                  label,
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 设置项（带箭头）
+class _SettingsItem extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+
+  const _SettingsItem({
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+      title: Text(label, style: const TextStyle(color: Colors.white, fontSize: 14)),
+      trailing: const Icon(Icons.arrow_drop_down, color: Colors.white54),
+      onTap: onTap,
+    );
+  }
+}
+
+/// 同步控制组件
+class _SyncControl extends StatelessWidget {
+  final double value;
+  final VoidCallback onDecrease;
+  final VoidCallback onIncrease;
+  final VoidCallback onCustom;
+  final VoidCallback onReset;
+
+  const _SyncControl({
+    required this.value,
+    required this.onDecrease,
+    required this.onIncrease,
+    required this.onCustom,
+    required this.onReset,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onDecrease,
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  child: const Icon(Icons.remove, color: Colors.white70, size: 20),
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Text(
+              '${value >= 0 ? "+" : ""}${value.toStringAsFixed(1)}s',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onIncrease,
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  child: const Icon(Icons.add, color: Colors.white70, size: 20),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            TextButton(
+              onPressed: onCustom,
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF5B8DEF),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+              ),
+              child: const Text('自定义输入', style: TextStyle(fontSize: 13)),
+            ),
+            TextButton(
+              onPressed: onReset,
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white54,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+              ),
+              child: const Text('重置', style: TextStyle(fontSize: 13)),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

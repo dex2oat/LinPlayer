@@ -353,6 +353,7 @@ class EmbyLibraryApi implements LibraryApi {
       'StartIndex': startIndex,
       'Limit': limit,
       'Recursive': true,
+      'IncludeItemTypes': 'Movie,Series',
       'Fields': 'Overview,Genres,CommunityRating,OfficialRating,PremiereDate,RunTimeTicks,ProductionYear,Tags,SeriesName,IndexNumber,ParentIndexNumber',
     };
     if (sortBy != null) {

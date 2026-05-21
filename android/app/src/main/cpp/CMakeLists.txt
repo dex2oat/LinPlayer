@@ -1,37 +1,43 @@
 cmake_minimum_required(VERSION 3.22.1)
-project("linass_jni")
+project("linplayer_native")
 
-set(ASS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
-set(ASS_LIB_DIR ${CMAKE_SOURCE_DIR}/../jniLibs/${ANDROID_ABI})
+set(MPV_LIB_DIR ${CMAKE_SOURCE_DIR}/../jniLibs/${ANDROID_ABI})
 
-set(LIBASS_FOUND FALSE)
-
-if(EXISTS "${ASS_LIB_DIR}/libass.so")
-    set(LIBASS_FOUND TRUE)
-    message(STATUS "libass found: ${ASS_LIB_DIR}/libass.so")
-else()
-    message(WARNING "libass NOT found in ${ASS_LIB_DIR}, building stub")
-endif()
-
+# ========== linass_jni（字幕渲染 JNI，动态加载 libass 符号） ==========
 add_library(linass_jni SHARED linass_jni.cpp)
 
-target_include_directories(linass_jni PRIVATE
-    ${ASS_INCLUDE_DIR}
-)
+find_library(log-lib log)
+find_library(dl-lib dl)
 
-if(LIBASS_FOUND)
-    target_compile_definitions(linass_jni PRIVATE HAS_LIBASS)
+target_link_libraries(linass_jni ${log-lib} ${dl-lib})
 
-    add_library(ass SHARED IMPORTED)
-    set_target_properties(ass PROPERTIES
-        IMPORTED_LOCATION "${ASS_LIB_DIR}/libass.so"
-    )
+# ========== libmpv render ==========
+set(LIBMPV_FOUND FALSE)
+if(EXISTS "${MPV_LIB_DIR}/libmpv.so")
+    set(LIBMPV_FOUND TRUE)
+    message(STATUS "libmpv found: ${MPV_LIB_DIR}/libmpv.so")
+else()
+    message(WARNING "libmpv NOT found in ${MPV_LIB_DIR}, MPV kernel unavailable")
 endif()
 
-find_library(log-lib log)
+if(LIBMPV_FOUND)
+    add_library(mpv_render_jni SHARED mpv_render_jni.cpp)
+    target_include_directories(mpv_render_jni PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
-if(LIBASS_FOUND)
-    target_link_libraries(linass_jni ass ${log-lib})
-else()
-    target_link_libraries(linass_jni ${log-lib})
+    add_library(mpv SHARED IMPORTED)
+    set_target_properties(mpv PROPERTIES
+        IMPORTED_LOCATION "${MPV_LIB_DIR}/libmpv.so"
+    )
+
+    find_library(egl-lib EGL)
+    find_library(gles-lib GLESv2)
+    find_library(android-lib android)
+
+    target_link_libraries(mpv_render_jni
+        mpv
+        ${egl-lib}
+        ${gles-lib}
+        ${android-lib}
+        ${log-lib}
+    )
 endif()

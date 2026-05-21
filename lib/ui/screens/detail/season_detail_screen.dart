@@ -40,7 +40,14 @@ class _SeasonDetailScreenState extends ConsumerState<SeasonDetailScreen> {
         });
       }
     } catch (e) {
-      // 加载失败，保持null
+      if (mounted) {
+        setState(() {
+          _seasonName = '加载失败';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('加载季信息失败: $e')),
+        );
+      }
     }
   }
 
@@ -538,6 +545,9 @@ class _PlaybackOptions extends ConsumerWidget {
                     : null,
                 onTap: () {
                   ref.read(serverListProvider.notifier).setActiveLine(server.id, idx);
+                  // 同步更新 currentServerProvider，确保 UI 实时刷新
+                  final updatedServer = ref.read(serverListProvider).firstWhere((s) => s.id == server.id);
+                  ref.read(currentServerProvider.notifier).state = updatedServer;
                   ref.invalidate(playbackInfoProvider(episodeId));
                   Navigator.pop(ctx);
                 },
@@ -573,6 +583,11 @@ class _PlaybackOptions extends ConsumerWidget {
                     : null,
                 onTap: () {
                   ref.read(selectedMediaSourceProvider.notifier).state = source.id;
+                  // 重置音频和字幕选择（因为不同版本的轨道可能不同）
+                  ref.read(audioTrackProvider.notifier).state = null;
+                  ref.read(subtitleTrackProvider.notifier).state = null;
+                  ref.read(secondarySubtitleTrackProvider.notifier).state = null;
+                  ref.invalidate(playbackInfoProvider(episodeId));
                   Navigator.pop(ctx);
                 },
               );
@@ -631,6 +646,7 @@ class _PlaybackOptions extends ConsumerWidget {
                         ref.read(secondarySubtitleTrackProvider.notifier).state = null;
                       }
                     }
+                    ref.invalidate(playbackInfoProvider(episodeId));
                     Navigator.pop(ctx);
                   },
                 );
@@ -672,6 +688,7 @@ class _PlaybackOptions extends ConsumerWidget {
                   : null,
               onTap: () {
                 ref.read(secondarySubtitleTrackProvider.notifier).state = null;
+                ref.invalidate(playbackInfoProvider(episodeId));
                 Navigator.pop(ctx);
               },
             ),
@@ -689,6 +706,7 @@ class _PlaybackOptions extends ConsumerWidget {
                       : null,
                   onTap: () {
                     ref.read(secondarySubtitleTrackProvider.notifier).state = stream.index;
+                    ref.invalidate(playbackInfoProvider(episodeId));
                     Navigator.pop(ctx);
                   },
                 );
@@ -836,7 +854,18 @@ class _PlayButtons extends ConsumerWidget {
                     ));
                   }
                   ref.invalidate(mediaItemProvider(itemId));
-                } catch (_) {}
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(isWatched ? '已标记为未观看' : '已标记为已观看')),
+                    );
+                  }
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('操作失败: $e')),
+                    );
+                  }
+                }
               },
             ),
             ListTile(
@@ -853,7 +882,18 @@ class _PlayButtons extends ConsumerWidget {
                     await api.favorite.addFavorite(itemId);
                   }
                   ref.invalidate(mediaItemProvider(itemId));
-                } catch (_) {}
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(isFav ? '已取消喜欢' : '已添加到喜欢')),
+                    );
+                  }
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('操作失败: $e')),
+                    );
+                  }
+                }
               },
             ),
           ],

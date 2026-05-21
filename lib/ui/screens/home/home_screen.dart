@@ -321,29 +321,9 @@ class _HomeAppBarState extends ConsumerState<_HomeAppBar> {
 
   @override
   Widget build(BuildContext context) {
-    final api = widget.backgroundImage != null ? ref.read(apiClientProvider) : null;
-    final bgImageUrl = widget.backgroundImage != null && api != null
-        ? (widget.backgroundImage!.backdropImageTag != null
-            ? api.image.getBackdropImageUrl(widget.backgroundImage!.id, tag: widget.backgroundImage!.backdropImageTag, maxWidth: 800)
-            : widget.backgroundImage!.primaryImageTag != null
-                ? api.image.getPrimaryImageUrl(widget.backgroundImage!.id, tag: widget.backgroundImage!.primaryImageTag, maxWidth: 800)
-                : null)
-        : null;
-
     return SafeArea(
       child: Container(
-        decoration: bgImageUrl != null
-            ? BoxDecoration(
-                image: DecorationImage(
-                  image: NetworkImage(bgImageUrl),
-                  fit: BoxFit.cover,
-                  colorFilter: ColorFilter.mode(
-                    Colors.black.withValues(alpha: 0.3),
-                    BlendMode.darken,
-                  ),
-                ),
-              )
-            : null,
+        color: Colors.transparent,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Row(
@@ -896,7 +876,6 @@ class _LibraryCard extends ConsumerWidget {
             width: 135,
             height: 100,
             decoration: BoxDecoration(
-              color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
             ),
             clipBehavior: Clip.antiAlias,
@@ -908,11 +887,14 @@ class _LibraryCard extends ConsumerWidget {
                     fit: BoxFit.contain,
                     borderRadius: BorderRadius.circular(12),
                   )
-                : const Center(
-                    child: Icon(
-                      Icons.folder,
-                      size: 36,
-                      color: Color(0xFF5B8DEF),
+                : Container(
+                    color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
+                    child: const Center(
+                      child: Icon(
+                        Icons.folder,
+                        size: 36,
+                        color: Color(0xFF5B8DEF),
+                      ),
                     ),
                   ),
           ),
