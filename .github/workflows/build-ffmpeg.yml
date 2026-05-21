@@ -71,6 +71,30 @@ jobs:
         run: |
           cp -r ~/ffmpeg-src/ffmpeg /tmp/media3/libraries/decoder_ffmpeg/src/main/jni/
       
+      # 创建工具链符号链接（FFmpeg configure 期望旧命名）
+      - name: Setup toolchain symlinks
+        run: |
+          TOOLCHAIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin
+          
+          # FFmpeg configure 期望 ${CROSS_PREFIX}nm, ${CROSS_PREFIX}ar 等工具
+          # 但 NDK r25c 使用 llvm-xxx 命名，需要创建符号链接
+          case ${{ matrix.arch }} in
+            arm64-v8a)
+              CROSS_PREFIX=aarch64-linux-android21-
+              ;;
+            armeabi-v7a)
+              CROSS_PREFIX=armv7a-linux-androideabi21-
+              ;;
+          esac
+          
+          ln -sf $TOOLCHAIN/llvm-ar $TOOLCHAIN/${CROSS_PREFIX}ar 2>/dev/null || true
+          ln -sf $TOOLCHAIN/llvm-nm $TOOLCHAIN/${CROSS_PREFIX}nm 2>/dev/null || true
+          ln -sf $TOOLCHAIN/llvm-ranlib $TOOLCHAIN/${CROSS_PREFIX}ranlib 2>/dev/null || true
+          ln -sf $TOOLCHAIN/llvm-strip $TOOLCHAIN/${CROSS_PREFIX}strip 2>/dev/null || true
+          
+          echo "Toolchain symlinks created"
+          ls -la $TOOLCHAIN/${CROSS_PREFIX}nm || true
+      
       # 编译 FFmpeg
       - name: Build FFmpeg for ${{ matrix.arch }}
         run: |
@@ -117,6 +141,7 @@ jobs:
             --disable-avfilter \
             --disable-symver \
             --disable-asm \
+            --disable-vulkan \
             --extra-cflags="-O3 -fPIC" \
             --extra-ldflags="-Wl,--no-undefined -Wl,-z,noexecstack"
           
