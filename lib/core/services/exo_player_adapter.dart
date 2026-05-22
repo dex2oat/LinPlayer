@@ -27,6 +27,9 @@ class ExoPlayerAdapter implements PlayerAdapter {
   List<Map<dynamic, dynamic>> _tracks = [];
   String _subtitleText = '';
   String _subtitleBitmapBase64 = '';
+  double _subtitleSize = 0.5;
+  double _subtitlePosition = 0.0;
+  bool _subtitleBackground = false;
 
   PlayerStateCallbacks? _callbacks;
   Timer? _positionTimer;
@@ -410,6 +413,8 @@ class ExoPlayerAdapter implements PlayerAdapter {
   @override
   Future<void> setSubtitleSize(double size) async {
     if (_playerId == null) return;
+    _subtitleSize = size;
+    subtitleNotifier.value = subtitleNotifier.value;
     await _channel.invokeMethod('setSubtitleSize', {
       'playerId': _playerId,
       'size': size,
@@ -419,6 +424,8 @@ class ExoPlayerAdapter implements PlayerAdapter {
   @override
   Future<void> setSubtitlePosition(double position) async {
     if (_playerId == null) return;
+    _subtitlePosition = position;
+    subtitleNotifier.value = subtitleNotifier.value;
     await _channel.invokeMethod('setSubtitlePosition', {
       'playerId': _playerId,
       'position': position,
@@ -428,6 +435,8 @@ class ExoPlayerAdapter implements PlayerAdapter {
   @override
   Future<void> setSubtitleBackground(bool enabled) async {
     if (_playerId == null) return;
+    _subtitleBackground = enabled;
+    subtitleNotifier.value = subtitleNotifier.value;
     await _channel.invokeMethod('setSubtitleBackground', {
       'playerId': _playerId,
       'enabled': enabled,
@@ -451,28 +460,40 @@ class ExoPlayerAdapter implements PlayerAdapter {
         children: [
           Texture(textureId: _textureId!),
           Positioned(
-            left: 16,
-            right: 16,
-            bottom: 48,
+            left: 24,
+            right: 24,
+            bottom: 40 + (_subtitlePosition * 120),
             child: ValueListenableBuilder<String>(
               valueListenable: subtitleNotifier,
               builder: (context, text, _) {
                 if (text.isEmpty) return const SizedBox.shrink();
                 if (text.startsWith('BITMAP:')) return const SizedBox.shrink();
+                final fontSize = 14.0 + (_subtitleSize * 18.0);
                 return Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.7),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
+                  decoration: _subtitleBackground
+                      ? BoxDecoration(
+                          color: Colors.black.withOpacity(0.7),
+                          borderRadius: BorderRadius.circular(4),
+                        )
+                      : const BoxDecoration(),
                   child: Text(
                     text,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: Colors.white,
-                      fontSize: 18,
+                      fontSize: fontSize,
                       height: 1.4,
                       decoration: TextDecoration.none,
+                      shadows: _subtitleBackground
+                          ? []
+                          : [
+                              Shadow(
+                                offset: const Offset(1, 1),
+                                blurRadius: 2,
+                                color: Colors.black.withOpacity(0.8),
+                              ),
+                            ],
                     ),
                   ),
                 );

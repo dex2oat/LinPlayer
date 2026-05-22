@@ -132,10 +132,10 @@ class MpvConfigManager {
     // 字幕黑色背景
     if (subtitleBackground) {
       buffer.writeln('# 字幕黑色背景');
-      buffer.writeln('sub-back-color=0.0/0.0/0.0/0.75');
+      buffer.writeln('sub-back-color=#000000C0');
     } else {
       buffer.writeln('# 字幕背景透明');
-      buffer.writeln('sub-back-color=0.0/0.0/0.0/0.0');
+      buffer.writeln('sub-back-color=#00000000');
     }
 
     // 通用优化设置

@@ -343,11 +343,8 @@ class MpvPlayerAdapter implements PlayerAdapter {
       if (_subtitleFont != null && _subtitleFont!.isNotEmpty && _subtitleFont != '默认') {
         await np.setProperty('sub-font', _subtitleFont!);
       }
-      if (_subtitleBackground) {
-        await np.setProperty('sub-back-color', '0.0/0.0/0.0/0.75');
-      } else {
-        await np.setProperty('sub-back-color', '0.0/0.0/0.0/0.0');
-      }
+      await np.setProperty('sub-back-color',
+          _subtitleBackground ? '#000000C0' : '#00000000');
       await np.setProperty('sub-delay', _subtitleDelay.toStringAsFixed(3));
     } catch (e) {
       _logger.e('MpvAdapter', '设置运行时字幕属性失败: $e');
@@ -375,12 +372,20 @@ class MpvPlayerAdapter implements PlayerAdapter {
     try {
       final np = _nativePlayer;
       if (np != null) {
-        if (_isHttpUrl(path)) {
-          await np.command(['sub-add', path, 'select', 'secondary', 'und']);
+        final subtitleTracks = _player!.state.tracks.subtitle;
+        final beforeCount = subtitleTracks.length;
+        await np.command(['sub-add', path, 'auto', 'secondary', 'und']);
+        await Future.delayed(const Duration(milliseconds: 500));
+        final afterTracks = _player!.state.tracks.subtitle;
+        if (afterTracks.length > beforeCount) {
+          final newTrack = afterTracks.last;
+          final sid = newTrack.id;
+          _logger.i('MpvAdapter', '次字幕轨道ID: $sid, 设置secondary-sid=$sid');
+          await np.setProperty('secondary-sid', sid);
         } else {
-          await np.command(['sub-add', path, 'select', 'secondary', 'und']);
+          _logger.w('MpvAdapter', '次字幕添加后未检测到新轨道，使用secondary-sid=auto兜底');
+          await np.setProperty('secondary-sid', 'auto');
         }
-        await np.setProperty('secondary-sid', 'auto');
       }
       _logger.i('MpvAdapter', '次字幕加载成功: $path');
     } catch (e, stackTrace) {
@@ -482,10 +487,11 @@ class MpvPlayerAdapter implements PlayerAdapter {
     _subtitleBackground = enabled;
     final np = _nativePlayer;
     if (np != null) {
-      await np.setProperty('sub-back-color', enabled ? '0.0/0.0/0.0/0.75' : '0.0/0.0/0.0/0.0');
+      await np.setProperty('sub-back-color',
+          enabled ? '#000000C0' : '#00000000');
     }
     await _configManager.updateConfigValue(
-      'sub-back-color', enabled ? '0.0/0.0/0.0/0.75' : '0.0/0.0/0.0/0.0',
+      'sub-back-color', enabled ? '#000000C0' : '#00000000',
     );
   }
 
