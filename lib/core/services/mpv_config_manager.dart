@@ -46,6 +46,7 @@ class MpvConfigManager {
   /// [audioDelay] 音频延迟（秒，正值=延后）
   /// [aspectRatio] 画面比例（如 "16:9", "4:3", "-1"=自动）
   /// [glslShaders] GLSL shader 路径（Anime4K 等）
+  /// [subtitleBackground] 字幕黑色背景
   Future<void> writeConfig({
     String? subtitleFont,
     double subtitleScale = 1.0,
@@ -54,6 +55,7 @@ class MpvConfigManager {
     double audioDelay = 0.0,
     String? aspectRatio,
     List<String>? glslShaders,
+    bool subtitleBackground = false,
   }) async {
     if (_configDir == null) {
       await initialize();
@@ -127,6 +129,15 @@ class MpvConfigManager {
       buffer.writeln('glsl-shaders="$shaderPaths"');
     }
 
+    // 字幕黑色背景
+    if (subtitleBackground) {
+      buffer.writeln('# 字幕黑色背景');
+      buffer.writeln('sub-back-color=0.0/0.0/0.0/0.75');
+    } else {
+      buffer.writeln('# 字幕背景透明');
+      buffer.writeln('sub-back-color=0.0/0.0/0.0/0.0');
+    }
+
     // 通用优化设置
     buffer.writeln();
     buffer.writeln('# 通用设置');
@@ -136,8 +147,10 @@ class MpvConfigManager {
     buffer.writeln('cache-secs=30');
     buffer.writeln('demuxer-max-bytes=50M');
     buffer.writeln('demuxer-max-back-bytes=25M');
-    buffer.writeln('sub-ass-style-override=force');
+    buffer.writeln('sub-ass-style-override=yes');
     buffer.writeln('sub-auto=fuzzy');
+    buffer.writeln('sub-visibility=yes');
+    buffer.writeln('slang=chi,zh,eng,en');
 
     final configPath = configFilePath;
     final file = File(configPath);

@@ -33,6 +33,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
   Timer? _longPressTimer;
   Timer? _sleepTimer;
 
+  static VideoPlayerService? _activePlayerService;
+
+  static VideoPlayerService? get activePlayerService => _activePlayerService;
+
   @override
   void initState() {
     super.initState();
@@ -57,6 +61,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       });
       ref.listenManual(subtitleFontProvider, (prev, next) {
         if (prev != next) _playerService.setSubtitleFont(next);
+      });
+      ref.listenManual(subtitleBackgroundProvider, (prev, next) {
+        if (prev != next) _playerService.setSubtitleBackground(next);
+      });
+      ref.listenManual(subtitleTrackProvider, (prev, next) {
+        _onSubtitleTrackChanged(prev, next);
+      });
+      ref.listenManual(secondarySubtitleTrackProvider, (prev, next) {
+        _onSecondarySubtitleTrackChanged(next);
       });
     });
   }
@@ -91,6 +104,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
         ? ref.read(exoLibassProvider)
         : false;
 
+    final preferredSubtitleLanguage = ref.read(preferredSubtitleLanguageProvider);
+
     await _playerService.initialize(
       videoUrl: videoUrl,
       itemId: widget.itemId,
@@ -99,6 +114,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       coreType: coreType,
       dolbyVisionFix: dolbyVisionFix,
       useLibass: useLibass,
+      preferredSubtitleLanguage: preferredSubtitleLanguage,
       onStart: (info) async {
         try {
           await api.playback.reportPlaybackStart(info);
@@ -122,98 +138,395 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       DeviceOrientation.landscapeRight,
     ]);
 
-    // 延迟加载字幕，确保 libass 已初始化完成
-    if (useLibass && mediaSource != null) {
-      await Future.delayed(const Duration(milliseconds: 500));
-      if (_playerService.libassReady) {
-        await _loadLibassSubtitles(item, mediaSource);
-      }
+    // 加载字幕（内封/外挂）—— 两个内核都支持
+    if (mediaSource != null) {
+      await Future.delayed(const Duration(milliseconds: 1500));
+      await _loadSubtitles(item, mediaSource);
     }
   }
 
-  Future<void> _loadLibassSubtitles(MediaItem item, MediaSource mediaSource) async {
+  Future<void> _loadSubtitles(MediaItem item, MediaSource mediaSource) async {
     final logger = AppLogger();
     final api = ref.read(apiClientProvider);
+    final server = ref.read(currentServerProvider);
     final subtitleStreams = mediaSource.mediaStreams
         .where((s) => s.isSubtitle)
         .toList();
-    
+
     logger.i('Player', '开始加载字幕 - 可用字幕流: ${subtitleStreams.length} 个');
-    
+
     if (subtitleStreams.isEmpty) {
       logger.w('Player', '没有可用字幕流');
       return;
     }
 
     for (final stream in subtitleStreams) {
-      logger.d('Player', '字幕流: index=${stream.index}, codec=${stream.codec}, language=${stream.language}, title=${stream.displayTitle}');
+      logger.d('Player', '字幕流: index=${stream.index}, codec=${stream.codec}, language=${stream.language}, external=${stream.isExternal}, title=${stream.displayTitle}');
     }
 
     final preferredLang = ref.read(preferredSubtitleLanguageProvider);
     logger.i('Player', '首选字幕语言: $preferredLang');
-    
+
     final target = subtitleStreams.firstWhere(
       (s) => s.language == preferredLang,
       orElse: () => subtitleStreams.first,
     );
 
     final codec = target.codec?.toLowerCase() ?? 'ass';
-    logger.i('Player', '选择字幕: index=${target.index}, codec=$codec, language=${target.language}');
-    
-    final subUrl = api.playback.getSubtitleStreamUrl(
-      widget.itemId,
-      mediaSource.id,
-      target.index,
-      codec == 'ass' || codec == 'ssa' ? codec : 'ass',
-    );
-    logger.d('Player', '字幕URL: $subUrl');
+    final isExternal = target.isExternal ?? false;
+    final targetIndex = target.index;
+    final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub';
+    logger.i('Player', '选择字幕: index=$targetIndex, codec=$codec, language=${target.language}, external=$isExternal, graphical=$isGraphical');
 
-    try {
-      // 下载字幕到本地临时文件
-      final tempDir = await getTemporaryDirectory();
-      final ext = codec == 'srt' ? 'srt' : (codec == 'subrip' ? 'srt' : 'ass');
-      final subFile = File('${tempDir.path}/subtitle_${widget.itemId}_${target.index}.$ext');
-      
-      logger.i('Player', '字幕本地路径: ${subFile.path}');
-      
-      if (!subFile.existsSync()) {
-        logger.d('Player', '开始下载字幕...');
-        final dio = Dio(BaseOptions(
-          connectTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 10),
-        ));
-        final response = await dio.download(subUrl, subFile.path);
-        logger.i('Player', '字幕下载完成 - 状态码: ${response.statusCode}, 大小: ${subFile.lengthSync()} bytes');
-      } else {
-        logger.i('Player', '使用已缓存的字幕文件');
+    ref.read(subtitleTrackProvider.notifier).state = targetIndex;
+
+    if (!isExternal) {
+      logger.i('Player', '内封字幕，通过播放器轨道选择');
+      try {
+        if (_playerService.coreType == PlayerCoreType.mpv) {
+          await _selectInternalSubtitleMPV(target, preferredLang, logger);
+        } else {
+          await _selectInternalSubtitleEXO(target, preferredLang, logger);
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('内封字幕: ${target.language ?? '默认'}')),
+          );
+        }
+      } catch (e, stackTrace) {
+        logger.eWithStack('Player', '内封字幕轨道选择失败', e, stackTrace);
       }
-      
-      // 验证文件内容
-      final fileSize = await subFile.length();
-      if (fileSize == 0) {
-        logger.e('Player', '字幕文件大小为0');
+      return;
+    }
+
+    if (isGraphical) {
+      if (_playerService.coreType == PlayerCoreType.mpv) {
+        logger.i('Player', '图形外挂字幕 (PGS/SUP)，MPV内核通过轨道选择加载');
+        try {
+          if (_playerService.coreType == PlayerCoreType.mpv) {
+            await _selectInternalSubtitleMPV(target, preferredLang, logger);
+          } else {
+            await _selectInternalSubtitleEXO(target, preferredLang, logger);
+          }
+        } catch (e) {
+          logger.e('Player', '图形字幕选择失败: $e');
+        }
+        return;
+      } else {
+        logger.w('Player', 'EXO内核不支持PGS/SUP外挂字幕，请切换到MPV内核');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('PGS/SUP字幕需MPV内核支持，请在设置中切换')),
+          );
+        }
         return;
       }
-      
-      // 读取前几行用于调试
-      final firstLines = await subFile.readAsLines().then((lines) => lines.take(5).join('\n'));
-      logger.d('Player', '字幕文件前5行:\n$firstLines');
-      
-      await _playerService.loadLibassSubtitle(subFile.path);
-      logger.i('Player', '字幕加载流程完成');
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('字幕加载: ${target.language ?? '默认'} (${codec.toUpperCase()})')),
+    }
+
+    try {
+      if (_playerService.coreType == PlayerCoreType.mpv) {
+        final embyCodec = _embySubtitleCodec(codec);
+        final subUrl = api.playback.getSubtitleStreamUrl(
+          widget.itemId,
+          mediaSource.id,
+          targetIndex,
+          embyCodec,
         );
+        logger.i('Player', 'MPV内核: 直接加载Emby字幕URL: $subUrl');
+        await _playerService.loadLibassSubtitle(subUrl);
+        logger.i('Player', 'MPV外挂字幕加载成功');
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('外挂字幕: ${target.language ?? '默认'} (${codec.toUpperCase()})')),
+          );
+        }
+      } else {
+        final embyCodec = _embySubtitleCodec(codec);
+        final subUrl = api.playback.getSubtitleStreamUrl(
+          widget.itemId,
+          mediaSource.id,
+          targetIndex,
+          embyCodec,
+        );
+        logger.i('Player', 'EXO内核: 下载字幕后再加载: $subUrl');
+
+        final tempDir = await getTemporaryDirectory();
+        final ext = codec == 'srt' || codec == 'subrip' ? 'srt' : 'ass';
+        final subFile = File('${tempDir.path}/subtitle_${widget.itemId}_${targetIndex}.$ext');
+
+        if (!subFile.existsSync() || await subFile.length() == 0) {
+          final dio = Dio(BaseOptions(
+            connectTimeout: const Duration(seconds: 15),
+            receiveTimeout: const Duration(seconds: 60),
+          ));
+          if (server?.authToken != null) {
+            dio.options.headers['X-Emby-Token'] = server!.authToken;
+            dio.options.headers['X-MediaBrowser-Token'] = server.authToken;
+          }
+          await dio.download(subUrl, subFile.path);
+          logger.i('Player', '字幕下载完成 - ${subFile.lengthSync()} bytes');
+        } else {
+          logger.i('Player', '使用已缓存字幕 (${await subFile.length()} bytes)');
+        }
+
+        if (subFile.existsSync() && await subFile.length() > 0) {
+          await _playerService.loadLibassSubtitle(subFile.path);
+          logger.i('Player', 'EXO外挂字幕加载成功');
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('外挂字幕: ${target.language ?? '默认'} (${codec.toUpperCase()})')),
+            );
+          }
+        }
       }
     } catch (e, stackTrace) {
-      logger.eWithStack('Player', '字幕加载失败', e, stackTrace);
+      logger.eWithStack('Player', '外挂字幕加载失败', e, stackTrace);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('字幕加载失败: $e')),
         );
       }
+    }
+  }
+
+  String _embySubtitleCodec(String codec) {
+    if (_playerService.coreType == PlayerCoreType.mpv) {
+      switch (codec) {
+        case 'srt' || 'subrip':
+          return 'srt';
+        case 'vtt' || 'webvtt':
+          return 'vtt';
+        default:
+          return 'ass';
+      }
+    } else {
+      return 'srt';
+    }
+  }
+
+  Future<void> _selectInternalSubtitleMPV(MediaStream target, String? preferredLang, AppLogger logger) async {
+    final tracks = _playerService.tracksInfo;
+    final subtitleTracks = tracks.where((t) => t['type'] == 'text').toList();
+    logger.i('Player', 'MPV 可用字幕轨道: ${subtitleTracks.length} 个');
+    for (final track in subtitleTracks) {
+      logger.d('Player', '  轨道: id=${track['id']}, title=${track['title']}, language=${track['language']}');
+    }
+
+    if (subtitleTracks.isEmpty) {
+      logger.w('Player', 'MPV 无可用字幕轨道 - 可能track-list尚未就绪');
+      return;
+    }
+
+    String? trackId;
+    final langMatches = subtitleTracks.where((t) =>
+        t['language'] == preferredLang ||
+        t['language'] == 'chi' ||
+        t['language'] == 'zh' ||
+        t['language'] == 'eng' ||
+        t['language'] == 'en').toList();
+    if (langMatches.isNotEmpty) {
+      trackId = langMatches.first['id']?.toString();
+    } else {
+      trackId = subtitleTracks.first['id']?.toString();
+    }
+
+    if (trackId != null) {
+      await _playerService.selectSubtitleTrack(trackId);
+      logger.i('Player', 'MPV 已选择内封字幕轨道: $trackId');
+    } else {
+      logger.w('Player', 'MPV 未找到匹配的字幕轨道');
+    }
+  }
+
+  Future<void> _selectInternalSubtitleEXO(MediaStream target, String? preferredLang, AppLogger logger) async {
+    final tracks = _playerService.tracksInfo;
+    final subtitleTracks = tracks.where((t) => t['type'] == 'text').toList();
+    logger.i('Player', 'EXO 可用字幕轨道: ${subtitleTracks.length} 个');
+
+    if (subtitleTracks.isEmpty) {
+      logger.w('Player', 'EXO 无可用字幕轨道');
+      return;
+    }
+
+    Map<String, dynamic>? trackTarget;
+    final langMatches = subtitleTracks.where((t) =>
+        t['language'] == preferredLang ||
+        t['language'] == 'chi' ||
+        t['language'] == 'zh' ||
+        t['language'] == 'eng' ||
+        t['language'] == 'en').toList();
+    if (langMatches.isNotEmpty) {
+      trackTarget = langMatches.first;
+    } else {
+      trackTarget = subtitleTracks.first;
+    }
+
+    final trackId = trackTarget['id']?.toString() ?? '';
+    await _playerService.selectSubtitleTrack(trackId);
+    logger.i('Player', 'EXO 已选择内封字幕轨道: id=$trackId');
+  }
+
+  Future<void> _onSubtitleTrackChanged(int? prev, int? next) async {
+    if (prev == next || next == null) {
+      if (next == null && prev != null) {
+        await _playerService.deselectSubtitleTrack();
+      }
+      return;
+    }
+
+    final item = ref.read(currentPlayingItemProvider);
+    if (item == null) return;
+
+    final api = ref.read(apiClientProvider);
+    final server = ref.read(currentServerProvider);
+    final logger = AppLogger();
+
+    try {
+      final playbackInfo = await api.playback.getPlaybackInfo(item.id);
+      final mediaSource = playbackInfo.mediaSources.firstOrNull;
+      if (mediaSource == null) return;
+
+      final subtitleStreams = mediaSource.mediaStreams.where((s) => s.isSubtitle).toList();
+      final target = subtitleStreams.where((s) => s.index == next).firstOrNull;
+      if (target == null) return;
+
+      final isExternal = target.isExternal ?? false;
+      final codec = target.codec?.toLowerCase() ?? 'ass';
+      final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub';
+
+      if (!isExternal || isGraphical) {
+        final tracks = _playerService.tracksInfo;
+        final subtitleTracks = tracks.where((t) => t['type'] == 'text').toList();
+
+        final preferredLang = target.language;
+        final langMatch = subtitleTracks.where((t) =>
+            t['language'] == preferredLang ||
+            (preferredLang != null && t['title']?.toString().contains(preferredLang) == true)).toList();
+        final trackTarget = langMatch.isNotEmpty ? langMatch.first : (subtitleTracks.isNotEmpty ? subtitleTracks.first : null);
+
+        if (trackTarget != null) {
+          final trackId = trackTarget['id']?.toString() ?? '';
+          await _playerService.selectSubtitleTrack(trackId);
+          logger.i('Player', '切换字幕轨道: id=$trackId');
+        }
+      } else {
+        if (_playerService.coreType == PlayerCoreType.mpv) {
+          final embyCodec = _embySubtitleCodec(codec);
+          final subUrl = api.playback.getSubtitleStreamUrl(
+            item.id,
+            mediaSource.id,
+            target.index,
+            embyCodec,
+          );
+          await _playerService.loadLibassSubtitle(subUrl);
+        } else {
+          final embyCodec = _embySubtitleCodec(codec);
+          final subUrl = api.playback.getSubtitleStreamUrl(
+            item.id,
+            mediaSource.id,
+            target.index,
+            embyCodec,
+          );
+
+          final tempDir = await getTemporaryDirectory();
+          final ext = codec == 'srt' || codec == 'subrip' ? 'srt' : 'ass';
+          final subFile = File('${tempDir.path}/subtitle_${item.id}_${target.index}.$ext');
+
+          if (!subFile.existsSync() || await subFile.length() == 0) {
+            final dio = Dio(BaseOptions(
+              connectTimeout: const Duration(seconds: 15),
+              receiveTimeout: const Duration(seconds: 60),
+            ));
+            if (server?.authToken != null) {
+              dio.options.headers['X-Emby-Token'] = server!.authToken;
+              dio.options.headers['X-MediaBrowser-Token'] = server.authToken;
+            }
+            await dio.download(subUrl, subFile.path);
+          }
+
+          if (subFile.existsSync() && await subFile.length() > 0) {
+            await _playerService.loadLibassSubtitle(subFile.path);
+          }
+        }
+      }
+    } catch (e) {
+      logger.e('Player', '切换字幕轨道失败: $e');
+    }
+  }
+
+  Future<void> _onSecondarySubtitleTrackChanged(int? next) async {
+    if (next == null) {
+      await _playerService.deselectSecondarySubtitle();
+      return;
+    }
+
+    final item = ref.read(currentPlayingItemProvider);
+    if (item == null) return;
+
+    final api = ref.read(apiClientProvider);
+    final server = ref.read(currentServerProvider);
+    final logger = AppLogger();
+
+    if (_playerService.coreType != PlayerCoreType.mpv) {
+      logger.w('Player', '次字幕仅支持MPV内核');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('次字幕功能需要MPV内核，请在设置中切换')),
+        );
+      }
+      return;
+    }
+
+    try {
+      final playbackInfo = await api.playback.getPlaybackInfo(item.id);
+      final mediaSource = playbackInfo.mediaSources.firstOrNull;
+      if (mediaSource == null) return;
+
+      final subtitleStreams = mediaSource.mediaStreams.where((s) => s.isSubtitle).toList();
+      final target = subtitleStreams.where((s) => s.index == next).firstOrNull;
+      if (target == null) return;
+
+      final isExternal = target.isExternal ?? false;
+      final codec = target.codec?.toLowerCase() ?? 'ass';
+      final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs';
+
+      if (!isExternal || isGraphical) {
+        logger.w('Player', '次字幕: 内封/图形字幕暂不支持作为次字幕');
+        return;
+      }
+
+      final embyCodec = _embySubtitleCodec(codec);
+      final subUrl = api.playback.getSubtitleStreamUrl(
+        item.id,
+        mediaSource.id,
+        target.index,
+        embyCodec,
+      );
+
+      final tempDir = await getTemporaryDirectory();
+      final ext = codec == 'srt' || codec == 'subrip' ? 'srt' : 'ass';
+      final subFile = File('${tempDir.path}/secondary_subtitle_${item.id}_${target.index}.$ext');
+
+      if (!subFile.existsSync() || await subFile.length() == 0) {
+        final dio = Dio(BaseOptions(
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 60),
+        ));
+        if (server?.authToken != null) {
+          dio.options.headers['X-Emby-Token'] = server!.authToken;
+          dio.options.headers['X-MediaBrowser-Token'] = server.authToken;
+        }
+        await dio.download(subUrl, subFile.path);
+      }
+
+      if (subFile.existsSync() && await subFile.length() > 0) {
+        await _playerService.loadSecondarySubtitle(subFile.path);
+        logger.i('Player', '次字幕加载成功: ${subFile.path}');
+      }
+    } catch (e) {
+      logger.e('Player', '加载次字幕失败: $e');
     }
   }
 
@@ -268,6 +581,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _activePlayerService = null;
     _playerService.removeListener(_onPlayerUpdate);
     _playerService.dispose();
     _longPressTimer?.cancel();
@@ -385,21 +699,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
   }
 
   Widget _buildVideoArea() {
-    final textureId = _playerService.textureId;
-    if (textureId == null) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(color: Colors.white),
-            SizedBox(height: 16),
-            Text('正在加载...', style: TextStyle(color: Colors.white70)),
-          ],
-        ),
-      );
-    }
-
-    final videoWidget = Texture(textureId: textureId);
+    final videoWidget = _playerService.buildVideo();
 
     // ExoPlayer 内核且启用了 libass：叠加 libass 位图字幕
     // MPV 内核：libmpv 自行渲染字幕，无需 Dart 层叠加
@@ -604,8 +904,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
               // 重新初始化播放器以应用硬解/软解设置
               final savedPosition = _playerService.position;
               await _playerService.dispose();
-              _playerService = VideoPlayerService();
-              _playerService.addListener(_onPlayerUpdate);
+    _playerService = VideoPlayerService();
+    _activePlayerService = _playerService;
+    _playerService.addListener(_onPlayerUpdate);
               await _initializePlayer();
               if (savedPosition > Duration.zero) {
                 await _playerService.seekTo(savedPosition);
@@ -1637,6 +1938,9 @@ class _SubtitleSettingsContentState extends ConsumerState<_SubtitleSettingsConte
     final subtitleSize = ref.watch(subtitleSizeProvider);
     final subtitlePosition = ref.watch(subtitlePositionProvider);
     final subtitleFont = ref.watch(subtitleFontProvider);
+    final subtitleBackground = ref.watch(subtitleBackgroundProvider);
+    final selectedSubtitleIndex = ref.watch(subtitleTrackProvider);
+    final selectedSecondaryIndex = ref.watch(secondarySubtitleTrackProvider);
 
     if (subtitleAsync == null) {
       return const _SettingsSection(
@@ -1647,7 +1951,6 @@ class _SubtitleSettingsContentState extends ConsumerState<_SubtitleSettingsConte
     return subtitleAsync.when(
       data: (info) {
         final subtitles = info.mediaSources.firstOrNull?.mediaStreams.where((s) => s.isSubtitle).toList() ?? [];
-        final selectedIndex = ref.watch(subtitleTrackProvider);
 
         return _SettingsSection(
           children: [
@@ -1664,21 +1967,47 @@ class _SubtitleSettingsContentState extends ConsumerState<_SubtitleSettingsConte
                   style: const TextStyle(color: Colors.white, fontSize: 14),
                 ),
                 subtitle: stream.codec != null
-                    ? Text('编码: ${stream.codec}', style: const TextStyle(color: Colors.white54, fontSize: 12))
+                    ? Text('编码: ${stream.codec}${stream.isExternal == true ? ' (外挂)' : ' (内封)'}', style: const TextStyle(color: Colors.white54, fontSize: 12))
                     : null,
                 value: stream.index,
-                groupValue: selectedIndex ?? subtitles.firstOrNull?.index,
+                groupValue: selectedSubtitleIndex,
                 onChanged: (value) {
                   ref.read(subtitleTrackProvider.notifier).state = value;
                 },
               )),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             _SettingsButton(
               icon: Icons.upload_file,
               label: '导入外部字幕',
               onTap: () => _pickExternalSubtitle(),
             ),
             const SizedBox(height: 16),
+            const _Divider(),
+            const _SectionTitle('次字幕（第二字幕）'),
+            RadioListTile<int?>(
+              title: const Text('关闭', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              value: null,
+              groupValue: selectedSecondaryIndex,
+              onChanged: (_) {
+                ref.read(secondarySubtitleTrackProvider.notifier).state = null;
+              },
+            ),
+            if (subtitles.isEmpty)
+              const ListTile(
+                title: Text('无可用次字幕', style: TextStyle(color: Colors.white70)),
+              )
+            else
+              ...subtitles.map((stream) => RadioListTile<int?>(
+                title: Text(
+                  stream.displayTitle ?? stream.language ?? '轨道 ${stream.index}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+                value: stream.index,
+                groupValue: selectedSecondaryIndex,
+                onChanged: (value) {
+                  ref.read(secondarySubtitleTrackProvider.notifier).state = value;
+                },
+              )),
             const _Divider(),
             const _SectionTitle('字体'),
             _SettingsItem(
@@ -1709,6 +2038,13 @@ class _SubtitleSettingsContentState extends ConsumerState<_SubtitleSettingsConte
               activeColor: const Color(0xFF5B8DEF),
               inactiveColor: Colors.white24,
             ),
+            const _Divider(),
+            SwitchListTile(
+              title: const Text('字幕黑色背景', style: TextStyle(color: Colors.white, fontSize: 14)),
+              subtitle: const Text('为字幕添加半透明黑色背景', style: TextStyle(color: Colors.white54, fontSize: 12)),
+              value: subtitleBackground,
+              onChanged: (value) => ref.read(subtitleBackgroundProvider.notifier).state = value,
+            ),
           ],
         );
       },
@@ -1728,10 +2064,23 @@ class _SubtitleSettingsContentState extends ConsumerState<_SubtitleSettingsConte
         allowedExtensions: ['srt', 'ass', 'ssa', 'vtt'],
       );
       if (result != null && result.files.single.path != null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('已导入字幕: ${result.files.single.name}')),
-          );
+        final filePath = result.files.single.path!;
+        AppLogger().i('Player', '导入外部字幕: $filePath');
+
+        final playerService = _PlayerScreenState.activePlayerService;
+        if (playerService != null) {
+          await playerService.loadLibassSubtitle(filePath);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('已导入并加载字幕: ${result.files.single.name}')),
+            );
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('字幕文件已选择，但播放器未就绪')),
+            );
+          }
         }
       }
     } catch (e) {
@@ -1856,6 +2205,7 @@ class _AudioSettingsContentState extends ConsumerState<_AudioSettingsContent> {
     final item = ref.watch(currentPlayingItemProvider);
     final audioAsync = item != null ? ref.watch(playbackInfoProvider(item.id)) : null;
     final audioOffset = ref.watch(audioDelayProvider);
+    final selectedIndex = ref.watch(audioTrackProvider);
 
     if (audioAsync == null) {
       return const _SettingsSection(
@@ -1866,7 +2216,6 @@ class _AudioSettingsContentState extends ConsumerState<_AudioSettingsContent> {
     return audioAsync.when(
       data: (info) {
         final audios = info.mediaSources.firstOrNull?.mediaStreams.where((s) => s.isAudio).toList() ?? [];
-        final selectedIndex = ref.watch(audioTrackProvider);
 
         return _SettingsSection(
           children: [
@@ -1886,9 +2235,12 @@ class _AudioSettingsContentState extends ConsumerState<_AudioSettingsContent> {
                     ? Text('编码: ${stream.codec}', style: const TextStyle(color: Colors.white54, fontSize: 12))
                     : null,
                 value: stream.index,
-                groupValue: selectedIndex ?? audios.firstOrNull?.index,
+                groupValue: selectedIndex,
                 onChanged: (value) {
-                  ref.read(audioTrackProvider.notifier).state = value;
+                  if (value != null) {
+                    ref.read(audioTrackProvider.notifier).state = value;
+                    _switchAudioTrack(value);
+                  }
                 },
               )),
             const _Divider(),
@@ -1910,6 +2262,19 @@ class _AudioSettingsContentState extends ConsumerState<_AudioSettingsContent> {
         children: [Center(child: Text('加载音频信息失败', style: TextStyle(color: Colors.white70)))],
       ),
     );
+  }
+
+  Future<void> _switchAudioTrack(int index) async {
+    final playerService = _PlayerScreenState.activePlayerService;
+    if (playerService == null) return;
+
+    final tracks = playerService.tracksInfo;
+    final audioTracks = tracks.where((t) => t['type'] == 'audio').toList();
+
+    if (index < audioTracks.length) {
+      final trackId = audioTracks[index]['id']?.toString() ?? '';
+      await playerService.selectAudioTrack(trackId);
+    }
   }
 
   void _showCustomOffsetDialog(BuildContext context) {

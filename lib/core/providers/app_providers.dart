@@ -410,6 +410,9 @@ final subtitleSizeProvider = StateProvider<double>((ref) => 0.5);
 /// 字幕位置Provider（0.0 - 1.0）
 final subtitlePositionProvider = StateProvider<double>((ref) => 0.5);
 
+/// 字幕黑色背景Provider
+final subtitleBackgroundProvider = StateProvider<bool>((ref) => false);
+
 /// ==========================================
 /// 外观设置Providers
 /// ==========================================

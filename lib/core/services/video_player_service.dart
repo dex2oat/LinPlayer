@@ -94,6 +94,9 @@ class VideoPlayerService extends ChangeNotifier {
   /// libass 是否已就绪
   bool get libassReady => _adapter?.libassReady ?? false;
 
+  /// 获取当前可用轨道列表
+  List<Map<String, dynamic>> get tracksInfo => _adapter?.getTracksInfo() ?? [];
+
   /// 设置播放器内核
   void setCoreType(PlayerCoreType type) {
     if (_coreType == type) return;
@@ -126,6 +129,7 @@ class VideoPlayerService extends ChangeNotifier {
     Function(PlaybackStopInfo)? onStop,
     bool? dolbyVisionFix,
     bool? useLibass,
+    String? preferredSubtitleLanguage,
   }) async {
     _currentItemId = itemId;
     _mediaSourceId = mediaSourceId ?? itemId;
@@ -169,6 +173,7 @@ class VideoPlayerService extends ChangeNotifier {
       startPosition: startPosition,
       dolbyVisionFix: dolbyVisionFix ?? false,
       useLibass: useLibass ?? false,
+      preferredSubtitleLanguage: preferredSubtitleLanguage,
     );
 
     // 开始播放
@@ -196,6 +201,36 @@ class VideoPlayerService extends ChangeNotifier {
   /// 加载字幕数据到内存（通过 libass）
   Future<void> loadLibassSubtitleMemory(Uint8List data, {String codec = 'ass'}) async {
     await _adapter?.loadLibassSubtitleMemory(data, codec: codec);
+  }
+
+  /// 选择字幕轨道（内封字幕切换）
+  Future<void> selectSubtitleTrack(String trackId) async {
+    await _adapter?.selectSubtitleTrack(trackId);
+    notifyListeners();
+  }
+
+  /// 关闭字幕
+  Future<void> deselectSubtitleTrack() async {
+    await _adapter?.deselectSubtitleTrack();
+    notifyListeners();
+  }
+
+  /// 选择音频轨道
+  Future<void> selectAudioTrack(String trackId) async {
+    await _adapter?.selectAudioTrack(trackId);
+    notifyListeners();
+  }
+
+  /// 加载次字幕文件
+  Future<void> loadSecondarySubtitle(String path) async {
+    await _adapter?.loadSecondarySubtitle(path);
+    notifyListeners();
+  }
+
+  /// 取消次字幕
+  Future<void> deselectSecondarySubtitle() async {
+    await _adapter?.deselectSecondarySubtitle();
+    notifyListeners();
   }
 
   /// 播放
@@ -276,6 +311,12 @@ class VideoPlayerService extends ChangeNotifier {
   /// 设置字幕位置
   Future<void> setSubtitlePosition(double position) async {
     await _adapter?.setSubtitlePosition(position);
+    notifyListeners();
+  }
+
+  /// 设置字幕黑色背景
+  Future<void> setSubtitleBackground(bool enabled) async {
+    await _adapter?.setSubtitleBackground(enabled);
     notifyListeners();
   }
 

@@ -2,10 +2,6 @@ package com.example.linplayer_mobile
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.PixelFormat
-import android.hardware.HardwareBuffer
-import android.media.ImageReader
-import android.media.projection.MediaProjection
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -26,7 +22,6 @@ import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.RenderersFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -38,16 +33,6 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-/**
- * ExoPlayer Platform Channel 插件（v2）
- *
- * 支持：
- * - 多字幕轨道加载（SRT/ASS/WEBVTT/TTML/PGS/SUP）
- * - 音频/字幕轨道切换
- * - ffmpeg 软解扩展
- * - 截图（PixelCopy）
- * - 外挂字幕（本地文件或网络 URL）
- */
 @OptIn(UnstableApi::class)
 class ExoPlayerPlugin(
     private val context: Context,
@@ -68,9 +53,6 @@ class ExoPlayerPlugin(
                 .setMethodCallHandler(plugin)
         }
 
-        /**
-         * 根据文件扩展名或 URL 检测字幕 MIME 类型
-         */
         fun detectMimeType(url: String): String {
             val lower = url.lowercase()
             return when {
@@ -78,8 +60,8 @@ class ExoPlayerPlugin(
                 lower.endsWith(".ass") || lower.endsWith(".ssa") -> MimeTypes.TEXT_SSA
                 lower.endsWith(".vtt") -> MimeTypes.TEXT_VTT
                 lower.endsWith(".ttml") || lower.endsWith(".xml") || lower.endsWith(".dfxp") -> MimeTypes.APPLICATION_TTML
-            lower.endsWith(".pgs") || lower.endsWith(".sup") -> MimeTypes.APPLICATION_PGS
-                else -> MimeTypes.APPLICATION_SUBRIP // 默认尝试 SRT
+                lower.endsWith(".pgs") || lower.endsWith(".sup") -> MimeTypes.APPLICATION_PGS
+                else -> MimeTypes.APPLICATION_SUBRIP
             }
         }
     }
@@ -93,10 +75,8 @@ class ExoPlayerPlugin(
                 val videoUrl = call.argument<String>("videoUrl") ?: ""
                 val startPositionMs = call.argument<Int>("startPositionMs") ?: 0
                 val dolbyVisionFix = call.argument<Boolean>("dolbyVisionFix") ?: false
-                val subtitleUrl = call.argument<String>("subtitleUrl")
-                val subtitleMimeType = call.argument<String>("subtitleMimeType")
-                val subtitleLanguage = call.argument<String>("subtitleLanguage")
-                createPlayer(videoUrl, startPositionMs, dolbyVisionFix, subtitleUrl, subtitleMimeType, subtitleLanguage, result)
+                val preferredSubtitleLanguage = call.argument<String>("preferredSubtitleLanguage")
+                createPlayer(videoUrl, startPositionMs, dolbyVisionFix, preferredSubtitleLanguage, result)
             }
             "play" -> {
                 val playerId = call.argument<String>("playerId") ?: ""
@@ -149,6 +129,11 @@ class ExoPlayerPlugin(
                 getPlayer(playerId)?.selectTrack(groupIndex, trackIndex, trackType)
                 result.success(true)
             }
+            "deselectSubtitleTrack" -> {
+                val playerId = call.argument<String>("playerId") ?: ""
+                getPlayer(playerId)?.deselectSubtitleTrack()
+                result.success(true)
+            }
             "loadSubtitle" -> {
                 val playerId = call.argument<String>("playerId") ?: ""
                 val subtitleUrl = call.argument<String>("subtitleUrl") ?: ""
@@ -168,7 +153,6 @@ class ExoPlayerPlugin(
                 result.success(true)
             }
             "setAudioDelay" -> {
-                // ExoPlayer 不支持音频延迟，忽略
                 result.success(true)
             }
             "setSubtitleFont" -> {
@@ -189,6 +173,12 @@ class ExoPlayerPlugin(
                 getPlayer(playerId)?.setSubtitlePosition(position)
                 result.success(true)
             }
+            "setSubtitleBackground" -> {
+                val playerId = call.argument<String>("playerId") ?: ""
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                getPlayer(playerId)?.setSubtitleBackground(enabled)
+                result.success(true)
+            }
             "setAspectRatio" -> {
                 result.success(true)
             }
@@ -205,9 +195,7 @@ class ExoPlayerPlugin(
         videoUrl: String,
         startPositionMs: Int,
         dolbyVisionFix: Boolean,
-        subtitleUrl: String?,
-        subtitleMimeType: String?,
-        subtitleLanguage: String?,
+        preferredSubtitleLanguage: String?,
         result: MethodChannel.Result
     ) {
         mainHandler.post {
@@ -218,10 +206,16 @@ class ExoPlayerPlugin(
                 val surfaceTexture = surfaceTextureEntry.surfaceTexture()
                 val surface = Surface(surfaceTexture)
 
-                // 使用 DefaultTrackSelector 支持轨道选择
                 val trackSelector = DefaultTrackSelector(context)
+                val paramsBuilder = trackSelector.buildUponParameters()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .setSelectUndeterminedTextLanguage(true)
 
-                // 启用 ffmpeg 扩展（软解音频 + 增强解码能力）
+                if (!preferredSubtitleLanguage.isNullOrEmpty()) {
+                    paramsBuilder.setPreferredTextLanguage(preferredSubtitleLanguage)
+                }
+                trackSelector.parameters = paramsBuilder.build()
+
                 val renderersFactory = DefaultRenderersFactory(context)
                     .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
 
@@ -231,22 +225,9 @@ class ExoPlayerPlugin(
                     .build()
                 exoPlayer.setVideoSurface(surface)
 
-                // 构建带字幕的 MediaItem
-                val mediaItemBuilder = MediaItem.Builder()
+                val mediaItem = MediaItem.Builder()
                     .setUri(videoUrl)
-
-                // 添加外挂字幕配置
-                if (!subtitleUrl.isNullOrEmpty()) {
-                    val mimeType = subtitleMimeType ?: detectMimeType(subtitleUrl)
-                    val subtitleConfig = MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitleUrl))
-                        .setMimeType(mimeType)
-                        .setLanguage(subtitleLanguage)
-                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                        .build()
-                    mediaItemBuilder.setSubtitleConfigurations(listOf(subtitleConfig))
-                }
-
-                val mediaItem = mediaItemBuilder.build()
+                    .build()
                 exoPlayer.setMediaItem(mediaItem)
                 exoPlayer.prepare()
 
@@ -262,6 +243,7 @@ class ExoPlayerPlugin(
                 val instance = ExoPlayerInstance(
                     playerId = playerId,
                     exoPlayer = exoPlayer,
+                    trackSelector = trackSelector,
                     surfaceTextureEntry = surfaceTextureEntry,
                     surface = surface,
                     eventChannel = eventChannel,
@@ -277,21 +259,6 @@ class ExoPlayerPlugin(
             } catch (e: Exception) {
                 result.error("CREATE_ERROR", e.message, null)
             }
-        }
-    }
-
-    /**
-     * 根据文件扩展名或 URL 检测字幕 MIME 类型
-     */
-    private fun detectMimeType(url: String): String {
-        val lower = url.lowercase()
-        return when {
-            lower.endsWith(".srt") -> MimeTypes.APPLICATION_SUBRIP
-            lower.endsWith(".ass") || lower.endsWith(".ssa") -> MimeTypes.TEXT_SSA
-            lower.endsWith(".vtt") -> MimeTypes.TEXT_VTT
-            lower.endsWith(".ttml") || lower.endsWith(".xml") || lower.endsWith(".dfxp") -> MimeTypes.APPLICATION_TTML
-            lower.endsWith(".pgs") -> MimeTypes.APPLICATION_PGS
-            else -> MimeTypes.APPLICATION_SUBRIP // 默认尝试 SRT
         }
     }
 
@@ -314,6 +281,7 @@ class ExoPlayerPlugin(
     class ExoPlayerInstance(
         val playerId: String,
         val exoPlayer: ExoPlayer,
+        val trackSelector: DefaultTrackSelector,
         val surfaceTextureEntry: TextureRegistry.SurfaceTextureEntry,
         val surface: Surface,
         private val eventChannel: EventChannel,
@@ -322,13 +290,9 @@ class ExoPlayerPlugin(
         private var eventSink: EventChannel.EventSink? = null
         private val instanceHandler = Handler(Looper.getMainLooper())
 
-        // 字幕设置
         private var subtitleDelayMs: Long = 0
-        private var subtitleFont: String = ""
-        private var subtitleSize: Double = 0.5
-        private var subtitlePosition: Double = 0.5
+        private var externalSubtitles: MutableList<MediaItem.SubtitleConfiguration> = mutableListOf()
 
-        // 轨道信息缓存
         private var currentTracks: List<Map<String, Any>> = emptyList()
 
         init {
@@ -345,74 +309,61 @@ class ExoPlayerPlugin(
         fun play() = exoPlayer.play()
         fun pause() = exoPlayer.pause()
         fun seekTo(positionMs: Long) = exoPlayer.seekTo(positionMs)
+
         fun setSpeed(speed: Float) {
             exoPlayer.playbackParameters = PlaybackParameters(speed)
         }
+
         fun setVolume(volume: Float) {
             exoPlayer.volume = volume
         }
 
         fun setSubtitleDelay(seconds: Double) {
             subtitleDelayMs = (seconds * 1000).toLong()
-            emitEvent("subtitleDelayChanged", seconds)
         }
 
-        fun setSubtitleFont(fontName: String) {
-            subtitleFont = fontName
-            emitEvent("subtitleFontChanged", fontName)
-        }
+        fun setSubtitleFont(fontName: String) {}
 
-        fun setSubtitleSize(size: Double) {
-            subtitleSize = size
-            emitEvent("subtitleSizeChanged", size)
-        }
+        fun setSubtitleSize(size: Double) {}
 
-        fun setSubtitlePosition(position: Double) {
-            subtitlePosition = position
-            emitEvent("subtitlePositionChanged", position)
-        }
+        fun setSubtitlePosition(position: Double) {}
 
-        val currentPosition: Long get() = exoPlayer.currentPosition
-        val duration: Long get() = exoPlayer.duration
+        fun setSubtitleBackground(enabled: Boolean) {}
 
-        /**
-         * 获取当前可用的轨道信息
-         */
         fun getTracksInfo(): List<Map<String, Any>> {
             return currentTracks
         }
 
-        /**
-         * 选择特定轨道
-         */
         fun selectTrack(groupIndex: Int, trackIndex: Int, trackType: Int) {
             val tracks = exoPlayer.currentTracks
-            val groups = tracks.groups.filter { it.type == trackType }
-            if (groupIndex < groups.size) {
-                val group = groups[groupIndex]
-                if (trackIndex < group.length) {
-                    val trackSelection = TrackSelectionOverride(group.mediaTrackGroup, trackIndex)
-                    val params = exoPlayer.trackSelectionParameters
-                        .buildUpon()
-                        .setOverrideForType(trackSelection)
-                        .build()
-                    exoPlayer.trackSelectionParameters = params
+            if (groupIndex < tracks.groups.size) {
+                val group = tracks.groups[groupIndex]
+                if (group.type == trackType && trackIndex < group.length) {
+                    val trackSelection = TrackSelectionOverride(group.mediaTrackGroup, listOf(trackIndex))
+                    val paramsBuilder = trackSelector.buildUponParameters()
+                    paramsBuilder.setOverrideForType(trackSelection)
+                    if (trackType == C.TRACK_TYPE_TEXT) {
+                        paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    }
+                    trackSelector.parameters = paramsBuilder.build()
                 }
             }
         }
 
-        /**
-         * 动态加载外挂字幕
-         */
+        fun deselectSubtitleTrack() {
+            val paramsBuilder = trackSelector.buildUponParameters()
+            paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            trackSelector.parameters = paramsBuilder.build()
+        }
+
         fun loadSubtitle(subtitleUrl: String, subtitleMimeType: String?, subtitleLanguage: String?) {
-            // 检测是否为 PGS/SUP 格式
             val lowerUrl = subtitleUrl.lowercase()
             val isGraphicalSubtitle = lowerUrl.endsWith(".pgs") || lowerUrl.endsWith(".sup")
             if (isGraphicalSubtitle) {
-                emitEvent("error", "PGS/SUP subtitles require FFmpeg extension. Please switch to MPV kernel or build with ffmpeg support.")
+                emitEvent("error", "PGS/SUP subtitles require FFmpeg extension. Please switch to MPV kernel.")
                 return
             }
-            
+
             val mimeType = subtitleMimeType ?: Companion.detectMimeType(subtitleUrl)
             val subtitleConfig = MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitleUrl))
                 .setMimeType(mimeType)
@@ -420,19 +371,26 @@ class ExoPlayerPlugin(
                 .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
                 .build()
 
+            externalSubtitles.add(subtitleConfig)
+
             val currentMediaItem = exoPlayer.currentMediaItem
             if (currentMediaItem != null) {
+                val allSubtitles = currentMediaItem.localConfiguration?.subtitleConfigurations?.toMutableList() ?: mutableListOf()
+                allSubtitles.add(subtitleConfig)
+
+                val currentPosition = exoPlayer.currentPosition
+                val playWhenReady = exoPlayer.playWhenReady
+
                 val newMediaItem = currentMediaItem.buildUpon()
-                    .setSubtitleConfigurations(listOf(subtitleConfig))
+                    .setSubtitleConfigurations(allSubtitles)
                     .build()
-                exoPlayer.setMediaItem(newMediaItem)
+
+                exoPlayer.playWhenReady = playWhenReady
+                exoPlayer.setMediaItem(newMediaItem, currentPosition)
                 exoPlayer.prepare()
             }
         }
 
-        /**
-         * 截图（使用 PixelCopy）
-         */
         fun screenshot(result: MethodChannel.Result) {
             try {
                 val width = exoPlayer.videoSize.width
@@ -492,15 +450,8 @@ class ExoPlayerPlugin(
             }
         }
 
-        // 提取字幕纯文本
-        private fun extractCueText(cues: List<Cue>): String {
-            return cues.mapNotNull { cue ->
-                cue.text?.toString()
-            }.joinToString("\n")
-        }
-
         override fun onCues(cues: List<Cue>) {
-            val text = extractCueText(cues)
+            val text = cues.mapNotNull { cue -> cue.text?.toString() }.joinToString("\n")
             emitEvent("subtitle", text)
         }
 
@@ -528,7 +479,6 @@ class ExoPlayerPlugin(
         }
 
         override fun onTracksChanged(tracks: Tracks) {
-            // 收集轨道信息并上报
             val trackList = mutableListOf<Map<String, Any>>()
             tracks.groups.forEachIndexed { groupIndex, group ->
                 val type = when (group.type) {
@@ -540,6 +490,7 @@ class ExoPlayerPlugin(
                 for (i in 0 until group.length) {
                     val format = group.getTrackFormat(i)
                     trackList.add(mapOf(
+                        "id" to "${groupIndex}_$i",
                         "groupIndex" to groupIndex,
                         "trackIndex" to i,
                         "type" to type,

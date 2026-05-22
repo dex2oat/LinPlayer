@@ -58,6 +58,7 @@ abstract class PlayerAdapter {
     Duration? startPosition,
     bool dolbyVisionFix = false,
     bool useLibass = false,
+    String? preferredSubtitleLanguage,
   });
 
   /// 加载外部字幕文件（通过 libass）
@@ -87,6 +88,24 @@ abstract class PlayerAdapter {
   /// 截图（返回图片字节数据）
   Future<Uint8List?> screenshot() async => null;
 
+  /// 选择字幕轨道（通过轨道ID选择内封字幕）
+  Future<void> selectSubtitleTrack(String trackId) async {}
+
+  /// 取消选择字幕轨道（关闭字幕）
+  Future<void> deselectSubtitleTrack() async {}
+
+  /// 选择音频轨道
+  Future<void> selectAudioTrack(String trackId) async {}
+
+  /// 加载次字幕文件
+  Future<void> loadSecondarySubtitle(String path) async {}
+
+  /// 取消次字幕
+  Future<void> deselectSecondarySubtitle() async {}
+
+  /// 获取当前可用轨道列表
+  List<Map<String, dynamic>> getTracksInfo();
+
   /// 设置字幕同步偏移（秒）
   Future<void> setSubtitleDelay(double seconds) async {}
 
@@ -101,6 +120,9 @@ abstract class PlayerAdapter {
 
   /// 设置字幕位置（0.0 - 1.0）
   Future<void> setSubtitlePosition(double position) async {}
+
+  /// 设置字幕黑色背景
+  Future<void> setSubtitleBackground(bool enabled) async {}
 
   /// 设置画面比例
   Future<void> setAspectRatio(String ratio) async {}

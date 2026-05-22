@@ -9,11 +9,6 @@ import 'app_logger.dart';
 import 'mpv_config_manager.dart';
 import 'subtitle_processor.dart';
 
-/// MPV 播放器适配器（v2.1 - media_kit + 高级功能）
-///
-/// 基于 media_kit，通过以下方式实现高级功能：
-/// - 配置文件：字幕字体、大小、位置、音频/字幕延迟、画面比例、Anime4K
-/// - Dart 层处理：运行时字幕时间轴偏移、ASS 样式修改
 class MpvPlayerAdapter implements PlayerAdapter {
   static final _logger = AppLogger();
   static final _configManager = MpvConfigManager();
@@ -31,7 +26,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
   double _volume = 1.0;
   String? _errorMessage;
 
-  // 当前配置值（用于运行时下发生效）
   double _subtitleDelay = 0.0;
   double _audioDelay = 0.0;
   double _subtitleScale = 1.0;
@@ -39,12 +33,13 @@ class MpvPlayerAdapter implements PlayerAdapter {
   String? _subtitleFont;
   String? _aspectRatio;
   List<String>? _glslShaders;
+  bool _subtitleBackground = false;
 
-  // 已处理字幕文件路径（用于切换字幕时重新处理）
   String? _lastSubtitlePath;
 
-  // 轨道信息
   List<Map<String, dynamic>> _tracks = [];
+  List<SubtitleTrack> _subtitleTracks = [];
+  List<AudioTrack> _audioTracks = [];
 
   PlayerStateCallbacks? _callbacks;
   final List<StreamSubscription> _subscriptions = [];
@@ -92,12 +87,18 @@ class MpvPlayerAdapter implements PlayerAdapter {
   @override
   int? get textureId => null;
 
-  /// 当前可用的轨道列表
-  List<Map<String, dynamic>> get tracks => _tracks;
+  @override
+  List<Map<String, dynamic>> getTracksInfo() => _tracks;
 
   @override
   void setCallbacks(PlayerStateCallbacks callbacks) {
     _callbacks = callbacks;
+  }
+
+  NativePlayer? get _nativePlayer {
+    final platform = _player?.platform;
+    if (platform is NativePlayer) return platform;
+    return null;
   }
 
   @override
@@ -106,23 +107,21 @@ class MpvPlayerAdapter implements PlayerAdapter {
     Duration? startPosition,
     bool dolbyVisionFix = false,
     bool useLibass = false,
+    String? preferredSubtitleLanguage,
   }) async {
-    _logger.i('MpvAdapter', '开始初始化 media_kit 内核 (v2.1)');
-    _logger.i('MpvAdapter', '视频URL: $videoUrl');
-    _logger.i('MpvAdapter', '起始位置: ${startPosition?.inMilliseconds ?? 0}ms');
-    _logger.i('MpvAdapter', 'DolbyVisionFix: $dolbyVisionFix');
-
+    _logger.i('MpvAdapter', '开始初始化 media_kit 内核');
     try {
       await dispose();
 
       _errorMessage = null;
       _isCompleted = false;
       _tracks = [];
+      _subtitleTracks = [];
+      _audioTracks = [];
+      _lastSubtitlePath = null;
 
-      // 确保配置目录存在
       await _configManager.initialize();
 
-      // 写入 mpv 配置文件（应用当前所有设置）
       await _configManager.writeConfig(
         subtitleFont: _subtitleFont,
         subtitleScale: _subtitleScale,
@@ -131,28 +130,18 @@ class MpvPlayerAdapter implements PlayerAdapter {
         audioDelay: _audioDelay,
         aspectRatio: _aspectRatio,
         glslShaders: _glslShaders,
+        subtitleBackground: _subtitleBackground,
       );
 
-      // 创建 media_kit Player
-      _logger.i('MpvAdapter', '创建 media_kit Player...');
       _player = Player();
-      _logger.i('MpvAdapter', 'media_kit Player 创建成功');
-
-      // 创建 VideoController
-      _logger.i('MpvAdapter', '创建 VideoController...');
       _videoController = VideoController(_player!);
-      _logger.i('MpvAdapter', 'VideoController 创建成功');
 
-      // 监听状态变化
       _setupStreamListeners();
 
-      // 加载视频
-      _logger.i('MpvAdapter', '加载视频: $videoUrl');
-      await _player!.open(Media(videoUrl));
+      final media = Media(videoUrl);
+      await _player!.open(media);
 
-      // 设置起始位置
       if (startPosition != null && startPosition > Duration.zero) {
-        _logger.i('MpvAdapter', '设置起始位置: ${startPosition.inMilliseconds}ms');
         await _player!.seek(startPosition);
       }
 
@@ -162,7 +151,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
     } catch (e, stackTrace) {
       _errorMessage = e.toString();
       _isInitialized = false;
-      _logger.eWithStack('MpvAdapter', 'media_kit 初始化失败', e, stackTrace);
+      _logger.eWithStack('MpvAdapter', '初始化失败', e, stackTrace);
       _callbacks?.onError?.call();
     }
   }
@@ -204,6 +193,9 @@ class MpvPlayerAdapter implements PlayerAdapter {
     }));
 
     _subscriptions.add(_player!.stream.tracks.listen((tracks) {
+      _subtitleTracks = tracks.subtitle;
+      _audioTracks = tracks.audio;
+
       final trackList = <Map<String, dynamic>>[];
 
       for (final track in tracks.video) {
@@ -237,40 +229,77 @@ class MpvPlayerAdapter implements PlayerAdapter {
       }
 
       _tracks = trackList;
-      _logger.d('MpvAdapter', '轨道变更: ${_tracks.length} 条轨道');
+      _logger.d('MpvAdapter', '轨道变更: video=${tracks.video.length}, audio=${tracks.audio.length}, subtitle=${tracks.subtitle.length}');
     }));
   }
 
-  // ========== 字幕处理 ==========
+  @override
+  Future<void> selectSubtitleTrack(String trackId) async {
+    if (_player == null || !_isInitialized) return;
+    _logger.i('MpvAdapter', '选择字幕轨道: id=$trackId');
+
+    try {
+      final target = _subtitleTracks.where((t) => t.id == trackId).firstOrNull;
+      if (target != null) {
+        await _player!.setSubtitleTrack(target);
+        _logger.i('MpvAdapter', '字幕轨道已选择: id=${target.id}, title=${target.title}, lang=${target.language}');
+      } else {
+        _logger.w('MpvAdapter', '未找到字幕轨道: id=$trackId, 可用: ${_subtitleTracks.map((t) => t.id).toList()}');
+      }
+    } catch (e, stackTrace) {
+      _logger.eWithStack('MpvAdapter', '选择字幕轨道失败', e, stackTrace);
+    }
+  }
+
+  @override
+  Future<void> deselectSubtitleTrack() async {
+    if (_player == null || !_isInitialized) return;
+    _logger.i('MpvAdapter', '关闭字幕');
+    try {
+      await _player!.setSubtitleTrack(SubtitleTrack.no());
+    } catch (e, stackTrace) {
+      _logger.eWithStack('MpvAdapter', '关闭字幕失败', e, stackTrace);
+    }
+  }
+
+  @override
+  Future<void> selectAudioTrack(String trackId) async {
+    if (_player == null || !_isInitialized) return;
+    _logger.i('MpvAdapter', '选择音频轨道: id=$trackId');
+    try {
+      final target = _audioTracks.where((t) => t.id == trackId).firstOrNull;
+      if (target != null) {
+        await _player!.setAudioTrack(target);
+      } else {
+        _logger.w('MpvAdapter', '未找到音频轨道: id=$trackId');
+      }
+    } catch (e, stackTrace) {
+      _logger.eWithStack('MpvAdapter', '选择音频轨道失败', e, stackTrace);
+    }
+  }
 
   @override
   Future<void> loadLibassSubtitle(String path) async {
-    _logger.i('MpvAdapter', '加载字幕: $path');
+    _logger.i('MpvAdapter', '加载外挂字幕: $path');
     if (_player == null) return;
 
     try {
       _lastSubtitlePath = path;
 
-      // 检测是否为图形字幕（PGS/SUP）
       if (SubtitleProcessor.isGraphicalSubtitle(path)) {
-        _logger.i('MpvAdapter', '检测到图形字幕 (PGS/SUP)，直接加载');
+        _logger.i('MpvAdapter', '图形字幕 (PGS/SUP)，直接加载');
         await _player!.setSubtitleTrack(SubtitleTrack.uri(path));
         return;
       }
 
-      // 处理字幕：应用当前时间轴偏移和样式
       var processedPath = path;
 
-      // 1. 调整时间轴（字幕延迟）
       if (_subtitleDelay != 0.0) {
-        processedPath = await SubtitleProcessor.adjustTiming(
-          processedPath,
-          _subtitleDelay,
-        );
+        processedPath = await SubtitleProcessor.adjustTiming(processedPath, _subtitleDelay);
       }
 
-      // 2. 修改 ASS 样式（字体、大小、位置）
-      if (SubtitleProcessor.detectFormat(path) == 'ass') {
+      final format = SubtitleProcessor.detectFormat(path);
+      if (format == 'ass') {
         final marginV = _subtitlePosition != 100.0
             ? ((100.0 - _subtitlePosition) * 10).round()
             : null;
@@ -289,9 +318,26 @@ class MpvPlayerAdapter implements PlayerAdapter {
       }
 
       await _player!.setSubtitleTrack(SubtitleTrack.uri(processedPath));
-      _logger.i('MpvAdapter', '字幕加载成功: $processedPath');
+
+      if (format == 'subrip' || format == 'webvtt') {
+        final np = _nativePlayer;
+        if (np != null) {
+          await np.setProperty('sub-scale', _subtitleScale.toStringAsFixed(2));
+          await np.setProperty('sub-pos', _subtitlePosition.toStringAsFixed(1));
+          if (_subtitleFont != null && _subtitleFont!.isNotEmpty && _subtitleFont != '默认') {
+            await np.setProperty('sub-font', _subtitleFont!);
+          }
+          if (_subtitleBackground) {
+            await np.setProperty('sub-back-color', '0.0/0.0/0.0/0.75');
+          } else {
+            await np.setProperty('sub-back-color', '0.0/0.0/0.0/0.0');
+          }
+        }
+      }
+
+      _logger.i('MpvAdapter', '外挂字幕加载成功: $processedPath');
     } catch (e, stackTrace) {
-      _logger.eWithStack('MpvAdapter', '字幕加载失败', e, stackTrace);
+      _logger.eWithStack('MpvAdapter', '外挂字幕加载失败', e, stackTrace);
     }
   }
 
@@ -310,24 +356,54 @@ class MpvPlayerAdapter implements PlayerAdapter {
     }
   }
 
-  /// 加载外挂字幕（URL 或本地路径）
   Future<void> loadSubtitle(String url) async {
     await loadLibassSubtitle(url);
   }
 
-  // ========== 高级功能实现 ==========
+  @override
+  Future<void> loadSecondarySubtitle(String path) async {
+    if (_player == null || !_isInitialized) return;
+    _logger.i('MpvAdapter', '加载次字幕: $path');
+    try {
+      final np = _nativePlayer;
+      if (np != null) {
+        await np.command(['sub-add', path, 'select', 'secondary', 'und']);
+        await np.setProperty('secondary-sid', 'auto');
+      }
+      _logger.i('MpvAdapter', '次字幕加载成功: $path');
+    } catch (e, stackTrace) {
+      _logger.eWithStack('MpvAdapter', '次字幕加载失败', e, stackTrace);
+    }
+  }
+
+  @override
+  Future<void> deselectSecondarySubtitle() async {
+    if (_player == null || !_isInitialized) return;
+    _logger.i('MpvAdapter', '取消次字幕');
+    try {
+      final np = _nativePlayer;
+      if (np != null) {
+        await np.setProperty('secondary-sid', 'no');
+      }
+    } catch (e, stackTrace) {
+      _logger.eWithStack('MpvAdapter', '取消次字幕失败', e, stackTrace);
+    }
+  }
 
   @override
   Future<void> setSubtitleDelay(double seconds) async {
     _subtitleDelay = seconds;
     _logger.i('MpvAdapter', '设置字幕延迟: ${seconds}s');
 
-    // 如果有已加载的字幕，重新处理并加载
+    final np = _nativePlayer;
+    if (np != null) {
+      await np.setProperty('sub-delay', seconds.toStringAsFixed(3));
+    }
+
     if (_lastSubtitlePath != null && _player != null) {
       await loadLibassSubtitle(_lastSubtitlePath!);
     }
 
-    // 同时更新配置文件（下次播放生效）
     await _configManager.updateConfigValue('sub-delay', seconds.toStringAsFixed(3));
   }
 
@@ -335,64 +411,93 @@ class MpvPlayerAdapter implements PlayerAdapter {
   Future<void> setAudioDelay(double seconds) async {
     _audioDelay = seconds;
     _logger.i('MpvAdapter', '设置音频延迟: ${seconds}s');
-    // 更新配置文件（下次播放生效）
+    final np = _nativePlayer;
+    if (np != null) {
+      await np.setProperty('audio-delay', seconds.toStringAsFixed(3));
+    }
     await _configManager.updateConfigValue('audio-delay', seconds.toStringAsFixed(3));
   }
 
   @override
   Future<void> setSubtitleFont(String fontName) async {
-    _subtitleFont = fontName;
+    _subtitleFont = fontName == '默认' ? null : fontName;
     _logger.i('MpvAdapter', '设置字幕字体: $fontName');
 
-    // 如果有已加载的 ASS 字幕，重新处理并加载
+    final np = _nativePlayer;
+    if (np != null && _subtitleFont != null && _subtitleFont!.isNotEmpty) {
+      await np.setProperty('sub-font', _subtitleFont!);
+    }
+
     if (_lastSubtitlePath != null &&
         SubtitleProcessor.detectFormat(_lastSubtitlePath!) == 'ass') {
       await loadLibassSubtitle(_lastSubtitlePath!);
     }
 
-    // 更新配置文件（下次播放生效）
-    if (fontName.isNotEmpty) {
+    if (fontName.isNotEmpty && fontName != '默认') {
       await _configManager.updateConfigValue('sub-font', '"$fontName"');
     }
   }
 
   @override
   Future<void> setSubtitleSize(double size) async {
-    // size 范围 0.0-1.0，映射到 0.5-1.5 的缩放比例
     _subtitleScale = 0.5 + size;
     _logger.i('MpvAdapter', '设置字幕大小: scale=$_subtitleScale');
 
-    // 如果有已加载的 ASS 字幕，重新处理并加载
+    final np = _nativePlayer;
+    if (np != null) {
+      await np.setProperty('sub-scale', _subtitleScale.toStringAsFixed(2));
+    }
+
     if (_lastSubtitlePath != null &&
         SubtitleProcessor.detectFormat(_lastSubtitlePath!) == 'ass') {
       await loadLibassSubtitle(_lastSubtitlePath!);
     }
 
-    // 更新配置文件（下次播放生效）
     await _configManager.updateConfigValue('sub-scale', _subtitleScale.toStringAsFixed(2));
   }
 
   @override
   Future<void> setSubtitlePosition(double position) async {
-    // position 范围 0.0-1.0，映射到 100-0（mpv: 100=底部, 0=顶部）
     _subtitlePosition = 100 - position * 100;
     _logger.i('MpvAdapter', '设置字幕位置: pos=$_subtitlePosition');
 
-    // 如果有已加载的 ASS 字幕，重新处理并加载
+    final np = _nativePlayer;
+    if (np != null) {
+      await np.setProperty('sub-pos', _subtitlePosition.toStringAsFixed(1));
+    }
+
     if (_lastSubtitlePath != null &&
         SubtitleProcessor.detectFormat(_lastSubtitlePath!) == 'ass') {
       await loadLibassSubtitle(_lastSubtitlePath!);
     }
 
-    // 更新配置文件（下次播放生效）
     await _configManager.updateConfigValue('sub-pos', _subtitlePosition.toStringAsFixed(1));
+  }
+
+  @override
+  Future<void> setSubtitleBackground(bool enabled) async {
+    _subtitleBackground = enabled;
+    _logger.i('MpvAdapter', '设置字幕黑色背景: $enabled');
+
+    final np = _nativePlayer;
+    if (np != null) {
+      if (enabled) {
+        await np.setProperty('sub-back-color', '0.0/0.0/0.0/0.75');
+      } else {
+        await np.setProperty('sub-back-color', '0.0/0.0/0.0/0.0');
+      }
+    }
+
+    await _configManager.updateConfigValue(
+      'sub-back-color',
+      enabled ? '0.0/0.0/0.0/0.75' : '0.0/0.0/0.0/0.0',
+    );
   }
 
   @override
   Future<void> setAspectRatio(String ratio) async {
     _aspectRatio = ratio;
     _logger.i('MpvAdapter', '设置画面比例: $ratio');
-    // 更新配置文件（下次播放生效）
     String value;
     switch (ratio) {
       case '16:9':
@@ -407,6 +512,10 @@ class MpvPlayerAdapter implements PlayerAdapter {
         value = '0';
       default:
         value = '-1';
+    }
+    final np = _nativePlayer;
+    if (np != null) {
+      await np.setProperty('video-aspect-override', value);
     }
     await _configManager.updateConfigValue('video-aspect-override', value);
   }
@@ -426,16 +535,19 @@ class MpvPlayerAdapter implements PlayerAdapter {
     } else {
       _glslShaders = null;
     }
-    // 更新配置文件（下次播放生效）
     if (_glslShaders != null) {
       final paths = _glslShaders!.join(':');
-      await _configManager.updateConfigValue('glsl-shaders', '"$paths"');
+      final np = _nativePlayer;
+      if (np != null) {
+        await np.setProperty('glsl-shaders', paths);
+      }
     } else {
-      await _configManager.updateConfigValue('glsl-shaders', '');
+      final np = _nativePlayer;
+      if (np != null) {
+        await np.setProperty('glsl-shaders', '');
+      }
     }
   }
-
-  // ========== 基础控制 ==========
 
   @override
   Widget buildVideo() {
@@ -443,17 +555,15 @@ class MpvPlayerAdapter implements PlayerAdapter {
       return Video(
         controller: _videoController!,
         fit: BoxFit.contain,
+        controls: null,
       );
     }
-    return const Center(
-      child: CircularProgressIndicator(),
-    );
+    return const Center(child: CircularProgressIndicator());
   }
 
   @override
   Future<void> play() async {
     if (_player == null) return;
-    _logger.d('MpvAdapter', '播放');
     await _player!.play();
     _isCompleted = false;
   }
@@ -461,7 +571,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
   @override
   Future<void> pause() async {
     if (_player == null) return;
-    _logger.d('MpvAdapter', '暂停');
     await _player!.pause();
   }
 
@@ -471,7 +580,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
     final clamped = Duration(
       milliseconds: max(0, min(position.inMilliseconds, _duration.inMilliseconds)),
     );
-    _logger.d('MpvAdapter', '跳转: ${clamped.inMilliseconds}ms');
     await _player!.seek(clamped);
     _isCompleted = false;
   }
@@ -480,7 +588,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
   Future<void> setSpeed(double speed) async {
     if (_player == null || !_isInitialized) return;
     final clamped = speed.clamp(0.25, 4.0);
-    _logger.d('MpvAdapter', '设置速度: ${clamped}x');
     await _player!.setRate(clamped);
     _speed = clamped;
   }
@@ -526,6 +633,8 @@ class MpvPlayerAdapter implements PlayerAdapter {
     _position = Duration.zero;
     _duration = Duration.zero;
     _tracks = [];
+    _subtitleTracks = [];
+    _audioTracks = [];
     _lastSubtitlePath = null;
     _logger.i('MpvAdapter', '资源已释放');
   }

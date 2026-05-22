@@ -5,17 +5,6 @@ import 'package:flutter/services.dart';
 import 'player_adapter.dart';
 import 'app_logger.dart';
 
-/// ExoPlayer 原生适配器（v2）
-///
-/// 通过 Platform Channel 与 Android 原生 ExoPlayer 通信，
-/// 视频渲染使用 Flutter Texture widget。
-///
-/// 字幕支持：
-/// - 内置字幕（从视频容器中提取）
-/// - 外挂字幕（SRT/ASS/WEBVTT/TTML，通过 SubtitleConfiguration 加载）
-/// - 轨道切换（音频/字幕轨道选择）
-///
-/// ffmpeg 扩展已启用，增强音频解码和字幕支持。
 class ExoPlayerAdapter implements PlayerAdapter {
   static const _channel = MethodChannel('com.linplayer/exoplayer');
   static final _logger = AppLogger();
@@ -35,7 +24,6 @@ class ExoPlayerAdapter implements PlayerAdapter {
   double _volume = 1.0;
   String? _errorMessage;
 
-  // 轨道信息
   List<Map<dynamic, dynamic>> _tracks = [];
 
   PlayerStateCallbacks? _callbacks;
@@ -84,8 +72,9 @@ class ExoPlayerAdapter implements PlayerAdapter {
   @override
   int? get textureId => _textureId;
 
-  /// 当前可用的轨道列表
-  List<Map<dynamic, dynamic>> get tracks => _tracks;
+  @override
+  List<Map<String, dynamic>> getTracksInfo() =>
+      _tracks.map((e) => e.map((k, v) => MapEntry(k.toString(), v))).toList();
 
   @override
   void setCallbacks(PlayerStateCallbacks callbacks) {
@@ -98,6 +87,7 @@ class ExoPlayerAdapter implements PlayerAdapter {
     Duration? startPosition,
     bool dolbyVisionFix = false,
     bool useLibass = false,
+    String? preferredSubtitleLanguage,
   }) async {
     _logger.i('ExoPlayer', '开始初始化 - videoUrl=$videoUrl');
     try {
@@ -112,6 +102,7 @@ class ExoPlayerAdapter implements PlayerAdapter {
         'videoUrl': videoUrl,
         'startPositionMs': startPosition?.inMilliseconds ?? 0,
         'dolbyVisionFix': dolbyVisionFix,
+        'preferredSubtitleLanguage': preferredSubtitleLanguage,
       });
 
       if (result == null) {
@@ -150,9 +141,6 @@ class ExoPlayerAdapter implements PlayerAdapter {
     }
   }
 
-
-
-  /// 获取当前轨道信息
   Future<List<Map<dynamic, dynamic>>> getTracks() async {
     if (_playerId == null || !_isInitialized) return [];
     try {
@@ -165,26 +153,93 @@ class ExoPlayerAdapter implements PlayerAdapter {
     }
   }
 
-  /// 选择特定轨道
-  ///
-  /// [groupIndex] 轨道组索引
-  /// [trackIndex] 轨道在组内的索引
-  /// [trackType] 轨道类型：1=视频, 2=音频, 3=文本（字幕）
-  Future<void> selectTrack(int groupIndex, int trackIndex, int trackType) async {
+  @override
+  Future<void> selectSubtitleTrack(String trackId) async {
     if (_playerId == null || !_isInitialized) return;
-    _logger.i('ExoPlayer', '选择轨道: group=$groupIndex, track=$trackIndex, type=$trackType');
-    await _channel.invokeMethod('selectTrack', {
-      'playerId': _playerId,
-      'groupIndex': groupIndex,
-      'trackIndex': trackIndex,
-      'trackType': trackType,
-    });
+    _logger.i('ExoPlayer', '选择字幕轨道: $trackId');
+    try {
+      final trackInfo = _tracks.where((t) =>
+          t['id']?.toString() == trackId || t['trackIndex']?.toString() == trackId).toList();
+
+      if (trackInfo.isNotEmpty) {
+        final track = trackInfo.first;
+        final groupIndex = track['groupIndex'] ?? 0;
+        final trackIndex = track['trackIndex'] ?? 0;
+        await _channel.invokeMethod('selectTrack', {
+          'playerId': _playerId,
+          'groupIndex': groupIndex,
+          'trackIndex': trackIndex,
+          'trackType': 3,
+        });
+      } else {
+        final tracks = await getTracks();
+        final textTracks = tracks.where((t) => t['type'] == 'text').toList();
+        final targetTrack = textTracks.where((t) =>
+            t['id']?.toString() == trackId || t['trackIndex']?.toString() == trackId).toList();
+
+        if (targetTrack.isNotEmpty) {
+          final track = targetTrack.first;
+          await _channel.invokeMethod('selectTrack', {
+            'playerId': _playerId,
+            'groupIndex': track['groupIndex'] ?? 0,
+            'trackIndex': track['trackIndex'] ?? 0,
+            'trackType': 3,
+          });
+        }
+      }
+    } catch (e, stackTrace) {
+      _logger.eWithStack('ExoPlayer', '选择字幕轨道失败', e, stackTrace);
+    }
   }
 
-  /// 检测是否支持特定字幕格式
+  @override
+  Future<void> deselectSubtitleTrack() async {
+    if (_playerId == null || !_isInitialized) return;
+    _logger.i('ExoPlayer', '关闭字幕');
+    try {
+      await _channel.invokeMethod('deselectSubtitleTrack', {
+        'playerId': _playerId,
+      });
+    } catch (e, stackTrace) {
+      _logger.eWithStack('ExoPlayer', '关闭字幕失败', e, stackTrace);
+    }
+  }
+
+  @override
+  Future<void> selectAudioTrack(String trackId) async {
+    if (_playerId == null || !_isInitialized) return;
+    _logger.i('ExoPlayer', '选择音频轨道: $trackId');
+    try {
+      final trackInfo = _tracks.where((t) =>
+          (t['type'] == 'audio') &&
+          (t['id']?.toString() == trackId || t['trackIndex']?.toString() == trackId)).toList();
+
+      if (trackInfo.isNotEmpty) {
+        final track = trackInfo.first;
+        await _channel.invokeMethod('selectTrack', {
+          'playerId': _playerId,
+          'groupIndex': track['groupIndex'] ?? 0,
+          'trackIndex': track['trackIndex'] ?? 0,
+          'trackType': 2,
+        });
+      }
+    } catch (e, stackTrace) {
+      _logger.eWithStack('ExoPlayer', '选择音频轨道失败', e, stackTrace);
+    }
+  }
+
+  @override
+  Future<void> loadSecondarySubtitle(String path) async {
+    _logger.w('ExoPlayer', '次字幕暂不支持，请使用 MPV 内核');
+  }
+
+  @override
+  Future<void> deselectSecondarySubtitle() async {
+    _logger.w('ExoPlayer', '次字幕暂不支持，请使用 MPV 内核');
+  }
+
   bool supportsSubtitleFormat(String path) {
     final lower = path.toLowerCase();
-    // ExoPlayer 原生支持的格式
     if (lower.endsWith('.srt') ||
         lower.endsWith('.ass') ||
         lower.endsWith('.ssa') ||
@@ -192,40 +247,22 @@ class ExoPlayerAdapter implements PlayerAdapter {
         lower.endsWith('.ttml')) {
       return true;
     }
-    // PGS/SUP 需要 ffmpeg 扩展，检测是否可用
-    // TODO: 可以通过 Platform Channel 检测 ffmpeg 扩展是否已加载
     return false;
   }
 
-  /// 加载外挂字幕
-  ///
-  /// [subtitleUrl] 字幕文件 URL（支持本地文件路径或 http/https URL）
-  /// [mimeType] 字幕 MIME 类型，如：
-  ///   - application/x-subrip (SRT)
-  ///   - text/x-ssa (ASS/SSA)
-  ///   - text/vtt (WEBVTT)
-  ///   - application/ttml+xml (TTML)
-  ///   - application/pgs (PGS)
-  /// [language] 字幕语言代码，如 "zh", "en"
   Future<void> loadSubtitle({
     required String subtitleUrl,
     String? mimeType,
     String? language,
   }) async {
     if (_playerId == null || !_isInitialized) return;
-    
-    // 检测 PGS/SUP 图形字幕
+
     final lowerUrl = subtitleUrl.toLowerCase();
     if (lowerUrl.endsWith('.pgs') || lowerUrl.endsWith('.sup')) {
-      _logger.w('ExoPlayer', 'PGS/SUP 图形字幕需要 FFmpeg 扩展支持');
-      _logger.w('ExoPlayer', '请切换到 MPV 内核，或使用 GitHub Actions 自动编译 FFmpeg 扩展');
-      throw Exception(
-        'PGS/SUP subtitles are not supported by ExoPlayer without FFmpeg extension.\n'
-        'Please switch to MPV kernel or build with ffmpeg support.\n'
-        'See docs/FFmpegExtensionSetup.md for details.'
-      );
+      _logger.w('ExoPlayer', 'PGS/SUP 图形字幕需要 FFmpeg 扩展支持，请切换到 MPV 内核');
+      throw Exception('PGS/SUP subtitles are not supported by ExoPlayer. Please switch to MPV kernel.');
     }
-    
+
     _logger.i('ExoPlayer', '加载外挂字幕: $subtitleUrl (mime=$mimeType, lang=$language)');
     try {
       await _channel.invokeMethod('loadSubtitle', {
@@ -241,13 +278,11 @@ class ExoPlayerAdapter implements PlayerAdapter {
 
   @override
   Future<void> loadLibassSubtitle(String path) async {
-    // ExoPlayer v2 不再使用 libass，字幕通过 ExoPlayer 原生管线处理
-    _logger.w('ExoPlayer', 'loadLibassSubtitle 已废弃，请使用 loadSubtitle');
+    await loadSubtitle(subtitleUrl: path);
   }
 
   @override
   Future<void> loadLibassSubtitleMemory(Uint8List data, {String codec = 'ass'}) async {
-    // ExoPlayer v2 不再使用 libass
     _logger.w('ExoPlayer', 'loadLibassSubtitleMemory 已废弃');
   }
 
@@ -257,27 +292,22 @@ class ExoPlayerAdapter implements PlayerAdapter {
     switch (type) {
       case 'playing':
         _isPlaying = event['value'] as bool? ?? false;
-        _logger.d('ExoPlayer', '播放状态变更: playing=$_isPlaying');
         _callbacks?.onPlayingStateChanged?.call();
         break;
       case 'buffering':
         _isBuffering = event['value'] as bool? ?? false;
-        _logger.d('ExoPlayer', '缓冲状态变更: buffering=$_isBuffering');
         _callbacks?.onBufferingStateChanged?.call();
         break;
       case 'completed':
         _isCompleted = true;
-        _logger.i('ExoPlayer', '播放完成');
         _callbacks?.onCompleted?.call();
         break;
       case 'error':
         _errorMessage = event['value'] as String?;
-        _logger.e('ExoPlayer', '播放器错误: $_errorMessage');
         _callbacks?.onError?.call();
         break;
       case 'duration':
         _duration = Duration(milliseconds: (event['value'] as num).toInt());
-        _logger.d('ExoPlayer', '时长更新: ${_duration.inSeconds}s');
         _callbacks?.onDurationChanged?.call();
         break;
       case 'tracksChanged':
@@ -288,7 +318,6 @@ class ExoPlayerAdapter implements PlayerAdapter {
         }
         break;
       case 'subtitle':
-        // 字幕文本事件（如果需要 Dart 层处理字幕）
         break;
     }
   }
@@ -312,7 +341,6 @@ class ExoPlayerAdapter implements PlayerAdapter {
         _duration = Duration(milliseconds: dur);
       }
     } catch (e) {
-      // 轮询失败不记录，避免日志过多
     }
   }
 
@@ -337,7 +365,6 @@ class ExoPlayerAdapter implements PlayerAdapter {
     final clamped = Duration(
       milliseconds: max(0, min(position.inMilliseconds, _duration.inMilliseconds)),
     );
-    _logger.d('ExoPlayer', '跳转: ${clamped.inMilliseconds}ms');
     await _channel.invokeMethod('seekTo', {
       'playerId': _playerId,
       'positionMs': clamped.inMilliseconds,
@@ -349,7 +376,6 @@ class ExoPlayerAdapter implements PlayerAdapter {
   Future<void> setSpeed(double speed) async {
     if (_playerId == null || !_isInitialized) return;
     final clamped = speed.clamp(0.25, 4.0);
-    _logger.d('ExoPlayer', '设置速度: ${clamped}x');
     await _channel.invokeMethod('setSpeed', {
       'playerId': _playerId,
       'speed': clamped,
@@ -430,6 +456,16 @@ class ExoPlayerAdapter implements PlayerAdapter {
   }
 
   @override
+  Future<void> setSubtitleBackground(bool enabled) async {
+    if (_playerId == null) return;
+    _logger.d('ExoPlayer', '设置字幕黑色背景: $enabled');
+    await _channel.invokeMethod('setSubtitleBackground', {
+      'playerId': _playerId,
+      'enabled': enabled,
+    });
+  }
+
+  @override
   Future<void> setAspectRatio(String ratio) async {
     if (_playerId == null) return;
     _logger.d('ExoPlayer', '设置画面比例: $ratio');
@@ -451,7 +487,6 @@ class ExoPlayerAdapter implements PlayerAdapter {
 
   @override
   Future<void> applySuperResolution(bool enable) async {
-    // ExoPlayer 不支持超分辨率
   }
 
   @override

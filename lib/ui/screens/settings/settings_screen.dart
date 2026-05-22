@@ -377,6 +377,7 @@ class PlayerSettingsScreen extends ConsumerWidget {
     final preferredVersion = ref.watch(preferredVersionProvider);
     final rememberBrightness = ref.watch(rememberBrightnessProvider);
     final subtitleFont = ref.watch(subtitleFontProvider);
+    final subtitleBackground = ref.watch(subtitleBackgroundProvider);
     final mpvDolbyVisionFix = ref.watch(mpvDolbyVisionFixProvider);
     final impellerEnabled = ref.watch(impellerEnabledProvider);
     final exoLibass = ref.watch(exoLibassProvider);
@@ -475,6 +476,12 @@ class PlayerSettingsScreen extends ConsumerWidget {
             title: const Text('字幕字体'),
             subtitle: Text(subtitleFont),
             onTap: () => _showSubtitleFontSelector(context, ref),
+          ),
+          SwitchListTile(
+            title: const Text('字幕黑色背景'),
+            subtitle: const Text('为字幕添加半透明黑色背景'),
+            value: subtitleBackground,
+            onChanged: (value) => ref.read(subtitleBackgroundProvider.notifier).state = value,
           ),
 
           const Divider(),
