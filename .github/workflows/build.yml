@@ -387,29 +387,10 @@ jobs:
           # Install Android SDK Platform 36 for compileSdk 36
           $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "platforms;android-36" 2>/dev/null || true
           
-          # Flutter CLI may report failure due to Gradle "Already watching path" exception,
-          # even when APKs are built successfully. Use file existence as the real check.
           flutter build apk --release --split-per-abi \
+            --target-platform android-arm,android-arm64 \
             --dart-define=DANDANPLAY_APP_ID=${{ secrets.DANDANPLAY_APP_ID }} \
-            --dart-define=DANDANPLAY_APP_SECRET=${{ secrets.DANDANPLAY_APP_SECRET }} \
-          || true
-          
-          echo "Checking for built APKs..."
-          APK_DIR="build/app/outputs/flutter-apk"
-          ls -la "$APK_DIR/" 2>/dev/null || true
-          
-          # Verify both ABI APKs exist - this is the real build success criteria
-          for abi in arm64-v8a armeabi-v7a; do
-            APK="$APK_DIR/app-${abi}-release.apk"
-            if [ ! -f "$APK" ]; then
-              echo "ERROR: APK not found: $APK"
-              echo "Searching all build directories..."
-              find build -name "*.apk" 2>/dev/null || true
-              exit 1
-            fi
-            SIZE=$(stat -c%s "$APK")
-            echo "✅ Found: $APK ($(( SIZE / 1024 / 1024 ))MB)"
-          done
+            --dart-define=DANDANPLAY_APP_SECRET=${{ secrets.DANDANPLAY_APP_SECRET }}
       
       - name: Upload arm64-v8a APK
         uses: actions/upload-artifact@v4
