@@ -373,7 +373,7 @@ class ExoPlayerPlugin(
                         paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                         paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_IMAGE, false)
                         val mime = group.getTrackFormat(trackIndex).sampleMimeType ?: ""
-                        val subType = if (mime.contains("pgs", ignoreCase = true) || mime.contains("vobsub", ignoreCase = true) || mime.contains("dvb", ignoreCase = true)) "bitmap" else if (mime.contains("ssa", ignoreCase = true) || mime.contains("ass", ignoreCase = true)) "ass" else "text"
+                        val subType = if (mime.contains("pgs", ignoreCase = true) || mime.contains("hdmv", ignoreCase = true) || mime.contains("vobsub", ignoreCase = true) || mime.contains("dvb", ignoreCase = true)) "bitmap" else if (mime.contains("ssa", ignoreCase = true) || mime.contains("ass", ignoreCase = true)) "ass" else "text"
                         emitEvent("subtitleType", subType)
                     }
                     trackSelector.parameters = paramsBuilder.build()
@@ -482,7 +482,7 @@ class ExoPlayerPlugin(
                     paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_IMAGE, false)
                     trackSelector.parameters = paramsBuilder.build()
                     val selectedMime = group.getTrackFormat(bestTrackIdx).sampleMimeType ?: "unknown"
-                    emitEvent("subtitleType", if (selectedMime.contains("pgs", ignoreCase = true) || selectedMime.contains("vobsub", ignoreCase = true) || selectedMime.contains("dvb", ignoreCase = true)) "bitmap" else if (selectedMime.contains("ssa", ignoreCase = true) || selectedMime.contains("ass", ignoreCase = true)) "ass" else "text")
+                    emitEvent("subtitleType", if (selectedMime.contains("pgs", ignoreCase = true) || selectedMime.contains("hdmv", ignoreCase = true) || selectedMime.contains("vobsub", ignoreCase = true) || selectedMime.contains("dvb", ignoreCase = true)) "bitmap" else if (selectedMime.contains("ssa", ignoreCase = true) || selectedMime.contains("ass", ignoreCase = true)) "ass" else "text")
                 }
             } catch (e: Exception) {
                 emitEvent("subtitleError", "forceSelect failed: ${e.message}")
@@ -664,6 +664,7 @@ class ExoPlayerPlugin(
                     else -> {
                         val firstMime = if (group.length > 0) group.getTrackFormat(0).sampleMimeType else null
                         if (firstMime != null && (firstMime.contains("pgs", ignoreCase = true) ||
+                                    firstMime.contains("hdmv", ignoreCase = true) ||
                                     firstMime.contains("vobsub", ignoreCase = true) ||
                                     firstMime.contains("dvd", ignoreCase = true) ||
                                     firstMime.contains("dvb", ignoreCase = true))) {
@@ -680,6 +681,7 @@ class ExoPlayerPlugin(
                     val format = group.getTrackFormat(i)
                     val mimeType = format.sampleMimeType ?: ""
                     val isBitmap = mimeType.contains("pgs", ignoreCase = true) ||
+                            mimeType.contains("hdmv", ignoreCase = true) ||
                             mimeType.contains("vobsub", ignoreCase = true) ||
                             mimeType.contains("dvd", ignoreCase = true) ||
                             mimeType.contains("dvb", ignoreCase = true)

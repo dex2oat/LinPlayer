@@ -615,7 +615,7 @@ class ExoPlayerAdapter implements PlayerAdapter {
                       return Positioned(
                         left: 0,
                         right: 0,
-                        bottom: 20.0 + (_subtitlePosition * 120.0),
+                        bottom: _isBitmapSubtitle ? 20.0 : 20.0 + (_subtitlePosition * 180.0),
                         child: Center(
                           child: ConstrainedBox(
                             constraints: BoxConstraints(

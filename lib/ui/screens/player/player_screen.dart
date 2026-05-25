@@ -203,13 +203,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     final codec = target.codec?.toLowerCase() ?? 'ass';
     final isExternal = target.isExternal ?? false;
     final targetIndex = target.index;
-    final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub';
-    logger.i('Player', '选择字幕: index=$targetIndex, codec=$codec, language=${target.language}, external=$isExternal, graphical=$isGraphical');
+    final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub' || codec.contains('hdmv') || codec.contains('pgs');
+    final isAss = codec == 'ass' || codec == 'ssa';
+    logger.i('Player', '选择字幕: index=$targetIndex, codec=$codec, language=${target.language}, external=$isExternal, graphical=$isGraphical, isAss=$isAss');
 
     ref.read(subtitleTrackProvider.notifier).state = targetIndex;
 
     if (!isExternal) {
-      final isAss = codec == 'ass' || codec == 'ssa';
       final useLibass = _playerService.coreType == PlayerCoreType.exoPlayer &&
           ref.read(exoLibassProvider) &&
           isAss && !isGraphical;
@@ -219,6 +219,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
         if (adapter is ExoPlayerAdapter && adapter.libassReady) {
           logger.i('Player', '内封ASS字幕，通过libass渲染（保留特效）');
           try {
+            await _playerService.deselectSubtitleTrack();
             final api = ref.read(apiClientProvider);
             final server = ref.read(currentServerProvider);
             final embyCodec = _embySubtitleCodec(codec);
@@ -251,6 +252,42 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
           logger.i('Player', '内封字幕，通过播放器轨道选择（libass不可用）');
           await _selectInternalSubtitleEXO(target, preferredLang, logger);
         }
+      } else if (isAss && _playerService.coreType == PlayerCoreType.exoPlayer) {
+        logger.i('Player', '内封ASS字幕（未启用libass），下载后通过libass渲染保留特效');
+        try {
+          final adapter = _playerService.adapter;
+          if (adapter is ExoPlayerAdapter && adapter.libassReady) {
+            await _playerService.deselectSubtitleTrack();
+            final api = ref.read(apiClientProvider);
+            final server = ref.read(currentServerProvider);
+            final embyCodec = _embySubtitleCodec(codec);
+            final subUrl = api.playback.getSubtitleStreamUrl(
+              item.id, mediaSource.id, targetIndex, embyCodec,
+            );
+            final tempDir = await getTemporaryDirectory();
+            final subFile = File('${tempDir.path}/subtitle_${item.id}_${targetIndex}.ass');
+            if (!subFile.existsSync() || await subFile.length() == 0) {
+              final dio = Dio(BaseOptions(
+                connectTimeout: const Duration(seconds: 15),
+                receiveTimeout: const Duration(seconds: 60),
+              ));
+              if (server?.authToken != null) {
+                dio.options.headers['X-Emby-Token'] = server!.authToken;
+                dio.options.headers['X-MediaBrowser-Token'] = server.authToken;
+              }
+              await dio.download(subUrl, subFile.path);
+              logger.i('Player', 'ASS字幕下载完成 - ${subFile.lengthSync()} bytes');
+            }
+            if (subFile.existsSync() && await subFile.length() > 0) {
+              await _playerService.loadLibassSubtitle(subFile.path);
+              logger.i('Player', '内封ASS字幕通过libass加载成功（特效保留）');
+              return;
+            }
+          }
+        } catch (e, stackTrace) {
+          logger.eWithStack('Player', 'ASS字幕下载失败，回退原生轨道选择', e, stackTrace);
+        }
+        await _selectInternalSubtitleEXO(target, preferredLang, logger);
       } else {
         logger.i('Player', '内封字幕，通过播放器轨道选择');
         try {
@@ -349,17 +386,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
   }
 
   String _embySubtitleCodec(String codec) {
+    final lower = codec.toLowerCase();
+    final isPgs = lower == 'pgssub' || lower == 'pgs' || lower == 'sup' || lower.contains('hdmv');
     if (_playerService.coreType == PlayerCoreType.mpv) {
-      switch (codec) {
+      switch (lower) {
         case 'srt' || 'subrip':
           return 'srt';
         case 'vtt' || 'webvtt':
           return 'vtt';
         default:
+          if (isPgs) return 'pgs';
           return 'ass';
       }
     } else {
-      switch (codec) {
+      switch (lower) {
         case 'srt' || 'subrip':
           return 'srt';
         case 'vtt' || 'webvtt':
@@ -369,6 +409,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
         case 'pgssub' || 'pgs' || 'sup':
           return 'pgs';
         default:
+          if (isPgs) return 'pgs';
           return 'srt';
       }
     }
@@ -379,7 +420,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     if (lower == 'srt' || lower == 'subrip') return 'srt';
     if (lower == 'vtt' || lower == 'webvtt') return 'vtt';
     if (lower == 'ass' || lower == 'ssa') return 'ass';
-    if (lower == 'pgssub' || lower == 'pgs' || lower == 'sup' || lower == 'dvdsub' || lower == 'vobsub') return 'sup';
+    if (lower == 'pgssub' || lower == 'pgs' || lower == 'sup' || lower == 'dvdsub' || lower == 'vobsub' || lower.contains('hdmv') || lower.contains('pgs')) return 'sup';
     if (coreType == PlayerCoreType.mpv) return 'ass';
     return 'srt';
   }
@@ -409,7 +450,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
 
     String? trackId;
     final codec = target.codec?.toLowerCase() ?? '';
-    final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub';
+    final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub' || codec.contains('hdmv') || codec.contains('pgs');
 
     if (isGraphical) {
       final bitmapMatches = subtitleTracks.where((t) =>
@@ -458,7 +499,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     }
 
     final codec = target.codec?.toLowerCase() ?? '';
-    final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub';
+    final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub' || codec.contains('hdmv') || codec.contains('pgs');
 
     String? trackId;
 
@@ -503,7 +544,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     int targetStreamIndex,
   ) {
     final codec = targetCodec?.toLowerCase() ?? '';
-    final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub';
+    final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub' || codec.contains('hdmv') || codec.contains('pgs');
     final isAss = codec == 'ass' || codec == 'ssa';
 
     final candidates = isGraphical
@@ -558,7 +599,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     int targetStreamIndex,
   ) {
     final codec = targetCodec?.toLowerCase() ?? '';
-    final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub';
+    final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub' || codec.contains('hdmv') || codec.contains('pgs');
 
     final candidates = isGraphical
         ? subtitleTracks.where((t) => t['type'] == 'bitmap' || t['isBitmap'] == true).toList()
@@ -703,7 +744,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
 
       final isExternal = target.isExternal ?? false;
       final codec = target.codec?.toLowerCase() ?? 'ass';
-      final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub';
+      final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub' || codec.contains('hdmv') || codec.contains('pgs');
 
       if (!isExternal) {
         final isAss = codec == 'ass' || codec == 'ssa';
@@ -755,7 +796,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
         }
       } else {
         final embyCodec = _embySubtitleCodec(codec);
-        final isGraphicalExternal = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub';
+        final isGraphicalExternal = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub' || codec.contains('hdmv') || codec.contains('pgs');
 
         if (_playerService.coreType == PlayerCoreType.mpv || isGraphicalExternal) {
           final subUrl = api.playback.getSubtitleStreamUrl(
@@ -764,6 +805,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
             target.index,
             embyCodec,
           );
+
+          await _playerService.deselectSubtitleTrack();
 
           if (isGraphicalExternal) {
             await _playerService.loadLibassSubtitle(subUrl);
@@ -859,7 +902,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
 
       final isExternal = target.isExternal ?? false;
       final codec = target.codec?.toLowerCase() ?? 'ass';
-      final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs';
+      final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec.contains('hdmv') || codec.contains('pgs');
 
       if (isGraphical) {
         logger.w('Player', '次字幕: 图形字幕暂不支持作为次字幕');
@@ -2679,7 +2722,7 @@ class _SubtitleSettingsContentState extends ConsumerState<_SubtitleSettingsConte
               if (tTitle.isNotEmpty) {
                 final codec = stream.codec?.toLowerCase() ?? '';
                 final isAss = codec == 'ass' || codec == 'ssa';
-                final isBitmap = codec == 'pgssub' || codec == 'sup' || codec == 'pgs';
+                final isBitmap = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec.contains('hdmv') || codec.contains('pgs');
                 final tIsAss = (t['isAss'] == true) || (t['codec']?.toString().toLowerCase().contains('ass') == true);
                 final tIsBitmap = t['isBitmap'] == true || t['type'] == 'bitmap';
                 if (isAss && tIsAss && !tIsBitmap) { playerTitle = tTitle; break; }

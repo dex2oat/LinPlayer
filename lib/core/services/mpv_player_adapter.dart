@@ -503,9 +503,15 @@ class MpvPlayerAdapter implements PlayerAdapter {
         await np.setProperty('sub-ass', 'no');
         await np.setProperty('sub-ass-override', 'no');
         await np.setProperty('sub-back-color', '#00000000');
+        await np.setProperty('sub-scale', _subtitleScale.toStringAsFixed(2));
+        await np.setProperty('sub-pos', _subtitlePosition.toStringAsFixed(1));
       } else if (_currentSubIsAss) {
         await np.setProperty('sub-ass', 'yes');
-        await np.setProperty('sub-ass-override', 'no');
+        if (_subtitleBackground || _subtitleScale != 1.0 || _subtitlePosition != 100.0) {
+          await np.setProperty('sub-ass-override', 'force');
+        } else {
+          await np.setProperty('sub-ass-override', 'no');
+        }
         if (_subtitleBackground) {
           await np.setProperty('sub-back-color', '#000000C0');
         } else {
@@ -664,6 +670,9 @@ class MpvPlayerAdapter implements PlayerAdapter {
       await np.setProperty('sub-scale', _subtitleScale.toStringAsFixed(2));
     }
     await _configManager.updateConfigValue('sub-scale', _subtitleScale.toStringAsFixed(2));
+    if (_currentSubIsAss && !_hasBitmapSubtitle) {
+      await _applySubtitleRuntimeProperties();
+    }
   }
 
   @override
@@ -675,6 +684,9 @@ class MpvPlayerAdapter implements PlayerAdapter {
       await np.setProperty('sub-pos', _subtitlePosition.toStringAsFixed(1));
     }
     await _configManager.updateConfigValue('sub-pos', _subtitlePosition.toStringAsFixed(1));
+    if (_currentSubIsAss && !_hasBitmapSubtitle) {
+      await _applySubtitleRuntimeProperties();
+    }
   }
 
   @override
