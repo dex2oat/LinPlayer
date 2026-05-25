@@ -33,6 +33,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.view.TextureRegistry
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -71,8 +72,22 @@ class ExoPlayerPlugin(
                 lower.endsWith(".vtt") -> MimeTypes.TEXT_VTT
                 lower.endsWith(".ttml") || lower.endsWith(".dfxp") || lower.endsWith(".xml") -> MimeTypes.APPLICATION_TTML
                 lower.endsWith(".pgs") || lower.endsWith(".sup") -> MimeTypes.APPLICATION_PGS
+                lower.endsWith(".vob") -> MimeTypes.APPLICATION_VOBSUB
                 else -> MimeTypes.APPLICATION_SUBRIP
             }
+        }
+
+        fun resolveSubtitleUri(url: String): Uri {
+            if (url.startsWith("file://") || url.startsWith("http://") ||
+                url.startsWith("https://") || url.startsWith("content://") ||
+                url.startsWith("asset://")) {
+                return Uri.parse(url)
+            }
+            val file = File(url)
+            if (file.exists()) {
+                return Uri.fromFile(file)
+            }
+            return Uri.parse(url)
         }
     }
 
@@ -219,6 +234,7 @@ class ExoPlayerPlugin(
                 val trackSelector = DefaultTrackSelector(context)
                 val paramsBuilder = trackSelector.buildUponParameters()
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_IMAGE, false)
                     .setSelectUndeterminedTextLanguage(true)
 
                 if (!preferredSubtitleLanguage.isNullOrEmpty()) {
@@ -348,12 +364,14 @@ class ExoPlayerPlugin(
             val tracks = exoPlayer.currentTracks
             if (groupIndex < tracks.groups.size) {
                 val group = tracks.groups[groupIndex]
-                if (group.type == trackType && trackIndex < group.length) {
+                if (trackIndex < group.length) {
+                    val actualTrackType = group.type
                     val trackSelection = TrackSelectionOverride(group.mediaTrackGroup, listOf(trackIndex))
                     val paramsBuilder = trackSelector.buildUponParameters()
                     paramsBuilder.setOverrideForType(trackSelection)
-                    if (trackType == C.TRACK_TYPE_TEXT) {
+                    if (actualTrackType == C.TRACK_TYPE_TEXT || actualTrackType == C.TRACK_TYPE_IMAGE) {
                         paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                        paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_IMAGE, false)
                     }
                     trackSelector.parameters = paramsBuilder.build()
                 }
@@ -363,8 +381,11 @@ class ExoPlayerPlugin(
         fun deselectSubtitleTrack() {
             val paramsBuilder = trackSelector.buildUponParameters()
             paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_IMAGE, true)
             trackSelector.parameters = paramsBuilder.build()
         }
+
+        private var lastLoadedSubtitleMimeType: String? = null
 
         fun loadSubtitle(subtitleUrl: String, subtitleMimeType: String?, subtitleLanguage: String?) {
             val mimeType = subtitleMimeType ?: Companion.detectMimeType(subtitleUrl)
@@ -376,13 +397,16 @@ class ExoPlayerPlugin(
                 emitEvent("subtitleType", "text")
             }
 
-            val subtitleConfig = MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitleUrl))
+            val subtitleUri = resolveSubtitleUri(subtitleUrl)
+            val subtitleConfig = MediaItem.SubtitleConfiguration.Builder(subtitleUri)
                 .setMimeType(mimeType)
-                .setLanguage(subtitleLanguage)
+                .setLanguage(subtitleLanguage ?: "und")
                 .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                .setId("ext_${externalSubtitles.size}")
                 .build()
 
             externalSubtitles.add(subtitleConfig)
+            lastLoadedSubtitleMimeType = mimeType
 
             val currentMediaItem = exoPlayer.currentMediaItem
             if (currentMediaItem != null) {
@@ -398,12 +422,62 @@ class ExoPlayerPlugin(
 
                 val paramsBuilder = trackSelector.buildUponParameters()
                 paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_IMAGE, false)
                 paramsBuilder.setSelectUndeterminedTextLanguage(true)
+                paramsBuilder.setPreferredTextLanguage(subtitleLanguage ?: "und")
                 trackSelector.parameters = paramsBuilder.build()
 
                 exoPlayer.playWhenReady = playWhenReady
                 exoPlayer.setMediaItem(newMediaItem, currentPosition)
                 exoPlayer.prepare()
+            }
+        }
+
+        private fun forceSelectLatestSubtitleTrack() {
+            try {
+                val tracks = exoPlayer.currentTracks
+                val groups = tracks.groups
+                val targetMime = lastLoadedSubtitleMimeType?.lowercase()
+
+                var bestGroupIdx = -1
+                var bestTrackIdx = -1
+
+                for (groupIndex in groups.indices) {
+                    val group = groups[groupIndex]
+                    if (group.type != C.TRACK_TYPE_TEXT && group.type != C.TRACK_TYPE_IMAGE) continue
+                    for (trackIndex in 0 until group.length) {
+                        val format = group.getTrackFormat(trackIndex)
+                        val mime = format.sampleMimeType?.lowercase() ?: ""
+                        if (targetMime != null && mime.contains(targetMime.substringAfterLast("/"))) {
+                            bestGroupIdx = groupIndex
+                            bestTrackIdx = trackIndex
+                        }
+                    }
+                }
+
+                if (bestGroupIdx < 0) {
+                    val lastTextGroupIdx = groups.indices.lastOrNull { gi ->
+                        val g = groups[gi]
+                        g.type == C.TRACK_TYPE_TEXT || g.type == C.TRACK_TYPE_IMAGE
+                    }
+                    if (lastTextGroupIdx != null) {
+                        val group = groups[lastTextGroupIdx]
+                        bestGroupIdx = lastTextGroupIdx
+                        bestTrackIdx = group.length - 1
+                    }
+                }
+
+                if (bestGroupIdx >= 0 && bestTrackIdx >= 0) {
+                    val group = groups[bestGroupIdx]
+                    val override = TrackSelectionOverride(group.mediaTrackGroup, listOf(bestTrackIdx))
+                    val paramsBuilder = trackSelector.buildUponParameters()
+                    paramsBuilder.setOverrideForType(override)
+                    paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_IMAGE, false)
+                    trackSelector.parameters = paramsBuilder.build()
+                }
+            } catch (e: Exception) {
+                emitEvent("subtitleError", "forceSelect failed: ${e.message}")
             }
         }
 
@@ -512,57 +586,69 @@ class ExoPlayerPlugin(
                 }
                 val txt = cue.text
                 if (txt != null && txt.isNotEmpty()) {
-                    textParts.add(txt.toString())
+                    val textStr = txt.toString()
+                    if (textStr.isNotBlank()) {
+                        textParts.add(textStr)
+                    }
                 }
             }
 
-            if (hasBitmap) {
+            if (hasBitmap && bitmapParts.isNotEmpty()) {
                 isBitmapSubtitle = true
-                if (bitmapParts.isNotEmpty()) {
-                    emitEvent("subtitleBitmap", mapOf(
-                        "images" to bitmapParts,
-                        "text" to textParts.joinToString("\n")
-                    ))
-                } else if (textParts.isNotEmpty()) {
-                    emitEvent("subtitle", textParts.joinToString("\n"))
-                } else {
-                    emitEvent("subtitle", "")
-                }
+                emitEvent("subtitleBitmap", mapOf(
+                    "images" to bitmapParts,
+                    "text" to textParts.joinToString("\n")
+                ))
+            } else if (hasBitmap && bitmapParts.isEmpty() && textParts.isNotEmpty()) {
+                isBitmapSubtitle = false
+                emitEvent("subtitle", textParts.joinToString("\n"))
+            } else if (!hasBitmap && textParts.isNotEmpty()) {
+                isBitmapSubtitle = false
+                emitEvent("subtitle", textParts.joinToString("\n"))
             } else {
                 isBitmapSubtitle = false
-                if (textParts.isNotEmpty()) {
-                    emitEvent("subtitle", textParts.joinToString("\n"))
-                } else {
-                    emitEvent("subtitle", "")
-                }
+                emitEvent("subtitle", "")
             }
         }
 
         private fun makeBlackPixelsTransparent(src: Bitmap): Bitmap {
+            val w = src.width
+            val h = src.height
+            val result: Bitmap
+
             if (!src.hasAlpha()) {
-                val result = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+                result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
                 val canvas = Canvas(result)
                 val paint = Paint()
                 canvas.drawBitmap(src, 0f, 0f, paint)
-                return result
-            }
-
-            val w = src.width
-            val h = src.height
-            val pixels = IntArray(w * h)
-            src.getPixels(pixels, 0, w, 0, 0, w, h)
-
-            for (i in pixels.indices) {
-                val pixel = pixels[i]
-                val r = (pixel shr 16) and 0xFF
-                val g = (pixel shr 8) and 0xFF
-                val b = pixel and 0xFF
-                if (r < 10 && g < 10 && b < 10) {
-                    pixels[i] = 0
+            } else {
+                if (src.config == Bitmap.Config.ARGB_8888) {
+                    result = src
+                } else {
+                    result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                    val canvas = Canvas(result)
+                    val paint = Paint()
+                    canvas.drawBitmap(src, 0f, 0f, paint)
                 }
             }
 
-            val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val pixels = IntArray(w * h)
+            result.getPixels(pixels, 0, w, 0, 0, w, h)
+
+            for (i in pixels.indices) {
+                val pixel = pixels[i]
+                val a = (pixel ushr 24) and 0xFF
+                val r = (pixel shr 16) and 0xFF
+                val g = (pixel shr 8) and 0xFF
+                val b = pixel and 0xFF
+                if (a == 0) continue
+                val brightness = (r * 77 + g * 150 + b * 29) shr 8
+                if (brightness < 25) {
+                    val alpha = (brightness * 255 / 25).coerceIn(0, 255)
+                    pixels[i] = (alpha shl 24) or (r shl 16) or (g shl 8) or b
+                }
+            }
+
             result.setPixels(pixels, 0, w, 0, 0, w, h)
             return result
         }
@@ -597,18 +683,39 @@ class ExoPlayerPlugin(
                     C.TRACK_TYPE_AUDIO -> "audio"
                     C.TRACK_TYPE_TEXT -> "text"
                     C.TRACK_TYPE_VIDEO -> "video"
-                    else -> "unknown"
+                    C.TRACK_TYPE_IMAGE -> "bitmap"
+                    else -> {
+                        val firstMime = if (group.length > 0) group.getTrackFormat(0).sampleMimeType else null
+                        if (firstMime != null && (firstMime.contains("pgs", ignoreCase = true) ||
+                                    firstMime.contains("vobsub", ignoreCase = true) ||
+                                    firstMime.contains("dvd", ignoreCase = true) ||
+                                    firstMime.contains("dvb", ignoreCase = true))) {
+                            "bitmap"
+                        } else if (group.length > 0) {
+                            val lang = group.getTrackFormat(0).language
+                            if (!lang.isNullOrEmpty()) "text" else "unknown"
+                        } else {
+                            "unknown"
+                        }
+                    }
                 }
                 for (i in 0 until group.length) {
                     val format = group.getTrackFormat(i)
+                    val mimeType = format.sampleMimeType ?: ""
+                    val isBitmap = mimeType.contains("pgs", ignoreCase = true) ||
+                            mimeType.contains("vobsub", ignoreCase = true) ||
+                            mimeType.contains("dvd", ignoreCase = true) ||
+                            mimeType.contains("dvb", ignoreCase = true)
+                    val resolvedType = if (isBitmap && type == "text") "bitmap" else type
                     trackList.add(mapOf(
                         "id" to "${groupIndex}_$i",
                         "groupIndex" to groupIndex,
                         "trackIndex" to i,
-                        "type" to type,
+                        "type" to resolvedType,
+                        "trackType" to group.type,
                         "language" to (format.language ?: ""),
                         "label" to (format.label ?: ""),
-                        "mimeType" to (format.sampleMimeType ?: ""),
+                        "mimeType" to mimeType,
                         "codec" to (format.codecs ?: ""),
                         "isSelected" to group.isTrackSelected(i)
                     ))
@@ -616,6 +723,13 @@ class ExoPlayerPlugin(
             }
             currentTracks = trackList
             emitEvent("tracksChanged", trackList)
+
+            if (lastLoadedSubtitleMimeType != null) {
+                instanceHandler.postDelayed({
+                    forceSelectLatestSubtitleTrack()
+                    lastLoadedSubtitleMimeType = null
+                }, 500)
+            }
         }
 
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {

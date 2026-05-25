@@ -147,9 +147,10 @@ class MpvConfigManager {
     buffer.writeln('cache-secs=30');
     buffer.writeln('demuxer-max-bytes=50M');
     buffer.writeln('demuxer-max-back-bytes=25M');
-    buffer.writeln('sub-ass-override=no');
     buffer.writeln('sub-auto=fuzzy');
     buffer.writeln('sub-visibility=yes');
+    buffer.writeln('sub-ass=yes');
+    buffer.writeln('sub-ass-override=no');
     buffer.writeln('slang=chi,zh,eng,en');
 
     final configPath = configFilePath;

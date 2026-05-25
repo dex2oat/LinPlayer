@@ -150,7 +150,8 @@ class ExoPlayerAdapter implements PlayerAdapter {
       }
       if (target == null) {
         for (final t in allTracks) {
-          if (t['type'] == 'text' && t['trackIndex']?.toString() == trackId) {
+          final type = t['type']?.toString();
+          if ((type == 'text' || type == 'bitmap') && t['trackIndex']?.toString() == trackId) {
             target = t; break;
           }
         }
@@ -159,15 +160,16 @@ class ExoPlayerAdapter implements PlayerAdapter {
       if (target != null) {
         final groupIndex = target['groupIndex'] ?? 0;
         final trackIndex = target['trackIndex'] ?? 0;
-        _logger.i('ExoPlayer', '调用selectTrack: group=$groupIndex, track=$trackIndex');
+        final nativeTrackType = target['trackType'] ?? 3;
+        _logger.i('ExoPlayer', '调用selectTrack: group=$groupIndex, track=$trackIndex, nativeType=$nativeTrackType');
         await _channel.invokeMethod('selectTrack', {
           'playerId': _playerId,
           'groupIndex': groupIndex,
           'trackIndex': trackIndex,
-          'trackType': 3,
+          'trackType': nativeTrackType,
         });
       } else {
-        _logger.w('ExoPlayer', '未找到字幕轨道: $trackId, 可用: ${allTracks.where((t) => t['type'] == 'text').map((t) => t['id']).toList()}');
+        _logger.w('ExoPlayer', '未找到字幕轨道: $trackId, 可用: ${allTracks.where((t) => t['type'] == 'text' || t['type'] == 'bitmap').map((t) => t['id']).toList()}');
       }
     } catch (e, stackTrace) {
       _logger.eWithStack('ExoPlayer', '选择字幕轨道失败', e, stackTrace);
@@ -233,6 +235,7 @@ class ExoPlayerAdapter implements PlayerAdapter {
         'playerId': _playerId,
         'subtitleUrl': path,
         'subtitleMimeType': mimeType,
+        'subtitleLanguage': 'und',
       });
     } catch (e, stackTrace) {
       _logger.eWithStack('ExoPlayer', '加载字幕失败', e, stackTrace);
@@ -248,6 +251,8 @@ class ExoPlayerAdapter implements PlayerAdapter {
     var clean = path;
     final qIndex = clean.indexOf('?');
     if (qIndex >= 0) clean = clean.substring(0, qIndex);
+    final hIndex = clean.indexOf('#');
+    if (hIndex >= 0) clean = clean.substring(0, hIndex);
     final lower = clean.toLowerCase();
     if (lower.endsWith('.srt') || lower.endsWith('.subrip')) return 'application/x-subrip';
     if (lower.endsWith('.ass') || lower.endsWith('.ssa')) return 'text/x-ssa';
@@ -519,6 +524,7 @@ class ExoPlayerAdapter implements PlayerAdapter {
                     builder: (context, text, _) {
                       if (text.isEmpty) return const SizedBox.shrink();
                       final cleanText = _stripAssTags(text);
+                      if (cleanText.isEmpty) return const SizedBox.shrink();
                       final fontSize = 14.0 + (_subtitleSize * 18.0);
                       return Positioned(
                         left: 24,
@@ -585,11 +591,29 @@ class ExoPlayerAdapter implements PlayerAdapter {
 
   static String _stripAssTags(String text) {
     var result = text;
-    result = RegExp(r'\{[^}]*\}').allMatches(result).fold<String>(result, (acc, match) {
-      return acc.replaceAll(match.group(0)!, '');
-    });
+    result = result.replaceAll(RegExp(r'\{\\*[^}]*\}'), '');
+    result = result.replaceAll(RegExp(
+      r'\\(?:'
+      r'an\d+|pos\([^)]*\)|fad\([^)]*\)|fade\([^)]*\)|move\([^)]*\)|'
+      r't\([^)]*\)|t\[[^\]]*\]\([^)]*\)|'
+      r'fn[^\\}]*|fs\d+|fsp-?\d+(?:\.\d+)?|fscx\d+(?:\.\d+)?|fscy\d+(?:\.\d+)?|'
+      r'b\d+|i\d+|u\d+|s\d+|'
+      r'c&H[0-9a-fA-F]+&|1c&H[0-9a-fA-F]+&|2c&H[0-9a-fA-F]+&|3c&H[0-9a-fA-F]+&|4c&H[0-9a-fA-F]+&|'
+      r'a&H[0-9a-fA-F]+&|1a&H[0-9a-fA-F]+&|2a&H[0-9a-fA-F]+&|3a&H[0-9a-fA-F]+&|4a&H[0-9a-fA-F]+&|'
+      r'k\d+|kf\d+|ko\d+|K\d+|'
+      r'q\d+|r[^\\}]*|'
+      r'org\([^)]*\)|clip\([^)]*\)|iclip\([^)]*\)|'
+      r'draw\d+|pbo-?\d+|'
+      r'xbord-?\d+(?:\.\d+)?|ybord-?\d+(?:\.\d+)?|xshad-?\d+(?:\.\d+)?|yshad-?\d+(?:\.\d+)?|'
+      r'be\d+|blur\d+(?:\.\d+)?|'
+      r'frz-?\d+(?:\.\d+)?|frx-?\d+(?:\.\d+)?|fry-?\d+(?:\.\d+)?|'
+      r'fax-?\d+(?:\.\d+)?|fay-?\d+(?:\.\d+)?|'
+      r' Bord(?:er)?\d+|Shad(?:ow)?\d+'
+      r')'
+    ), '');
     result = result.replaceAll(RegExp(r'\\[nN]'), '\n');
-    return result.trim();
+    result = result.replaceAll(RegExp(r'[^\S\n]+'), ' ').trim();
+    return result;
   }
 
   @override

@@ -15,6 +15,7 @@ import '../../widgets/common/danmaku_search_widget.dart';
 import '../../widgets/common/danmaku_overlay.dart';
 import '../../widgets/common/media_widgets.dart';
 import '../../../core/services/video_player_service.dart';
+import '../../../core/services/mpv_player_adapter.dart';
 import '../../../core/services/libass_bridge.dart';
 import '../../../core/services/app_logger.dart';
 
@@ -160,17 +161,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
   }
 
   Future<void> _waitForTracksReady() async {
-    if (_playerService.coreType == PlayerCoreType.mpv) {
-      for (int i = 0; i < 20; i++) {
-        final tracks = _playerService.tracksInfo;
-        final subtitleTracks = tracks.where((t) => t['type'] == 'text').toList();
-        if (subtitleTracks.length > 2) return;
-        await Future.delayed(const Duration(milliseconds: 300));
-      }
-      AppLogger().w('Player', '等待轨道就绪超时，继续加载');
-    } else {
-      await Future.delayed(const Duration(milliseconds: 2000));
+    for (int i = 0; i < 30; i++) {
+      final tracks = _playerService.tracksInfo;
+      final subtitleTracks = tracks.where((t) =>
+          (t['type'] == 'text' || t['type'] == 'bitmap') &&
+          t['id'] != 'auto' && t['id'] != 'no').toList();
+      if (subtitleTracks.isNotEmpty) return;
+      await Future.delayed(const Duration(milliseconds: 300));
     }
+    AppLogger().w('Player', '等待轨道就绪超时，继续加载');
   }
 
   Future<void> _loadSubtitles(MediaItem item, MediaSource mediaSource) async {
@@ -270,7 +269,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
         logger.i('Player', 'EXO内核: 下载字幕后再加载: $subUrl');
 
         final tempDir = await getTemporaryDirectory();
-        final ext = codec == 'srt' || codec == 'subrip' ? 'srt' : 'ass';
+        final ext = _subtitleFileExtension(codec, _playerService.coreType);
         final subFile = File('${tempDir.path}/subtitle_${widget.itemId}_${targetIndex}.$ext');
 
         if (!subFile.existsSync() || await subFile.length() == 0) {
@@ -335,31 +334,51 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     }
   }
 
+  String _subtitleFileExtension(String codec, PlayerCoreType coreType) {
+    final lower = codec.toLowerCase();
+    if (lower == 'srt' || lower == 'subrip') return 'srt';
+    if (lower == 'vtt' || lower == 'webvtt') return 'vtt';
+    if (lower == 'ass' || lower == 'ssa') return 'ass';
+    if (lower == 'pgssub' || lower == 'pgs' || lower == 'sup' || lower == 'dvdsub' || lower == 'vobsub') return 'sup';
+    if (coreType == PlayerCoreType.mpv) return 'ass';
+    return 'srt';
+  }
+
   Future<void> _selectInternalSubtitleMPV(MediaStream target, String? preferredLang, AppLogger logger) async {
     final tracks = _playerService.tracksInfo;
-    final subtitleTracks = tracks.where((t) => t['type'] == 'text').toList();
+    final subtitleTracks = tracks.where((t) =>
+        (t['type'] == 'text' || t['type'] == 'bitmap') &&
+        t['id'] != 'auto' && t['id'] != 'no').toList();
     logger.i('Player', 'MPV 可用字幕轨道: ${subtitleTracks.length} 个');
     for (final track in subtitleTracks) {
-      logger.d('Player', '  轨道: id=${track['id']}, title=${track['title']}, language=${track['language']}, codec=${track['codec']}');
+      logger.d('Player', '  轨道: id=${track['id']}, title=${track['title']}, language=${track['language']}, codec=${track['codec']}, type=${track['type']}');
     }
 
     if (subtitleTracks.isEmpty) {
-      logger.w('Player', 'MPV 无可用字幕轨道 - 可能track-list尚未就绪');
+      logger.w('Player', 'MPV 无可用字幕轨道 - 设置pending等待轨道就绪');
+      final mpvAdapter = _playerService.adapter;
+      if (mpvAdapter is MpvPlayerAdapter) {
+        mpvAdapter.setPendingSubtitle(target.codec?.toLowerCase() ?? 'ass');
+      }
+      await _playerService.selectSubtitleTrack('auto');
       return;
     }
 
     String? trackId;
-    final langMatches = subtitleTracks.where((t) =>
-        t['language'] == preferredLang ||
-        t['language'] == 'chi' ||
-        t['language'] == 'zh' ||
-        t['language'] == 'eng' ||
-        t['language'] == 'en').toList();
-    if (langMatches.isNotEmpty) {
-      trackId = langMatches.first['id']?.toString();
-    } else {
-      trackId = subtitleTracks.first['id']?.toString();
+    final codec = target.codec?.toLowerCase() ?? '';
+    final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub';
+
+    if (isGraphical) {
+      final bitmapMatches = subtitleTracks.where((t) =>
+          t['type'] == 'bitmap' || (t['isBitmap'] == true)).toList();
+      if (bitmapMatches.isNotEmpty) {
+        final langMatch = bitmapMatches.where((t) =>
+            t['language'] == preferredLang || t['language'] == 'chi' || t['language'] == 'zh').toList();
+        trackId = (langMatch.isNotEmpty ? langMatch : bitmapMatches).first['id']?.toString();
+      }
     }
+
+    trackId ??= _findTrackByLanguage(subtitleTracks, preferredLang);
 
     if (trackId != null) {
       await _playerService.selectSubtitleTrack(trackId);
@@ -371,30 +390,59 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
 
   Future<void> _selectInternalSubtitleEXO(MediaStream target, String? preferredLang, AppLogger logger) async {
     final tracks = _playerService.tracksInfo;
-    final subtitleTracks = tracks.where((t) => t['type'] == 'text').toList();
+    final subtitleTracks = tracks.where((t) =>
+        t['type'] == 'text' || t['type'] == 'bitmap').toList();
     logger.i('Player', 'EXO 可用字幕轨道: ${subtitleTracks.length} 个');
 
     if (subtitleTracks.isEmpty) {
-      logger.w('Player', 'EXO 无可用字幕轨道');
+      logger.w('Player', 'EXO 无可用字幕轨道 - 轨道可能尚未就绪');
       return;
     }
 
+    final codec = target.codec?.toLowerCase() ?? '';
+    final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub';
+
     Map<String, dynamic>? trackTarget;
-    final langMatches = subtitleTracks.where((t) =>
-        t['language'] == preferredLang ||
-        t['language'] == 'chi' ||
-        t['language'] == 'zh' ||
-        t['language'] == 'eng' ||
-        t['language'] == 'en').toList();
-    if (langMatches.isNotEmpty) {
-      trackTarget = langMatches.first;
-    } else {
-      trackTarget = subtitleTracks.first;
+    if (isGraphical) {
+      final bitmapTracks = subtitleTracks.where((t) => t['type'] == 'bitmap').toList();
+      if (bitmapTracks.isNotEmpty) {
+        final langMatch = bitmapTracks.where((t) =>
+            t['language'] == preferredLang || t['language'] == 'chi' || t['language'] == 'zh').toList();
+        trackTarget = langMatch.isNotEmpty ? langMatch.first : bitmapTracks.first;
+      }
     }
 
-    final trackId = trackTarget['id']?.toString() ?? '';
-    await _playerService.selectSubtitleTrack(trackId);
-    logger.i('Player', 'EXO 已选择内封字幕轨道: id=$trackId');
+    trackTarget ??= _findTrackTargetByLanguage(subtitleTracks, preferredLang);
+
+    final trackId = trackTarget?['id']?.toString() ?? '';
+    if (trackId.isNotEmpty) {
+      await _playerService.selectSubtitleTrack(trackId);
+      logger.i('Player', 'EXO 已选择内封字幕轨道: id=$trackId');
+    }
+  }
+
+  String? _findTrackByLanguage(List<Map<String, dynamic>> tracks, String? preferredLang) {
+    if (preferredLang != null) {
+      final exact = tracks.where((t) => t['language'] == preferredLang).toList();
+      if (exact.isNotEmpty) return exact.first['id']?.toString();
+    }
+    final chiMatch = tracks.where((t) => t['language'] == 'chi' || t['language'] == 'zh').toList();
+    if (chiMatch.isNotEmpty) return chiMatch.first['id']?.toString();
+    final engMatch = tracks.where((t) => t['language'] == 'eng' || t['language'] == 'en').toList();
+    if (engMatch.isNotEmpty) return engMatch.first['id']?.toString();
+    return tracks.first['id']?.toString();
+  }
+
+  Map<String, dynamic>? _findTrackTargetByLanguage(List<Map<String, dynamic>> tracks, String? preferredLang) {
+    if (preferredLang != null) {
+      final exact = tracks.where((t) => t['language'] == preferredLang).toList();
+      if (exact.isNotEmpty) return exact.first;
+    }
+    final chiMatch = tracks.where((t) => t['language'] == 'chi' || t['language'] == 'zh').toList();
+    if (chiMatch.isNotEmpty) return chiMatch.first;
+    final engMatch = tracks.where((t) => t['language'] == 'eng' || t['language'] == 'en').toList();
+    if (engMatch.isNotEmpty) return engMatch.first;
+    return tracks.firstOrNull;
   }
 
   Future<void> _onSubtitleTrackChanged(int? prev, int? next) async {
@@ -425,9 +473,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       final codec = target.codec?.toLowerCase() ?? 'ass';
       final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub';
 
-      if (!isExternal || isGraphical) {
+      if (!isExternal) {
         final tracks = _playerService.tracksInfo;
-        final subtitleTracks = tracks.where((t) => t['type'] == 'text').toList();
+        final subtitleTracks = tracks.where((t) =>
+            (t['type'] == 'text' || t['type'] == 'bitmap') &&
+            t['id'] != 'auto' && t['id'] != 'no').toList();
 
         final preferredLang = target.language;
         final langMatch = subtitleTracks.where((t) =>
@@ -456,7 +506,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
             await _playerService.loadLibassSubtitle(subUrl);
           } else {
             final tempDir = await getTemporaryDirectory();
-            final ext = codec == 'srt' || codec == 'subrip' ? 'srt' : 'ass';
+            final ext = _subtitleFileExtension(codec, _playerService.coreType);
             final subFile = File('${tempDir.path}/subtitle_${item.id}_${target.index}.$ext');
 
             if (!subFile.existsSync() || await subFile.length() == 0) {
@@ -482,7 +532,29 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
             target.index,
             embyCodec,
           );
-          await _playerService.loadLibassSubtitle(subUrl);
+          if (_playerService.coreType == PlayerCoreType.exoPlayer) {
+            final tempDir = await getTemporaryDirectory();
+            final ext = _subtitleFileExtension(codec, _playerService.coreType);
+            final subFile = File('${tempDir.path}/subtitle_${item.id}_${target.index}.$ext');
+
+            if (!subFile.existsSync() || await subFile.length() == 0) {
+              final dio = Dio(BaseOptions(
+                connectTimeout: const Duration(seconds: 15),
+                receiveTimeout: const Duration(seconds: 60),
+              ));
+              if (server?.authToken != null) {
+                dio.options.headers['X-Emby-Token'] = server!.authToken;
+                dio.options.headers['X-MediaBrowser-Token'] = server.authToken;
+              }
+              await dio.download(subUrl, subFile.path);
+            }
+
+            if (subFile.existsSync() && await subFile.length() > 0) {
+              await _playerService.loadLibassSubtitle(subFile.path);
+            }
+          } else {
+            await _playerService.loadLibassSubtitle(subUrl);
+          }
         }
       }
     } catch (e) {
@@ -539,7 +611,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       if (!isExternal) {
         logger.i('Player', '次字幕: 内封字幕，通过MPV轨道ID直接设置');
         final tracks = _playerService.tracksInfo;
-        final subtitleTracks = tracks.where((t) => t['type'] == 'text').toList();
+        final subtitleTracks = tracks.where((t) =>
+            (t['type'] == 'text' || t['type'] == 'bitmap') &&
+            t['id'] != 'auto' && t['id'] != 'no').toList();
 
         final preferredLang = target.language;
         final langMatch = subtitleTracks.where((t) =>
@@ -566,7 +640,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       );
 
       final tempDir = await getTemporaryDirectory();
-      final ext = codec == 'srt' || codec == 'subrip' ? 'srt' : 'ass';
+      final ext = _subtitleFileExtension(codec, _playerService.coreType);
       final subFile = File('${tempDir.path}/secondary_subtitle_${item.id}_${target.index}.$ext');
 
       if (!subFile.existsSync() || await subFile.length() == 0) {

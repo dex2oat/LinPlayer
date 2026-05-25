@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' show max, min;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -209,6 +210,8 @@ class MpvPlayerAdapter implements PlayerAdapter {
         });
       }
       for (final track in tracks.subtitle) {
+        final id = track.id;
+        if (id == 'auto' || id == 'no') continue;
         final codec = track.codec?.toLowerCase() ?? '';
         final isBitmap = codec.contains('pgs') || codec.contains('hdmv') ||
             codec.contains('dvd') || codec.contains('vobsub') ||
@@ -217,7 +220,8 @@ class MpvPlayerAdapter implements PlayerAdapter {
         final isAss = codec.contains('ass') || codec.contains('ssa');
         if (isBitmap) _hasBitmapSubtitle = true;
         trackList.add({
-          'id': track.id, 'type': 'text',
+          'id': track.id,
+          'type': isBitmap ? 'bitmap' : 'text',
           'title': track.title ?? '', 'language': track.language ?? '',
           'codec': track.codec ?? '',
           'isBitmap': isBitmap,
@@ -232,28 +236,45 @@ class MpvPlayerAdapter implements PlayerAdapter {
   }
 
   String? _pendingSubtitleLang;
+  String? _pendingSubtitleCodec;
+
+  void setPendingSubtitle(String codec) {
+    _pendingSubtitleLang = null;
+    _pendingSubtitleCodec = codec;
+  }
 
   @override
   Future<void> selectSubtitleTrack(String trackId) async {
     if (_player == null || !_isInitialized) return;
     _logger.i('MpvAdapter', '选择字幕轨道: id=$trackId, 已知轨道数=${_subtitleTracks.length}');
     try {
-      if (_subtitleTracks.isEmpty) {
+      final realTracks = _subtitleTracks.where((t) => t.id != 'auto' && t.id != 'no').toList();
+      if (realTracks.isEmpty) {
         _logger.w('MpvAdapter', '轨道列表为空，先用SubtitleTrack.auto()兜底');
         await _player!.setSubtitleTrack(SubtitleTrack.auto());
         _pendingSubtitleLang = trackId;
+        _pendingSubtitleCodec = null;
         return;
       }
-      final target = _subtitleTracks.where((t) => t.id == trackId).firstOrNull;
+      var target = realTracks.where((t) => t.id == trackId).firstOrNull;
+      if (target == null) {
+        final trackInfo = _tracks.where((t) =>
+            (t['type'] == 'text' || t['type'] == 'bitmap') &&
+            t['id']?.toString() == trackId).firstOrNull;
+        if (trackInfo != null) {
+          target = realTracks.where((t) =>
+              t.id == trackInfo['id']).firstOrNull;
+        }
+      }
       if (target != null) {
         final codec = target.codec?.toLowerCase() ?? '';
         _hasBitmapSubtitle = codec.contains('pgs') || codec.contains('hdmv') ||
             codec.contains('dvd') || codec.contains('vobsub') || codec.contains('dvbsub');
-        _currentSubIsAss = codec.contains('ass') || codec.contains('ssa');
+        _currentSubIsAss = _detectAssCodec(target);
         _logger.i('MpvAdapter', '字幕轨道已选择: id=${target.id}, title=${target.title}, lang=${target.language}, codec=${target.codec}, bitmap=$_hasBitmapSubtitle, ass=$_currentSubIsAss');
         await _player!.setSubtitleTrack(target);
       } else {
-        _logger.w('MpvAdapter', '未找到字幕轨道: id=$trackId, 可用: ${_subtitleTracks.map((t) => '${t.id}/${t.language}').toList()}');
+        _logger.w('MpvAdapter', '未找到字幕轨道: id=$trackId, 可用: ${realTracks.map((t) => '${t.id}/${t.language}/${t.codec}').toList()}');
         await _player!.setSubtitleTrack(SubtitleTrack.auto());
       }
       await _applySubtitleRuntimeProperties();
@@ -262,15 +283,69 @@ class MpvPlayerAdapter implements PlayerAdapter {
     }
   }
 
+  bool _detectAssCodec(SubtitleTrack track) {
+    final codec = track.codec?.toLowerCase() ?? '';
+    if (codec.contains('ass') || codec.contains('ssa')) return true;
+    if (codec.contains('pgs') || codec.contains('hdmv') ||
+        codec.contains('dvd') || codec.contains('vobsub') ||
+        codec.contains('dvbsub')) return false;
+    if (codec.contains('srt') || codec.contains('subrip') ||
+        codec.contains('vtt') || codec.contains('webvtt')) return false;
+    final trackInfo = _tracks.where((t) => t['id']?.toString() == track.id).firstOrNull;
+    if (trackInfo != null) {
+      final isAss = trackInfo['isAss'] == true;
+      if (isAss) return true;
+      final isBitmap = trackInfo['isBitmap'] == true;
+      if (isBitmap) return false;
+      final tCodec = (trackInfo['codec'] ?? '').toString().toLowerCase();
+      if (tCodec.contains('ass') || tCodec.contains('ssa')) return true;
+    }
+    final title = track.title?.toLowerCase() ?? '';
+    if (title.contains('ass') || title.contains('ssa')) return true;
+    return false;
+  }
+
   Future<void> _tryPendingSubtitleSelection() async {
-    if (_pendingSubtitleLang == null || _subtitleTracks.isEmpty) return;
+    if (_pendingSubtitleLang == null) return;
+    final realTracks = _subtitleTracks.where((t) => t.id != 'auto' && t.id != 'no').toList();
+    if (realTracks.isEmpty) return;
     final targetId = _pendingSubtitleLang;
+    final targetCodec = _pendingSubtitleCodec;
     _pendingSubtitleLang = null;
-    _logger.i('MpvAdapter', '延迟选择字幕轨道: id=$targetId');
-    final target = _subtitleTracks.where((t) => t.id == targetId).firstOrNull;
+    _pendingSubtitleCodec = null;
+    _logger.i('MpvAdapter', '延迟选择字幕轨道: id=$targetId, codec=$targetCodec, 可用=${realTracks.length}个');
+
+    var target = realTracks.where((t) => t.id == targetId).firstOrNull;
+    if (target == null) {
+      final trackInfo = _tracks.where((t) =>
+          (t['type'] == 'text' || t['type'] == 'bitmap') &&
+          t['id']?.toString() == targetId).firstOrNull;
+      if (trackInfo != null) {
+        target = realTracks.where((t) => t.id == trackInfo['id']).firstOrNull;
+      }
+    }
+
+    if (target == null && targetCodec != null) {
+      final isBitmap = targetCodec.contains('pgs') || targetCodec.contains('hdmv');
+      final isAss = targetCodec.contains('ass') || targetCodec.contains('ssa');
+      for (final t in realTracks) {
+        final c = t.codec?.toLowerCase() ?? '';
+        final tIsBitmap = c.contains('pgs') || c.contains('hdmv');
+        final tIsAss = c.contains('ass') || c.contains('ssa');
+        if (isBitmap && tIsBitmap) { target = t; break; }
+        if (isAss && tIsAss) { target = t; break; }
+      }
+      target ??= realTracks.first;
+    }
+
     if (target != null) {
+      final codec = target.codec?.toLowerCase() ?? '';
+      _hasBitmapSubtitle = codec.contains('pgs') || codec.contains('hdmv') ||
+          codec.contains('dvd') || codec.contains('vobsub') || codec.contains('dvbsub');
+      _currentSubIsAss = _detectAssCodec(target);
       await _player!.setSubtitleTrack(target);
       await _applySubtitleRuntimeProperties();
+      _logger.i('MpvAdapter', '延迟字幕选择成功: id=${target.id}, codec=${target.codec}');
     }
   }
 
@@ -307,6 +382,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
         final ext = _extractExtension(path);
         _currentSubIsAss = ext == 'ass' || ext == 'ssa';
         _hasBitmapSubtitle = ext == 'pgs' || ext == 'sup';
+        _logger.i('MpvAdapter', 'HTTP字幕类型: ext=$ext, isAss=$_currentSubIsAss, isBitmap=$_hasBitmapSubtitle');
         await _player!.setSubtitleTrack(SubtitleTrack.uri(path));
         await _applySubtitleRuntimeProperties();
         _logger.i('MpvAdapter', 'HTTP外挂字幕加载成功');
@@ -343,6 +419,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
       } else {
         _currentSubIsAss = false;
         _hasBitmapSubtitle = false;
+        _logger.i('MpvAdapter', '文本字幕 (SRT/VTT等)，isAss=false');
       }
 
       await _player!.setSubtitleTrack(SubtitleTrack.uri(processedPath));
@@ -358,6 +435,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
     final np = _nativePlayer;
     if (np == null) return;
     try {
+      await np.setProperty('sub-visibility', 'yes');
       await np.setProperty('sub-scale', _subtitleScale.toStringAsFixed(2));
       await np.setProperty('sub-pos', _subtitlePosition.toStringAsFixed(1));
       if (_subtitleFont != null && _subtitleFont!.isNotEmpty && _subtitleFont != '默认') {
@@ -366,17 +444,19 @@ class MpvPlayerAdapter implements PlayerAdapter {
       await np.setProperty('sub-back-color',
           _subtitleBackground ? '#000000C0' : '#00000000');
       await np.setProperty('sub-delay', _subtitleDelay.toStringAsFixed(3));
-      await np.setProperty('sub-visibility', 'yes');
 
       if (_hasBitmapSubtitle) {
+        await np.setProperty('sub-ass', 'no');
         await np.setProperty('sub-ass-override', 'no');
       } else if (_currentSubIsAss) {
+        await np.setProperty('sub-ass', 'yes');
         await np.setProperty('sub-ass-override', 'no');
         if (_subtitleFont != null && _subtitleFont!.isNotEmpty && _subtitleFont != '默认') {
           await np.setProperty('sub-ass-override', 'scale');
         }
       } else {
-        await np.setProperty('sub-ass-override', 'yes');
+        await np.setProperty('sub-ass', 'yes');
+        await np.setProperty('sub-ass-override', 'strip');
       }
 
       if (_secondarySid != null) {
@@ -393,10 +473,17 @@ class MpvPlayerAdapter implements PlayerAdapter {
     _logger.i('MpvAdapter', '加载内存字幕 - codec=$codec, size=${data.length} bytes');
     if (_player == null) return;
     try {
-      final dataStr = String.fromCharCodes(data);
+      final dataStr = utf8.decode(data, allowMalformed: true);
+      _currentSubIsAss = codec.contains('ass') || codec.contains('ssa');
+      _hasBitmapSubtitle = codec.contains('pgs') || codec.contains('sup') ||
+          codec.contains('hdmv');
+      if (!_currentSubIsAss && !_hasBitmapSubtitle) {
+        _currentSubIsAss = dataStr.contains('[V4+ Styles]') || dataStr.contains('[V4 Styles]');
+      }
       await _player!.setSubtitleTrack(
         SubtitleTrack.data(dataStr, title: 'subtitle', language: 'und'),
       );
+      await _applySubtitleRuntimeProperties();
     } catch (e, stackTrace) {
       _logger.eWithStack('MpvAdapter', '内存字幕加载失败', e, stackTrace);
     }
