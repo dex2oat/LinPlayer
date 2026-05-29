@@ -53,6 +53,14 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    packagingOptions {
+        jniLibs {
+            // 优先使用 jniLibs 中提取的 libmpv.so（包含 PGS 解码器）
+            // 避免与 media_kit 自动下载的旧版本 libmpv.so 冲突
+            pickFirsts += setOf("**/libmpv.so")
+        }
+    }
 }
 
 dependencies {
