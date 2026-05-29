@@ -1,0 +1,185 @@
+name: Build libmpv with PGS support
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    paths:
+      - '.github/workflows/build-libmpv-pgs.yml'
+      - '.github/workflows/libmpv-patch/**'
+
+env:
+  BUILD_REPO: media-kit/libmpv-android-video-build
+  BUILD_TAG: v1.1.11
+
+jobs:
+  build-libmpv:
+    name: Build libmpv with PGS decoder
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a, x86, x86_64]
+    
+    steps:
+      - name: Checkout LinPlayer
+        uses: actions/checkout@v4
+      
+      - name: Checkout libmpv-android-video-build
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.BUILD_REPO }}
+          ref: ${{ env.BUILD_TAG }}
+          path: libmpv-build
+      
+      - name: Apply PGS patch
+        run: |
+          echo "🔧 Applying PGS decoder patch to default flavor..."
+          
+          # 修改 default.sh 添加 pgssub 解码器
+          sed -i 's/--enable-decoder=dvdsub/--enable-decoder=dvdsub\n    --enable-decoder=pgssub/' libmpv-build/buildscripts/flavors/default.sh
+          
+          # 验证修改
+          echo "=== Modified subtitle decoders in default.sh ==="
+          grep -A 20 "enable-decoder" libmpv-build/buildscripts/flavors/default.sh | head -30
+      
+      - name: Setup build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf automake libtool pkg-config \
+            python3 python3-pip ninja-build \
+            wget curl unzip
+          
+          # 安装 meson（libplacebo 需要）
+          pip3 install meson
+      
+      - name: Download Android NDK
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip -O /tmp/ndk.zip
+          unzip -q /tmp/ndk.zip -d /opt
+          echo "NDK_PATH=/opt/android-ndk-r25c" >> $GITHUB_ENV
+          echo "✅ NDK downloaded"
+      
+      - name: Build libmpv for ${{ matrix.abi }}
+        run: |
+          export NDK_PATH="/opt/android-ndk-r25c"
+          cd libmpv-build/buildscripts
+          
+          # 设置架构
+          export ANDROID_ABI="${{ matrix.abi }}"
+          
+          echo "🔨 Building libmpv for ${{ matrix.abi }}..."
+          ./build.sh default ${{ matrix.abi }}
+          
+          echo "✅ Build completed for ${{ matrix.abi }}"
+      
+      - name: Copy built libraries
+        run: |
+          BUILD_OUTPUT="libmpv-build/buildscripts/default-${{ matrix.abi }}"
+          
+          if [ -d "$BUILD_OUTPUT" ]; then
+            echo "📦 Packaging libmpv for ${{ matrix.abi }}..."
+            
+            # 创建 JAR 文件（模仿 media-kit 的格式）
+            mkdir -p jniLibs/${{ matrix.abi }}
+            
+            # 复制 .so 文件
+            find "$BUILD_OUTPUT" -name "*.so" -exec cp {} jniLibs/${{ matrix.abi }}/ \;
+            
+            # 列出文件
+            echo "=== Built libraries for ${{ matrix.abi }} ==="
+            ls -lh jniLibs/${{ matrix.abi }}/
+            
+            # 检查是否包含 libmpv.so
+            if [ -f "jniLibs/${{ matrix.abi }}/libmpv.so" ]; then
+              echo "✅ libmpv.so found"
+              
+              # 检查 PGS 解码器是否包含
+              if strings jniLibs/${{ matrix.abi }}/libmpv.so | grep -q "pgssub"; then
+                echo "✅ PGS decoder (pgssub) is included!"
+              else
+                echo "⚠️ PGS decoder not found in libmpv.so"
+              fi
+            else
+              echo "❌ libmpv.so not found"
+              exit 1
+            fi
+            
+            # 创建 JAR 文件
+            cd jniLibs
+            jar cf ../libmpv-pgs-${{ matrix.abi }}.jar ${{ matrix.abi }}/
+            cd ..
+            
+            echo "✅ Created libmpv-pgs-${{ matrix.abi }}.jar"
+          else
+            echo "❌ Build output directory not found: $BUILD_OUTPUT"
+            exit 1
+          fi
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-pgs-${{ matrix.abi }}
+          path: libmpv-pgs-${{ matrix.abi }}.jar
+          retention-days: 90
+      
+      - name: Upload to release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: libmpv-pgs-v${{ github.run_number }}
+          name: libmpv with PGS support - Build ${{ github.run_number }}
+          body: |
+            libmpv Android build with PGS subtitle support
+            
+            Based on: ${{ env.BUILD_REPO }}@${{ env.BUILD_TAG }}
+            Changes: Enabled `pgssub` decoder in default flavor
+            
+            Architectures: arm64-v8a, armeabi-v7a, x86, x86_64
+          files: libmpv-pgs-${{ matrix.abi }}.jar
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-linplayer:
+    name: Update LinPlayer dependencies
+    needs: build-libmpv
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout LinPlayer
+        uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: libmpv-artifacts
+          pattern: libmpv-pgs-*
+      
+      - name: Copy to jniLibs
+        run: |
+          mkdir -p android/app/src/main/jniLibs
+          
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            if [ -f "libmpv-artifacts/libmpv-pgs-$abi/libmpv-pgs-$abi.jar" ]; then
+              # 解压 JAR 到 jniLibs
+              unzip -o "libmpv-artifacts/libmpv-pgs-$abi/libmpv-pgs-$abi.jar" -d android/app/src/main/jniLibs/
+              echo "✅ Extracted libmpv for $abi"
+            fi
+          done
+          
+          echo "=== jniLibs contents ==="
+          find android/app/src/main/jniLibs -name "*.so" -exec ls -lh {} \;
+      
+      - name: Commit updated libraries
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add android/app/src/main/jniLibs/
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update libmpv with PGS subtitle support"
+            git push
+          fi
+        continue-on-error: true
