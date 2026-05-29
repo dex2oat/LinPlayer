@@ -247,6 +247,15 @@ class ExoPlayerPlugin(
                     .setEnableDecoderFallback(true)
 
                 android.util.Log.i("ExoPlayerPlugin", "Creating ExoPlayer with FFmpeg extension support");
+                
+                // 检查 FFmpeg 扩展是否可用
+                try {
+                    val ffmpegClass = Class.forName("androidx.media3.decoder.ffmpeg.FfmpegLibrary")
+                    val isAvailable = ffmpegClass.getMethod("isAvailable").invoke(null) as Boolean
+                    android.util.Log.i("ExoPlayerPlugin", "FFmpeg extension available: $isAvailable")
+                } catch (e: Exception) {
+                    android.util.Log.w("ExoPlayerPlugin", "FFmpeg extension not found in classpath: ${e.message}")
+                }
 
                 val exoPlayer = ExoPlayer.Builder(context)
                     .setTrackSelector(trackSelector)
@@ -369,14 +378,19 @@ class ExoPlayerPlugin(
                 val group = tracks.groups[groupIndex]
                 if (trackIndex < group.length) {
                     val actualTrackType = group.type
+                    val format = group.getTrackFormat(trackIndex)
+                    val mime = format.sampleMimeType ?: ""
+                    val codec = format.codecs ?: ""
+                    android.util.Log.i("ExoPlayerPlugin", "selectTrack: group=$groupIndex, track=$trackIndex, actualType=$actualTrackType, mime=$mime, codec=$codec")
+                    
                     val trackSelection = TrackSelectionOverride(group.mediaTrackGroup, listOf(trackIndex))
                     val paramsBuilder = trackSelector.buildUponParameters()
                     paramsBuilder.setOverrideForType(trackSelection)
                     if (actualTrackType == C.TRACK_TYPE_TEXT || actualTrackType == C.TRACK_TYPE_IMAGE) {
                         paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                         paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_IMAGE, false)
-                        val mime = group.getTrackFormat(trackIndex).sampleMimeType ?: ""
                         val subType = if (mime.contains("pgs", ignoreCase = true) || mime.contains("hdmv", ignoreCase = true) || mime.contains("vobsub", ignoreCase = true) || mime.contains("dvb", ignoreCase = true)) "bitmap" else if (mime.contains("ssa", ignoreCase = true) || mime.contains("ass", ignoreCase = true)) "ass" else "text"
+                        android.util.Log.i("ExoPlayerPlugin", "selectTrack: subtitle type=$subType")
                         emitEvent("subtitleType", subType)
                         
                         // PGS/SUP 图形字幕需要额外确保 bitmap 字幕渲染开启
@@ -386,7 +400,12 @@ class ExoPlayerPlugin(
                         }
                     }
                     trackSelector.parameters = paramsBuilder.build()
+                    android.util.Log.i("ExoPlayerPlugin", "selectTrack: track selection applied")
+                } else {
+                    android.util.Log.w("ExoPlayerPlugin", "selectTrack: trackIndex out of bounds, group=$groupIndex, track=$trackIndex, groupLength=${group.length}")
                 }
+            } else {
+                android.util.Log.w("ExoPlayerPlugin", "selectTrack: groupIndex out of bounds, group=$groupIndex, totalGroups=${tracks.groups.size}")
             }
         }
 
@@ -568,12 +587,15 @@ class ExoPlayerPlugin(
             val bitmapParts = mutableListOf<Map<String, Any>>()
             var hasBitmap = false
             var hasAnyCue = false
+            
+            android.util.Log.d("ExoPlayerPlugin", "onCues: received ${cues.size} cues, isBitmapSubtitle=$isBitmapSubtitle")
 
             for (cue in cues) {
                 hasAnyCue = true
                 val bmp = cue.bitmap
                 if (bmp != null) {
                     hasBitmap = true
+                    android.util.Log.d("ExoPlayerPlugin", "onCues: bitmap cue found, size=${bmp.width}x${bmp.height}")
                     try {
                         var src = bmp
 

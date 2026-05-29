@@ -508,6 +508,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     if (trackId != null && trackId.isNotEmpty) {
       await _playerService.selectSubtitleTrack(trackId);
       logger.i('Player', 'EXO 已选择内封字幕轨道: id=$trackId');
+      
+      // PGS 字幕提示：如果 FFmpeg 扩展未正确加载，PGS 可能无法显示
+      if (isGraphical && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('PGS字幕加载中，如无法显示请检查FFmpeg扩展或切换MPV内核'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
     }
   }
 

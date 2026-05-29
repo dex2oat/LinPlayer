@@ -1,0 +1,240 @@
+name: Build libass for Android
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    paths:
+      - '.github/workflows/build-libass.yml'
+
+env:
+  NDK_VERSION: r25c
+  FREETYPE_VERSION: 2.13.2
+  FRIBIDI_VERSION: 1.0.13
+  LIBASS_VERSION: 0.17.1
+
+jobs:
+  build-libass:
+    name: Build libass.so
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a]
+        include:
+          - abi: arm64-v8a
+            arch: aarch64
+            api: 21
+          - abi: armeabi-v7a
+            arch: arm
+            api: 21
+    
+    steps:
+      - name: Checkout LinPlayer code
+        uses: actions/checkout@v4
+      
+      - name: Download Android NDK
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip -O /tmp/ndk.zip
+          unzip -q /tmp/ndk.zip -d /opt
+          echo "NDK_PATH=/opt/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+          echo "✅ NDK downloaded to /opt/android-ndk-${NDK_VERSION}"
+      
+      - name: Setup build environment
+        run: |
+          export NDK_PATH="/opt/android-ndk-${NDK_VERSION}"
+          export HOST="linux-x86_64"
+          
+          if [ "${{ matrix.abi }}" == "arm64-v8a" ]; then
+            export CC_PREFIX="$NDK_PATH/toolchains/llvm/prebuilt/$HOST/bin/aarch64-linux-android${{ matrix.api }}-"
+          else
+            export CC_PREFIX="$NDK_PATH/toolchains/llvm/prebuilt/$HOST/bin/armv7a-linux-androideabi${{ matrix.api }}-"
+          fi
+          
+          echo "CC=${CC_PREFIX}clang" >> $GITHUB_ENV
+          echo "CXX=${CC_PREFIX}clang++" >> $GITHUB_ENV
+          echo "AR=$NDK_PATH/toolchains/llvm/prebuilt/$HOST/bin/llvm-ar" >> $GITHUB_ENV
+          echo "RANLIB=$NDK_PATH/toolchains/llvm/prebuilt/$HOST/bin/llvm-ranlib" >> $GITHUB_ENV
+          echo "STRIP=$NDK_PATH/toolchains/llvm/prebuilt/$HOST/bin/llvm-strip" >> $GITHUB_ENV
+          echo "CC_PREFIX=$CC_PREFIX" >> $GITHUB_ENV
+          echo "BUILD_ARCH=${{ matrix.arch }}" >> $GITHUB_ENV
+      
+      - name: Build freetype (static)
+        run: |
+          export CC="${CC_PREFIX}clang"
+          export CXX="${CC_PREFIX}clang++"
+          export AR="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          export RANLIB="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+          
+          BUILD_DIR="/tmp/build/${{ matrix.abi }}"
+          INSTALL_DIR="/tmp/install/${{ matrix.abi }}"
+          mkdir -p $BUILD_DIR $INSTALL_DIR
+          
+          cd $BUILD_DIR
+          wget -q "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.xz"
+          tar xf "freetype-${FREETYPE_VERSION}.tar.xz"
+          cd "freetype-${FREETYPE_VERSION}"
+          
+          ./configure \
+            --host=${BUILD_ARCH}-linux-android \
+            --prefix=$INSTALL_DIR \
+            --enable-static \
+            --disable-shared \
+            --without-png \
+            --without-bzip2 \
+            --without-zlib \
+            --without-harfbuzz
+          
+          make -j$(nproc)
+          make install
+          echo "✅ freetype built for ${{ matrix.abi }}"
+      
+      - name: Build fribidi (static)
+        run: |
+          export CC="${CC_PREFIX}clang"
+          export CXX="${CC_PREFIX}clang++"
+          export AR="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          export RANLIB="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+          
+          BUILD_DIR="/tmp/build/${{ matrix.abi }}"
+          INSTALL_DIR="/tmp/install/${{ matrix.abi }}"
+          
+          cd $BUILD_DIR
+          wget -q "https://github.com/fribidi/fribidi/releases/download/v${FRIBIDI_VERSION}/fribidi-${FRIBIDI_VERSION}.tar.xz"
+          tar xf "fribidi-${FRIBIDI_VERSION}.tar.xz"
+          cd "fribidi-${FRIBIDI_VERSION}"
+          
+          ./configure \
+            --host=${BUILD_ARCH}-linux-android \
+            --prefix=$INSTALL_DIR \
+            --enable-static \
+            --disable-shared \
+            --disable-docs
+          
+          make -j$(nproc)
+          make install
+          echo "✅ fribidi built for ${{ matrix.abi }}"
+      
+      - name: Build libass (shared, statically linked deps)
+        run: |
+          export CC="${CC_PREFIX}clang"
+          export CXX="${CC_PREFIX}clang++"
+          export AR="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          export RANLIB="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+          
+          BUILD_DIR="/tmp/build/${{ matrix.abi }}"
+          INSTALL_DIR="/tmp/install/${{ matrix.abi }}"
+          
+          cd $BUILD_DIR
+          wget -q "https://github.com/libass/libass/releases/download/${LIBASS_VERSION}/libass-${LIBASS_VERSION}.tar.xz"
+          tar xf "libass-${LIBASS_VERSION}.tar.xz"
+          cd "libass-${LIBASS_VERSION}"
+          
+          ./configure \
+            --host=${BUILD_ARCH}-linux-android \
+            --prefix=$INSTALL_DIR \
+            --enable-shared \
+            --disable-static \
+            --disable-require-system-font-provider \
+            --with-freetype=yes \
+            --with-fribidi=yes \
+            --without-harfbuzz \
+            FRIBIDI_CFLAGS="-I$INSTALL_DIR/include/fribidi" \
+            FRIBIDI_LIBS="-L$INSTALL_DIR/lib -lfribidi" \
+            CFLAGS="-I$INSTALL_DIR/include" \
+            LDFLAGS="-L$INSTALL_DIR/lib -static-libstdc++" \
+            PKG_CONFIG_PATH="$INSTALL_DIR/lib/pkgconfig"
+          
+          make -j$(nproc)
+          make install
+          
+          echo "=== libass.so dependencies ==="
+          readelf -d $INSTALL_DIR/lib/libass.so | grep NEEDED || true
+          echo "=== libass.so size ==="
+          ls -lh $INSTALL_DIR/lib/libass.so
+          echo "✅ libass built for ${{ matrix.abi }}"
+      
+      - name: Copy libass.so to jniLibs
+        run: |
+          INSTALL_DIR="/tmp/install/${{ matrix.abi }}"
+          JNI_LIBS_DIR="$GITHUB_WORKSPACE/android/app/src/main/jniLibs/${{ matrix.abi }}"
+          mkdir -p $JNI_LIBS_DIR
+          cp $INSTALL_DIR/lib/libass.so $JNI_LIBS_DIR/
+          echo "✅ Copied libass.so to $JNI_LIBS_DIR"
+          ls -lh $JNI_LIBS_DIR/libass.so
+      
+      - name: Upload libass artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libass-${{ matrix.abi }}
+          path: android/app/src/main/jniLibs/${{ matrix.abi }}/libass.so
+          retention-days: 90
+      
+      - name: Commit libass.so to repository (optional)
+        if: github.event_name == 'push'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add android/app/src/main/jniLibs/
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update libass.so for ${{ matrix.abi }}"
+            git push
+          fi
+        continue-on-error: true
+
+  combine-libass:
+    name: Combine libass artifacts
+    needs: build-libass
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: libass-artifacts
+          pattern: libass-*
+      
+      - name: Create combined artifact
+        run: |
+          mkdir -p combined/jniLibs
+          for abi in arm64-v8a armeabi-v7a; do
+            if [ -f "libass-artifacts/libass-$abi/libass.so" ]; then
+              mkdir -p "combined/jniLibs/$abi"
+              cp "libass-artifacts/libass-$abi/libass.so" "combined/jniLibs/$abi/"
+            fi
+          done
+          
+          echo "=== Combined libass.so files ==="
+          find combined/jniLibs -name "*.so" -exec ls -lh {} \;
+      
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libass-all
+          path: combined/jniLibs/**/libass.so
+          retention-days: 90
+      
+      - name: Create Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: libass-${{ github.run_number }}
+          name: libass Android Build ${{ github.run_number }}
+          body: |
+            Android libass.so build
+            
+            - libass version: ${{ env.LIBASS_VERSION }}
+            - freetype version: ${{ env.FREETYPE_VERSION }}
+            - fribidi version: ${{ env.FRIBIDI_VERSION }}
+            - NDK version: ${{ env.NDK_VERSION }}
+            - Architectures: arm64-v8a, armeabi-v7a
+            
+            Usage:
+            1. Download `libass-all` artifact
+            2. Extract to `android/app/src/main/jniLibs/`
+            3. Build APK as usual
+        files: combined/jniLibs/**/libass.so
+        draft: false
+        prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
