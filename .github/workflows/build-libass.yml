@@ -233,8 +233,8 @@ jobs:
             1. Download `libass-all` artifact
             2. Extract to `android/app/src/main/jniLibs/`
             3. Build APK as usual
-        files: combined/jniLibs/**/libass.so
-        draft: false
-        prerelease: true
+          files: combined/jniLibs/**/libass.so
+          draft: false
+          prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
