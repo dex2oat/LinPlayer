@@ -104,7 +104,7 @@ static int load_libass_symbols(void *handle) {
 static char g_libass_path[512] = {0};
 static char g_libmpv_path[512] = {0};
 
-JNIEXPORT void JNICALL
+extern "C" JNIEXPORT void JNICALL
 Java_com_example_linplayer_1mobile_LibassBridge_nativeSetLibraryPaths(JNIEnv *env, jobject thiz, jstring libassPath, jstring libmpvPath) {
     const char *assPath = env->GetStringUTFChars(libassPath, NULL);
     const char *mpvPath = env->GetStringUTFChars(libmpvPath, NULL);
@@ -187,13 +187,13 @@ static void init_libass() {
 // JNI 实现（C++ 语法：env->...）
 // ============================================================================
 
-JNIEXPORT jboolean JNICALL
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_example_linplayer_1mobile_LibassBridge_nativeIsAvailable(JNIEnv *env, jobject thiz) {
     init_libass();
     return g_ass.available ? JNI_TRUE : JNI_FALSE;
 }
 
-JNIEXPORT jlong JNICALL
+extern "C" JNIEXPORT jlong JNICALL
 Java_com_example_linplayer_1mobile_LibassBridge_nativeInit(JNIEnv *env, jobject thiz, jint width, jint height) {
     init_libass();
     if (!g_ass.available) {
@@ -236,7 +236,7 @@ Java_com_example_linplayer_1mobile_LibassBridge_nativeInit(JNIEnv *env, jobject 
     return (jlong)(intptr_t)g_ctx.library;
 }
 
-JNIEXPORT jlong JNICALL
+extern "C" JNIEXPORT jlong JNICALL
 Java_com_example_linplayer_1mobile_LibassBridge_nativeLoadFile(JNIEnv *env, jobject thiz, jlong handle, jstring path) {
     if (!g_ass.available || !g_ctx.library) return 0;
     const char *cpath = env->GetStringUTFChars(path, NULL);
@@ -250,7 +250,7 @@ Java_com_example_linplayer_1mobile_LibassBridge_nativeLoadFile(JNIEnv *env, jobj
     return (jlong)(intptr_t)g_ctx.track;
 }
 
-JNIEXPORT jlong JNICALL
+extern "C" JNIEXPORT jlong JNICALL
 Java_com_example_linplayer_1mobile_LibassBridge_nativeLoadMemory(JNIEnv *env, jobject thiz, jlong handle, jbyteArray data, jstring codec) {
     if (!g_ass.available || !g_ctx.library) return 0;
     jsize len = env->GetArrayLength(data);
@@ -270,13 +270,13 @@ Java_com_example_linplayer_1mobile_LibassBridge_nativeLoadMemory(JNIEnv *env, jo
     return (jlong)(intptr_t)g_ctx.track;
 }
 
-JNIEXPORT void JNICALL
+extern "C" JNIEXPORT void JNICALL
 Java_com_example_linplayer_1mobile_LibassBridge_nativeSetFontSize(JNIEnv *env, jobject thiz, jlong handle, jint size) {
     if (!g_ass.available || !g_ctx.renderer) return;
     g_ass.ass_set_font_scale(g_ctx.renderer, (double)size / 48.0);
 }
 
-JNIEXPORT void JNICALL
+extern "C" JNIEXPORT void JNICALL
 Java_com_example_linplayer_1mobile_LibassBridge_nativeSetFontName(JNIEnv *env, jobject thiz, jlong handle, jstring name) {
     if (!g_ass.available || !g_ctx.renderer) return;
     const char *cname = env->GetStringUTFChars(name, NULL);
@@ -284,7 +284,7 @@ Java_com_example_linplayer_1mobile_LibassBridge_nativeSetFontName(JNIEnv *env, j
     env->ReleaseStringUTFChars(name, cname);
 }
 
-JNIEXPORT jbyteArray JNICALL
+extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_example_linplayer_1mobile_LibassBridge_nativeRenderFrame(JNIEnv *env, jobject thiz, jlong rhandle, jlong thandle, jlong ptsMs) {
     if (!g_ass.available || !g_ctx.renderer || !g_ctx.track) return NULL;
 
@@ -340,7 +340,7 @@ Java_com_example_linplayer_1mobile_LibassBridge_nativeRenderFrame(JNIEnv *env, j
     return result;
 }
 
-JNIEXPORT void JNICALL
+extern "C" JNIEXPORT void JNICALL
 Java_com_example_linplayer_1mobile_LibassBridge_nativeDispose(JNIEnv *env, jobject thiz, jlong lhandle, jlong rhandle, jlong thandle) {
     if (!g_ass.available) return;
     if (g_ctx.track) {
