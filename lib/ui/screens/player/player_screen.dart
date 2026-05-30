@@ -19,7 +19,6 @@ import '../../../core/services/mpv_player_adapter.dart';
 import '../../../core/services/exo_player_adapter.dart';
 import '../../../core/services/libass_bridge.dart';
 import '../../../core/services/app_logger.dart';
-import '../../../core/utils/ass_converter.dart';
 
 /// 播放页
 class PlayerScreen extends ConsumerStatefulWidget {
@@ -248,51 +247,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
             await _selectInternalSubtitleEXO(target, preferredLang, logger);
           }
         } else {
-          logger.i('Player', '内封ASS字幕，libass不可用，转ASS为SRT后加载（合并双语行）');
-          try {
-            await _playerService.deselectSubtitleTrack();
-            final embyCodec = _embySubtitleCodec(codec);
-            final subUrl = api.playback.getSubtitleStreamUrl(
-              item.id, mediaSource.id, targetIndex, embyCodec,
-            );
-            final tempDir = await getTemporaryDirectory();
-            final assFile = File('${tempDir.path}/subtitle_${item.id}_${targetIndex}.ass');
-            if (!assFile.existsSync() || await assFile.length() == 0) {
-              final dio = Dio(BaseOptions(
-                connectTimeout: const Duration(seconds: 15),
-                receiveTimeout: const Duration(seconds: 60),
-              ));
-              if (server?.authToken != null) {
-                dio.options.headers['X-Emby-Token'] = server!.authToken;
-                dio.options.headers['X-MediaBrowser-Token'] = server.authToken;
-              }
-              await dio.download(subUrl, assFile.path);
-              logger.i('Player', 'ASS字幕下载完成 - ${assFile.lengthSync()} bytes');
-            }
-            if (assFile.existsSync() && await assFile.length() > 0) {
-              // 读取 ASS 内容并转换为 SRT
-              final assContent = await assFile.readAsString();
-              final srtContent = AssConverter.convertAssToSrt(assContent);
-              if (srtContent.isNotEmpty) {
-                final srtFile = File('${tempDir.path}/subtitle_${item.id}_${targetIndex}_converted.srt');
-                await srtFile.writeAsString(srtContent);
-                logger.i('Player', 'ASS转SRT完成 - ${srtContent.length} bytes, 已合并双语行');
-                await _playerService.loadLibassSubtitle(srtFile.path);
-                logger.i('Player', '转换后的字幕加载成功');
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('ASS字幕已转换为SRT（双语合并+去特效）')),
-                  );
-                }
-              } else {
-                logger.w('Player', 'ASS转SRT结果为空，回退原生选择');
-                await _selectInternalSubtitleEXO(target, preferredLang, logger);
-              }
-            }
-          } catch (e, stackTrace) {
-            logger.eWithStack('Player', 'ASS转SRT加载失败，回退原生选择', e, stackTrace);
-            await _selectInternalSubtitleEXO(target, preferredLang, logger);
-          }
+          logger.i('Player', '内封ASS字幕，libass不可用，通过原生轨道选择（特效丢失）');
+          await _selectInternalSubtitleEXO(target, preferredLang, logger);
         }
       } else {
         logger.i('Player', '内封字幕，通过播放器轨道选择');

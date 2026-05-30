@@ -99,8 +99,16 @@ object LibassBridge {
     init {
         try {
             System.loadLibrary("ass")
+            android.util.Log.i("LibassBridge", "libass.so loaded successfully")
         } catch (e: UnsatisfiedLinkError) {
-            android.util.Log.w("LibassBridge", "libass.so not found, will try libmpv.so fallback")
+            android.util.Log.w("LibassBridge", "libass.so not found, trying libmpv.so (libass may be statically linked)")
+            try {
+                // libass may be statically linked in libmpv.so (from mpv-android)
+                System.loadLibrary("mpv")
+                android.util.Log.i("LibassBridge", "libmpv.so loaded, libass symbols should be available")
+            } catch (e2: UnsatisfiedLinkError) {
+                android.util.Log.w("LibassBridge", "libmpv.so also not found: ${e2.message}")
+            }
         }
         try {
             System.loadLibrary("linass_jni")
