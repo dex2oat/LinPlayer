@@ -1,6 +1,10 @@
 name: Extract libmpv from mpv-android
 
 on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - '.github/workflows/extract-libmpv.yml'
   workflow_dispatch:
   schedule:
     - cron: '0 0 * * 0'
@@ -67,18 +71,13 @@ jobs:
           
           mkdir -p "$DEST_DIR"
           
-          # 优先提取独立的 libass.so（不会与 media_kit 的 libmpv.so 冲突）
-          if [ -f "$SOURCE_DIR/libass.so" ]; then
-            cp "$SOURCE_DIR/libass.so" "$DEST_DIR/"
-            echo "✅ Extracted libass.so for $ABI"
-          fi
-          
-          # 同时提取 libmpv.so（用于 PGS 解码器）
-          if [ -f "$SOURCE_DIR/libmpv.so" ]; then
-            cp "$SOURCE_DIR/libmpv.so" "$DEST_DIR/"
-            echo "✅ Extracted libmpv.so for $ABI"
+          # 提取 mpv-android 的所有库文件（完整替换 media-kit 的阉割版）
+          # 包含：libmpv.so、libass.so 和所有 FFmpeg 依赖
+          if [ -d "$SOURCE_DIR" ]; then
+            cp "$SOURCE_DIR"/*.so "$DEST_DIR/"
+            echo "✅ Extracted all libraries for $ABI"
           else
-            echo "❌ libmpv.so not found for $ABI"
+            echo "❌ Source directory not found: $SOURCE_DIR"
             find "apk_extracted_$ABI" -name "*.so" | head -20
             exit 1
           fi
@@ -148,16 +147,9 @@ jobs:
           for abi in arm64-v8a armeabi-v7a x86 x86_64; do
             if [ -d "extracted-libs/libmpv-extracted-$abi" ]; then
               mkdir -p "android/app/src/main/jniLibs/$abi"
-              # 只复制 libass.so 到 jniLibs（用于 ExoPlayer 的 ASS 字幕渲染）
-              # 不复制 libmpv.so，避免与 media_kit 自动下载的版本冲突导致崩溃
-              if [ -f "extracted-libs/libmpv-extracted-$abi/libass.so" ]; then
-                cp extracted-libs/libmpv-extracted-$abi/libass.so "android/app/src/main/jniLibs/$abi/"
-                echo "✅ Copied libass.so for $abi"
-              fi
-              # libmpv.so 如有需要可以手动放置，但默认不自动提交以避免冲突
-              if [ -f "extracted-libs/libmpv-extracted-$abi/libmpv.so" ]; then
-                echo "ℹ️ libmpv.so available for $abi (not auto-committed to avoid media_kit conflicts)"
-              fi
+              # 复制所有库文件（完整替换 media-kit 的阉割版）
+              cp extracted-libs/libmpv-extracted-$abi/*.so "android/app/src/main/jniLibs/$abi/"
+              echo "✅ Copied all libraries for $abi"
             fi
           done
           
@@ -168,16 +160,22 @@ jobs:
         run: |
           echo "=== Verifying all libraries ==="
           for abi in arm64-v8a armeabi-v7a x86 x86_64; do
-            LIB="android/app/src/main/jniLibs/$abi/libass.so"
-            if [ -f "$LIB" ]; then
-              SIZE=$(stat -c%s "$LIB")
-              echo "$abi: libass.so = $SIZE bytes"
-              if [ "$SIZE" -lt 100000 ]; then
-                echo "❌ libass.so too small!"
+            LIBMPV="android/app/src/main/jniLibs/$abi/libmpv.so"
+            if [ -f "$LIBMPV" ]; then
+              SIZE=$(stat -c%s "$LIBMPV")
+              echo "$abi: libmpv.so = $SIZE bytes"
+              if [ "$SIZE" -lt 5000000 ]; then
+                echo "❌ libmpv.so too small!"
                 exit 1
               fi
+              # 检查 PGS 解码器
+              if strings "$LIBMPV" | grep -q "pgssub"; then
+                echo "  ✅ PGS decoder found"
+              else
+                echo "  ⚠️ PGS decoder not found"
+              fi
             else
-              echo "⚠️ libass.so not found for $abi"
+              echo "⚠️ libmpv.so not found for $abi"
             fi
           done
           echo "✅ All libraries verified"
@@ -191,7 +189,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore: update libmpv from mpv-android (per-ABI APKs, includes PGS support)"
+            git commit -m "chore: update all native libs from mpv-android (full libmpv with PGS/ASS support)"
             git push
             echo "✅ Libraries committed"
           fi
@@ -203,12 +201,13 @@ jobs:
           tag_name: libmpv-extracted-${{ github.run_number }}
           name: libmpv from mpv-android - Build ${{ github.run_number }}
           body: |
-            Extracted libmpv.so from mpv-android release (per-ABI APKs)
+            Extracted complete native libraries from mpv-android release (per-ABI APKs)
             
             Includes:
-            - PGS subtitle decoder (pgssub)
-            - libass for ASS/SSA subtitles
-            - All standard mpv decoders
+            - Full libmpv.so with all decoders (PGS, ASS, SRT, VOBSUB, etc.)
+            - libass.so for ASS/SSA subtitle rendering
+            - All FFmpeg dependencies (libavcodec, libavutil, etc.)
+            - Complete replacement for media-kit's stripped-down version
             
             Source: ${{ env.MPV_ANDROID_REPO }}
           files: android/app/src/main/jniLibs/**/*.so
