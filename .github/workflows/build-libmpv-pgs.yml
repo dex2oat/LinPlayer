@@ -1,0 +1,172 @@
+name: Build libmpv with PGS support
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - '.github/workflows/build-libmpv-pgs.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 0'
+
+env:
+  BUILD_REPO: media-kit/libmpv-android-video-build
+
+jobs:
+  build-and-commit:
+    name: Build libmpv with PGS
+    runs-on: ubuntu-22.04
+    
+    steps:
+      - name: Checkout LinPlayer
+        uses: actions/checkout@v4
+      
+      - name: Clone media-kit build repo
+        run: |
+          git clone --depth 1 https://github.com/${{ env.BUILD_REPO }}.git /tmp/libmpv-build
+          cd /tmp/libmpv-build
+          echo "=== Original flavors/default.sh (subtitle decoders) ==="
+          grep -n "enable-decoder=.*sub\|ssa\|ass\|srt" buildscripts/flavors/default.sh
+      
+      - name: Enable PGS decoder in FFmpeg config
+        run: |
+          CONFIG_FILE="/tmp/libmpv-build/buildscripts/flavors/default.sh"
+          
+          # 备份原文件
+          cp "$CONFIG_FILE" "$CONFIG_FILE.bak"
+          
+          # 在字幕解码器列表中添加 pgssub
+          # 找到 dvdsub 那一行，在其后添加 pgssub
+          sed -i '/enable-decoder=dvdsub/a \	--enable-decoder=pgssub \\' "$CONFIG_FILE"
+          
+          echo "=== Modified flavors/default.sh (subtitle decoders) ==="
+          grep -n "enable-decoder=.*sub\|ssa\|ass\|srt\|pgs" "$CONFIG_FILE"
+      
+      - name: Setup build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3 python3-pip \
+            ninja-build cmake pkg-config \
+            autoconf automake libtool \
+            wget curl unzip
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+      
+      - name: Setup Android SDK symlink
+        working-directory: /tmp/libmpv-build/buildscripts
+        run: |
+          mkdir -p sdk
+          ln -s ${ANDROID_HOME} ./sdk/android-sdk-linux
+          echo "SDK linked: ${ANDROID_HOME}"
+      
+      - name: Build libmpv (default flavor with PGS)
+        working-directory: /tmp/libmpv-build/buildscripts
+        run: |
+          # 清理之前的构建
+          sudo rm -rf deps prefix
+          
+          # 下载依赖
+          ./download.sh
+          
+          # 应用补丁
+          ./patch.sh
+          
+          # 复制修改后的配置
+          rm -f scripts/ffmpeg.sh
+          cp flavors/default.sh scripts/ffmpeg.sh
+          
+          # 构建所有架构
+          for arch in armv7l arm64 x86 x86_64; do
+            echo "Building for $arch..."
+            ./build.sh --arch $arch mpv || {
+              echo "Build failed for $arch, trying fallback..."
+              exit 1
+            }
+          done
+        timeout-minutes: 120
+      
+      - name: Verify PGS support in built libraries
+        run: |
+          echo "=== Verifying PGS support ==="
+          for arch in arm64-v8a armeabi-v7a x86 x86_64; do
+            CODEC_LIB="/tmp/libmpv-build/buildscripts/prefix/$arch/lib/libavcodec.so"
+            if [ -f "$CODEC_LIB" ]; then
+              if strings "$CODEC_LIB" | grep -q "pgssub"; then
+                echo "✅ $arch: PGS decoder found"
+              else
+                echo "❌ $arch: PGS decoder NOT found"
+              fi
+            else
+              echo "⚠️ $arch: libavcodec.so not found at $CODEC_LIB"
+            fi
+          done
+      
+      - name: Strip and copy to jniLibs
+        run: |
+          mkdir -p android/app/src/main/jniLibs
+          
+          cd /tmp/libmpv-build/buildscripts
+          . ./include/depinfo.sh
+          
+          # Strip 库文件
+          STRIP="./sdk/android-sdk-linux/ndk/$v_ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          
+          for arch in arm64-v8a armeabi-v7a x86 x86_64; do
+            SOURCE_DIR="prefix/$arch/lib"
+            DEST_DIR="$GITHUB_WORKSPACE/android/app/src/main/jniLibs/$arch"
+            
+            if [ -d "$SOURCE_DIR" ]; then
+              mkdir -p "$DEST_DIR"
+              
+              # 复制所有 FFmpeg 库
+              for lib in libavcodec.so libavformat.so libavutil.so libswscale.so libswresample.so libavfilter.so; do
+                if [ -f "$SOURCE_DIR/$lib" ]; then
+                  cp "$SOURCE_DIR/$lib" "$DEST_DIR/"
+                  # Strip 以减小体积
+                  $STRIP --strip-all "$DEST_DIR/$lib" 2>/dev/null || true
+                fi
+              done
+              
+              # 复制 libmpv.so
+              if [ -f "$SOURCE_DIR/libmpv.so" ]; then
+                cp "$SOURCE_DIR/libmpv.so" "$DEST_DIR/"
+                $STRIP --strip-all "$DEST_DIR/libmpv.so" 2>/dev/null || true
+              fi
+              
+              echo "✅ Copied libraries for $arch"
+              ls -lh "$DEST_DIR/"
+            fi
+          done
+      
+      - name: Commit libraries
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add android/app/src/main/jniLibs/
+          
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: rebuild libmpv with PGS support (pgssub decoder enabled)"
+            git push
+            echo "✅ Libraries committed"
+          fi
+        continue-on-error: true
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: libmpv-with-pgs
+          path: |
+            android/app/src/main/jniLibs/**/*.so
+          if-no-files-found: warn
+          retention-days: 7
