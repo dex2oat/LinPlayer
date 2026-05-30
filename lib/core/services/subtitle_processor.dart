@@ -11,6 +11,33 @@ import 'app_logger.dart';
 class SubtitleProcessor {
   static final _logger = AppLogger();
 
+  /// 将 ASS/SSA 字幕转换为 SRT，供不支持 ASS 特效的播放器兜底使用。
+  static Future<String> convertAssToSrt(
+    String inputPath, {
+    String? outputPath,
+  }) async {
+    final inputFile = File(inputPath);
+    if (!inputFile.existsSync()) {
+      throw Exception('字幕文件不存在: $inputPath');
+    }
+
+    final ext = inputPath.split('.').last.toLowerCase();
+    if (ext != 'ass' && ext != 'ssa') {
+      _logger.w('SubtitleProcessor', '仅支持 ASS/SSA 转 SRT，当前格式: $ext');
+      return inputPath;
+    }
+
+    _logger.i('SubtitleProcessor', '开始将 ASS/SSA 转换为 SRT: $inputPath');
+
+    final content = await inputFile.readAsString();
+    final converted = _convertAssContentToSrt(content);
+    final outPath = outputPath ?? await _generateTempPathWithExtension(inputPath, '_converted', 'srt');
+    await File(outPath).writeAsString(converted);
+
+    _logger.i('SubtitleProcessor', 'ASS/SSA 已转换为 SRT: $outPath');
+    return outPath;
+  }
+
   /// 调整字幕时间轴
   ///
   /// [inputPath] 原始字幕文件路径
@@ -130,6 +157,18 @@ class SubtitleProcessor {
     final fileName = originalPath.split('/').last;
     final baseName = fileName.substring(0, fileName.lastIndexOf('.'));
     final ext = fileName.split('.').last;
+    return '${tempDir.path}/$baseName$suffix.$ext';
+  }
+
+  static Future<String> _generateTempPathWithExtension(
+    String originalPath,
+    String suffix,
+    String ext,
+  ) async {
+    final tempDir = await getTemporaryDirectory();
+    final fileName = originalPath.split('/').last;
+    final dotIndex = fileName.lastIndexOf('.');
+    final baseName = dotIndex > 0 ? fileName.substring(0, dotIndex) : fileName;
     return '${tempDir.path}/$baseName$suffix.$ext';
   }
 
@@ -334,6 +373,102 @@ class SubtitleProcessor {
     }
 
     return parts.join(',');
+  }
+
+  static String _convertAssContentToSrt(String content) {
+    final lines = content.split('\n');
+    final srtEntries = <String>[];
+
+    var inEventsSection = false;
+    var eventFormat = <String>[];
+    var cueIndex = 1;
+
+    for (final rawLine in lines) {
+      final line = rawLine.trimRight();
+      final trimmed = line.trimLeft();
+
+      if (trimmed.startsWith('[')) {
+        inEventsSection = trimmed == '[Events]';
+        continue;
+      }
+
+      if (!inEventsSection) continue;
+
+      if (trimmed.startsWith('Format:')) {
+        eventFormat = trimmed
+            .substring('Format:'.length)
+            .split(',')
+            .map((part) => part.trim())
+            .toList();
+        continue;
+      }
+
+      if (!trimmed.startsWith('Dialogue:')) continue;
+
+      final dialogueBody = trimmed.substring('Dialogue:'.length).trimLeft();
+      final fields = _splitAssFields(
+        dialogueBody,
+        eventFormat.isNotEmpty ? eventFormat.length : 10,
+      );
+      if (fields.length < 3) continue;
+
+      final startIndex = eventFormat.isNotEmpty ? eventFormat.indexOf('Start') : 1;
+      final endIndex = eventFormat.isNotEmpty ? eventFormat.indexOf('End') : 2;
+      final textIndex = eventFormat.isNotEmpty ? eventFormat.indexOf('Text') : 9;
+      if (startIndex < 0 || endIndex < 0 || textIndex < 0) continue;
+      if (fields.length <= startIndex || fields.length <= endIndex || fields.length <= textIndex) {
+        continue;
+      }
+
+      final text = _stripAssToPlainText(fields[textIndex]);
+      if (text.isEmpty) continue;
+
+      final start = _formatSrtTime(_parseAssTime(fields[startIndex].trim()));
+      final end = _formatSrtTime(_parseAssTime(fields[endIndex].trim()));
+      srtEntries.add('$cueIndex\n$start --> $end\n$text');
+      cueIndex++;
+    }
+
+    if (srtEntries.isEmpty) {
+      _logger.w('SubtitleProcessor', 'ASS/SSA 转 SRT 未解析到有效对白，输出空字幕');
+      return '';
+    }
+
+    return '${srtEntries.join('\n\n')}\n';
+  }
+
+  static List<String> _splitAssFields(String input, int expectedFields) {
+    if (expectedFields <= 1) return [input];
+
+    final result = <String>[];
+    var start = 0;
+    var commasFound = 0;
+
+    for (var i = 0; i < input.length; i++) {
+      if (input.codeUnitAt(i) != 44) continue;
+      if (commasFound >= expectedFields - 1) break;
+      result.add(input.substring(start, i));
+      start = i + 1;
+      commasFound++;
+    }
+
+    result.add(input.substring(start));
+    return result;
+  }
+
+  static String _stripAssToPlainText(String text) {
+    var result = text;
+    result = result.replaceAll('\r', '');
+    result = result.replaceAll('\\N', '\n');
+    result = result.replaceAll('\\n', '\n');
+    result = result.replaceAll(RegExp(r'\{[^}]*\}'), '');
+    result = result.replaceAll(RegExp(r'[^\S\n]+'), ' ');
+    result = result
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .join('\n');
+    return result.trim();
   }
 
   static String _pad2(int n) => n.toString().padLeft(2, '0');

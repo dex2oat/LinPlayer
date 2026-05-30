@@ -19,6 +19,7 @@ import '../../../core/services/mpv_player_adapter.dart';
 import '../../../core/services/exo_player_adapter.dart';
 import '../../../core/services/libass_bridge.dart';
 import '../../../core/services/app_logger.dart';
+import '../../../core/services/subtitle_processor.dart';
 
 /// 播放页
 class PlayerScreen extends ConsumerStatefulWidget {
@@ -202,8 +203,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     final codec = target.codec?.toLowerCase() ?? 'ass';
     final isExternal = target.isExternal ?? false;
     final targetIndex = target.index;
-    final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub' || codec.contains('hdmv') || codec.contains('pgs');
-    final isAss = codec == 'ass' || codec == 'ssa';
+    final isGraphical = _isGraphicalSubtitleCodec(codec);
+    final isAss = _isAssSubtitleCodec(codec);
     logger.i('Player', '选择字幕: index=$targetIndex, codec=$codec, language=${target.language}, external=$isExternal, graphical=$isGraphical, isAss=$isAss');
 
     ref.read(subtitleTrackProvider.notifier).state = targetIndex;
@@ -212,31 +213,28 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       final isExoAss = isAss && !isGraphical && _playerService.coreType == PlayerCoreType.exoPlayer;
 
       if (isExoAss) {
-        final adapter = _playerService.adapter;
-        if (adapter is ExoPlayerAdapter && adapter.libassReady) {
-          logger.i('Player', '内封ASS字幕，通过libass渲染（保留特效）');
-          try {
-            await _playerService.deselectSubtitleTrack();
-            final api = ref.read(apiClientProvider);
-            final embyCodec = _embySubtitleCodec(codec);
-            final subUrl = api.playback.getSubtitleStreamUrl(
-              item.id, mediaSource.id, targetIndex, embyCodec,
-            );
-            final subFile = await _downloadSubtitleToTempFile(
-              subtitleUrl: subUrl,
-              fileName: 'subtitle_${item.id}_$targetIndex.ass',
-            );
-            logger.i('Player', 'ASS字幕下载完成/使用缓存 - ${await subFile.length()} bytes');
-            if (subFile.existsSync() && await subFile.length() > 0) {
-              await _playerService.loadLibassSubtitle(subFile.path);
-              logger.i('Player', '内封ASS字幕通过libass加载成功');
-            }
-          } catch (e, stackTrace) {
-            logger.eWithStack('Player', 'libass加载内封ASS失败，回退原生选择', e, stackTrace);
-            await _selectInternalSubtitleEXO(target, preferredLang, logger);
+        logger.i('Player', 'EXO内核: 内封ASS字幕改走下载后转SRT兜底');
+        try {
+          await _playerService.deselectSubtitleTrack();
+          final api = ref.read(apiClientProvider);
+          final embyCodec = _embySubtitleCodec(codec);
+          final subUrl = api.playback.getSubtitleStreamUrl(
+            item.id, mediaSource.id, targetIndex, embyCodec,
+          );
+          final subFile = await _prepareSubtitleFileForPlayer(
+            subtitleUrl: subUrl,
+            fileName: 'subtitle_${item.id}_$targetIndex.ass',
+            codec: codec,
+            coreType: _playerService.coreType,
+            logger: logger,
+          );
+          logger.i('Player', 'EXO内封ASS字幕准备完成 - ${await subFile.length()} bytes');
+          if (subFile.existsSync() && await subFile.length() > 0) {
+            await _playerService.loadLibassSubtitle(subFile.path);
+            logger.i('Player', 'EXO内封ASS字幕已通过SRT兜底方式加载');
           }
-        } else {
-          logger.i('Player', '内封ASS字幕，libass不可用，通过原生轨道选择（特效丢失）');
+        } catch (e, stackTrace) {
+          logger.eWithStack('Player', 'EXO内封ASS转SRT失败，回退原生选择', e, stackTrace);
           await _selectInternalSubtitleEXO(target, preferredLang, logger);
         }
       } else {
@@ -295,9 +293,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
         logger.i('Player', 'EXO内核: 下载字幕后再加载: $subUrl');
 
         final ext = _subtitleFileExtension(codec, _playerService.coreType);
-        final subFile = await _downloadSubtitleToTempFile(
+        final subFile = await _prepareSubtitleFileForPlayer(
           subtitleUrl: subUrl,
           fileName: 'subtitle_${widget.itemId}_$targetIndex.$ext',
+          codec: codec,
+          coreType: _playerService.coreType,
+          logger: logger,
         );
         logger.i('Player', '字幕下载完成/使用缓存 (${await subFile.length()} bytes)');
 
@@ -360,6 +361,54 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     if (lower == 'pgssub' || lower == 'pgs' || lower == 'sup' || lower == 'dvdsub' || lower == 'vobsub' || lower.contains('hdmv') || lower.contains('pgs')) return 'sup';
     if (coreType == PlayerCoreType.mpv) return 'ass';
     return 'srt';
+  }
+
+  bool _isAssSubtitleCodec(String codec) {
+    final lower = codec.toLowerCase();
+    return lower == 'ass' || lower == 'ssa';
+  }
+
+  bool _isGraphicalSubtitleCodec(String codec) {
+    final lower = codec.toLowerCase();
+    return lower == 'pgssub' ||
+        lower == 'sup' ||
+        lower == 'pgs' ||
+        lower == 'dvdsub' ||
+        lower == 'vobsub' ||
+        lower.contains('hdmv') ||
+        lower.contains('pgs');
+  }
+
+  Future<File> _prepareSubtitleFileForPlayer({
+    required String subtitleUrl,
+    required String fileName,
+    required String codec,
+    required PlayerCoreType coreType,
+    required AppLogger logger,
+  }) async {
+    final sourceFile = await _downloadSubtitleToTempFile(
+      subtitleUrl: subtitleUrl,
+      fileName: fileName,
+    );
+
+    if (coreType != PlayerCoreType.exoPlayer) {
+      return sourceFile;
+    }
+
+    if (_isAssSubtitleCodec(codec)) {
+      final convertedPath = await SubtitleProcessor.convertAssToSrt(
+        sourceFile.path,
+        outputPath: sourceFile.path.replaceFirst(RegExp(r'\.[^.]+$'), '.srt'),
+      );
+      logger.i('Player', 'EXO内核: ASS/SSA 已转换为 SRT: $convertedPath');
+      return File(convertedPath);
+    }
+
+    if (_isGraphicalSubtitleCodec(codec)) {
+      logger.w('Player', 'EXO内核: 图形字幕仍依赖 Media3 设备侧解析，若不显示请切换 MPV');
+    }
+
+    return sourceFile;
   }
 
   Future<File> _downloadSubtitleToTempFile({
@@ -782,40 +831,38 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
 
       final isExternal = target.isExternal ?? false;
       final codec = target.codec?.toLowerCase() ?? 'ass';
-      final isGraphical = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub' || codec.contains('hdmv') || codec.contains('pgs');
+      final isGraphical = _isGraphicalSubtitleCodec(codec);
 
       if (!isExternal) {
-        final isAss = codec == 'ass' || codec == 'ssa';
+        final isAss = _isAssSubtitleCodec(codec);
         final isExoAss = _playerService.coreType == PlayerCoreType.exoPlayer &&
             isAss && !isGraphical;
 
         if (isExoAss) {
-          final adapter = _playerService.adapter;
-          if (adapter is ExoPlayerAdapter && adapter.libassReady) {
-            try {
-              await _playerService.deselectSubtitleTrack();
-              final embyCodec = _embySubtitleCodec(codec);
-              final subUrl = api.playback.getSubtitleStreamUrl(
-                item.id,
-                mediaSource.id,
-                target.index,
-                embyCodec,
-              );
-              final subFile = await _downloadSubtitleToTempFile(
-                subtitleUrl: subUrl,
-                fileName: 'subtitle_${item.id}_${target.index}.ass',
-              );
-              logger.i('Player', 'EXO+libass: ASS字幕下载完成/使用缓存 - ${await subFile.length()} bytes');
+          try {
+            await _playerService.deselectSubtitleTrack();
+            final embyCodec = _embySubtitleCodec(codec);
+            final subUrl = api.playback.getSubtitleStreamUrl(
+              item.id,
+              mediaSource.id,
+              target.index,
+              embyCodec,
+            );
+            final subFile = await _prepareSubtitleFileForPlayer(
+              subtitleUrl: subUrl,
+              fileName: 'subtitle_${item.id}_${target.index}.ass',
+              codec: codec,
+              coreType: _playerService.coreType,
+              logger: logger,
+            );
+            logger.i('Player', 'EXO内封ASS切换准备完成 - ${await subFile.length()} bytes');
 
-              if (subFile.existsSync() && await subFile.length() > 0) {
-                await _playerService.loadLibassSubtitle(subFile.path);
-                logger.i('Player', 'EXO+libass: 内封ASS字幕通过libass加载，特效将正确渲染');
-              }
-            } catch (e, stackTrace) {
-              logger.eWithStack('Player', 'EXO+libass加载内封ASS字幕失败，回退原生轨道选择', e, stackTrace);
-              await _selectInternalSubtitleViaTrack(target, next, logger);
+            if (subFile.existsSync() && await subFile.length() > 0) {
+              await _playerService.loadLibassSubtitle(subFile.path);
+              logger.i('Player', 'EXO内封ASS切换已通过SRT兜底方式加载');
             }
-          } else {
+          } catch (e, stackTrace) {
+            logger.eWithStack('Player', 'EXO内封ASS切换转SRT失败，回退原生轨道选择', e, stackTrace);
             await _selectInternalSubtitleViaTrack(target, next, logger);
           }
         } else {
@@ -823,7 +870,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
         }
       } else {
         final embyCodec = _embySubtitleCodec(codec);
-        final isGraphicalExternal = codec == 'pgssub' || codec == 'sup' || codec == 'pgs' || codec == 'dvdsub' || codec == 'vobsub' || codec.contains('hdmv') || codec.contains('pgs');
+        final isGraphicalExternal = _isGraphicalSubtitleCodec(codec);
 
         if (_playerService.coreType == PlayerCoreType.mpv || isGraphicalExternal) {
           final subUrl = api.playback.getSubtitleStreamUrl(
@@ -837,18 +884,24 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
 
           if (isGraphicalExternal) {
             final ext = _subtitleFileExtension(codec, _playerService.coreType);
-            final subFile = await _downloadSubtitleToTempFile(
+            final subFile = await _prepareSubtitleFileForPlayer(
               subtitleUrl: subUrl,
               fileName: 'subtitle_${item.id}_${target.index}.$ext',
+              codec: codec,
+              coreType: _playerService.coreType,
+              logger: logger,
             );
             if (subFile.existsSync() && await subFile.length() > 0) {
               await _playerService.loadLibassSubtitle(subFile.path);
             }
           } else {
             final ext = _subtitleFileExtension(codec, _playerService.coreType);
-            final subFile = await _downloadSubtitleToTempFile(
+            final subFile = await _prepareSubtitleFileForPlayer(
               subtitleUrl: subUrl,
               fileName: 'subtitle_${item.id}_${target.index}.$ext',
+              codec: codec,
+              coreType: _playerService.coreType,
+              logger: logger,
             );
 
             if (subFile.existsSync() && await subFile.length() > 0) {
@@ -864,9 +917,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
           );
           if (_playerService.coreType == PlayerCoreType.exoPlayer) {
             final ext = _subtitleFileExtension(codec, _playerService.coreType);
-            final subFile = await _downloadSubtitleToTempFile(
+            final subFile = await _prepareSubtitleFileForPlayer(
               subtitleUrl: subUrl,
               fileName: 'subtitle_${item.id}_${target.index}.$ext',
+              codec: codec,
+              coreType: _playerService.coreType,
+              logger: logger,
             );
 
             if (subFile.existsSync() && await subFile.length() > 0) {
@@ -2582,11 +2638,19 @@ class _SubtitleSettingsContentState extends ConsumerState<_SubtitleSettingsConte
       );
       if (result != null && result.files.single.path != null) {
         final filePath = result.files.single.path!;
-        AppLogger().i('Player', '导入外部字幕: $filePath');
+        final logger = AppLogger();
+        logger.i('Player', '导入外部字幕: $filePath');
 
         final playerService = _PlayerScreenState.activePlayerService;
         if (playerService != null) {
-          await playerService.loadLibassSubtitle(filePath);
+          var pathToLoad = filePath;
+          final lowerExt = filePath.split('.').last.toLowerCase();
+          if (playerService.coreType == PlayerCoreType.exoPlayer &&
+              (lowerExt == 'ass' || lowerExt == 'ssa')) {
+            pathToLoad = await SubtitleProcessor.convertAssToSrt(filePath);
+            logger.i('Player', '导入字幕: EXO内核已将 ASS/SSA 转为 SRT: $pathToLoad');
+          }
+          await playerService.loadLibassSubtitle(pathToLoad);
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text('已导入并加载字幕: ${result.files.single.name}')),
