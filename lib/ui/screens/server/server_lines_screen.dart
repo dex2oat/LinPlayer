@@ -1,17 +1,117 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/providers/app_providers.dart';
+import '../../../core/services/ext_domain_service.dart';
 
 /// 服务器线路管理页面
-class ServerLinesScreen extends ConsumerWidget {
+class ServerLinesScreen extends ConsumerStatefulWidget {
   final String serverId;
   
   const ServerLinesScreen({super.key, required this.serverId});
   
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ServerLinesScreen> createState() => _ServerLinesScreenState();
+}
+
+class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
+  bool _isSyncing = false;
+  
+  Future<void> _syncLines() async {
+    final config = ref.read(extDomainConfigProvider);
+    if (config == null || config.extDomainUrl.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先配置线路同步地址')),
+      );
+      return;
+    }
+
+    final servers = ref.read(serverListProvider);
+    final server = servers.firstWhere((s) => s.id == widget.serverId);
+    
+    if (server.authToken == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('服务器未登录，无法同步')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSyncing = true;
+    });
+
+    try {
+      final service = ref.read(extDomainServiceProvider);
+      final lines = await service.fetchExtDomains(
+        extDomainUrl: config.extDomainUrl,
+        embyServerUrl: server.baseUrl,
+        embyToken: server.authToken!,
+      );
+
+      if (lines.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('未获取到线路列表')),
+          );
+        }
+        return;
+      }
+
+      // 将获取的线路转换为 ServerLine 并更新到当前服务器
+      final newLines = lines.map((l) => ServerLine(
+        id: '${DateTime.now().millisecondsSinceEpoch}_${l.name}',
+        name: l.name,
+        url: l.url,
+        remark: l.remark,
+      )).toList();
+
+      // 合并现有线路和新线路（去重）
+      final existingLines = server.lines;
+      final mergedLines = [...existingLines];
+      for (final newLine in newLines) {
+        if (!mergedLines.any((l) => l.url == newLine.url)) {
+          mergedLines.add(newLine);
+        }
+      }
+
+      final updatedServer = server.copyWith(lines: mergedLines);
+      ref.read(serverListProvider.notifier).updateServer(updatedServer);
+      
+      // 如果当前选中的就是这个服务器，也更新当前服务器
+      final currentServer = ref.read(currentServerProvider);
+      if (currentServer?.id == widget.serverId) {
+        ref.read(currentServerProvider.notifier).state = updatedServer;
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('成功同步 ${lines.length} 条线路')),
+        );
+      }
+    } on ExtDomainException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('同步失败: ${e.message}')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('同步失败: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSyncing = false;
+        });
+      }
+    }
+  }
+  
+  @override
+  Widget build(BuildContext context) {
     final servers = ref.watch(serverListProvider);
-    final server = servers.firstWhere((s) => s.id == serverId);
+    final server = servers.firstWhere((s) => s.id == widget.serverId);
     
     return Scaffold(
       appBar: AppBar(
@@ -24,6 +124,19 @@ class ServerLinesScreen extends ConsumerWidget {
             ),
           ],
         ),
+        actions: [
+          IconButton(
+            icon: _isSyncing
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.sync),
+            onPressed: _isSyncing ? null : _syncLines,
+            tooltip: '同步线路',
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -42,7 +155,7 @@ class ServerLinesScreen extends ConsumerWidget {
                       : null,
                   child: ListTile(
                     onTap: () {
-                      ref.read(serverListProvider.notifier).setActiveLine(serverId, index);
+                      ref.read(serverListProvider.notifier).setActiveLine(widget.serverId, index);
                     },
                     title: Text(line.name),
                     subtitle: Column(
@@ -60,11 +173,11 @@ class ServerLinesScreen extends ConsumerWidget {
                           Icon(Icons.check_circle, color: Theme.of(context).colorScheme.primary),
                         IconButton(
                           icon: const Icon(Icons.edit, size: 20),
-                          onPressed: () => _editLine(context, ref, serverId, line),
+                          onPressed: () => _editLine(context, ref, widget.serverId, line),
                         ),
                         IconButton(
                           icon: Icon(Icons.delete, size: 20, color: Theme.of(context).colorScheme.error),
-                          onPressed: () => _deleteLine(context, ref, serverId, line),
+                          onPressed: () => _deleteLine(context, ref, widget.serverId, line),
                         ),
                       ],
                     ),
@@ -76,7 +189,7 @@ class ServerLinesScreen extends ConsumerWidget {
           Padding(
             padding: const EdgeInsets.all(16),
             child: FilledButton.icon(
-              onPressed: () => _addLine(context, ref, serverId),
+              onPressed: () => _addLine(context, ref),
               icon: const Icon(Icons.add),
               label: const Text('添加线路'),
             ),
@@ -86,7 +199,8 @@ class ServerLinesScreen extends ConsumerWidget {
     );
   }
   
-  void _addLine(BuildContext context, WidgetRef ref, String serverId) {
+  void _addLine(BuildContext context, WidgetRef ref) {
+    final serverId = widget.serverId;
     final nameController = TextEditingController();
     final urlController = TextEditingController();
     final remarkController = TextEditingController();

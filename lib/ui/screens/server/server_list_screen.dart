@@ -155,7 +155,7 @@ class _ServerListScreenState extends ConsumerState<ServerListScreen> {
               title: const Text('编辑信息'),
               onTap: () {
                 Navigator.pop(context);
-                // TODO: 编辑服务器
+                context.push('/edit/${server.id}');
               },
             ),
             ListTile(

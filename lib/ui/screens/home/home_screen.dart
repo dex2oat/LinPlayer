@@ -187,7 +187,7 @@ class _ServerSelectorOverlayState extends State<_ServerSelectorOverlay>
         animation: _fadeAnimation,
         builder: (context, child) {
           return Container(
-            color: Colors.black.withValues(alpha: 0.3 * _fadeAnimation.value),
+            color: Colors.transparent,
             child: child,
           );
         },
@@ -210,124 +210,83 @@ class _ServerSelectorOverlayState extends State<_ServerSelectorOverlay>
                           filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
                           child: Container(
                             decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.85),
+                              color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.9),
                               borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.1),
-                                width: 1,
-                              ),
                             ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Padding(
-                                  padding: const EdgeInsets.all(16),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.swap_horiz,
-                                        size: 20,
-                                        color: Theme.of(context).colorScheme.primary,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      const Text(
-                                        '切换服务器',
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                Divider(
-                                  height: 1,
-                                  color: Colors.white.withValues(alpha: 0.1),
-                                ),
-                                ConstrainedBox(
-                                  constraints: const BoxConstraints(maxHeight: 350),
-                                  child: ListView.builder(
-                                    shrinkWrap: true,
-                                    itemCount: widget.servers.length,
-                                    itemBuilder: (context, index) {
-                                      final server = widget.servers[index];
-                                      final isCurrent = server.id == currentServerId;
-                                      return Material(
-                                        color: Colors.transparent,
-                                        child: InkWell(
-                                          onTap: () {
-                                            _dismiss();
-                                            Future.delayed(const Duration(milliseconds: 200), () {
-                                              ref.read(currentServerProvider.notifier).state = server;
-                                              if (server.authToken != null) {
-                                                ref.read(authStateProvider.notifier).state = AuthState.authenticated;
-                                              }
-                                              ref.invalidate(librariesProvider);
-                                              ref.invalidate(resumeItemsProvider);
-                                              ref.invalidate(randomRecommendationsProvider);
-                                            });
-                                          },
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                            child: Row(
-                                              children: [
-                                                Container(
-                                                  width: 40,
-                                                  height: 40,
-                                                  decoration: BoxDecoration(
-                                                    color: isCurrent
-                                                        ? const Color(0xFF5B8DEF).withValues(alpha: 0.2)
-                                                        : Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                                                    borderRadius: BorderRadius.circular(10),
-                                                  ),
-                                                  child: server.iconUrl != null
-                                                      ? ClipRRect(
-                                                          borderRadius: BorderRadius.circular(10),
-                                                          child: MediaImage(
-                                                            imageUrl: server.iconUrl,
-                                                            width: 40,
-                                                            height: 40,
-                                                            fit: BoxFit.cover,
-                                                          ),
-                                                        )
-                                                      : Icon(
-                                                          Icons.dns,
-                                                          size: 20,
-                                                          color: isCurrent
-                                                              ? const Color(0xFF5B8DEF)
-                                                              : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
-                                                        ),
-                                                ),
-                                                const SizedBox(width: 12),
-                                                Expanded(
-                                                  child: Text(
-                                                    server.name,
-                                                    style: TextStyle(
-                                                      fontSize: 15,
-                                                      fontWeight: isCurrent ? FontWeight.w600 : FontWeight.w500,
-                                                      color: isCurrent
-                                                          ? const Color(0xFF5B8DEF)
-                                                          : Theme.of(context).colorScheme.onSurface,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxHeight: 350),
+                              child: ListView.builder(
+                                shrinkWrap: true,
+                                itemCount: widget.servers.length,
+                                itemBuilder: (context, index) {
+                                  final server = widget.servers[index];
+                                  final isCurrent = server.id == currentServerId;
+                                  return Material(
+                                    color: Colors.transparent,
+                                    child: InkWell(
+                                      onTap: () {
+                                        _dismiss();
+                                        Future.delayed(const Duration(milliseconds: 200), () {
+                                          ref.read(currentServerProvider.notifier).state = server;
+                                          if (server.authToken != null) {
+                                            ref.read(authStateProvider.notifier).state = AuthState.authenticated;
+                                          }
+                                          ref.invalidate(librariesProvider);
+                                          ref.invalidate(resumeItemsProvider);
+                                          ref.invalidate(randomRecommendationsProvider);
+                                        });
+                                      },
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                        child: Row(
+                                          children: [
+                                            Container(
+                                              width: 40,
+                                              height: 40,
+                                              decoration: BoxDecoration(
+                                                color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                                                borderRadius: BorderRadius.circular(10),
+                                              ),
+                                              child: server.iconUrl != null
+                                                  ? ClipRRect(
+                                                      borderRadius: BorderRadius.circular(10),
+                                                      child: MediaImage(
+                                                        imageUrl: server.iconUrl,
+                                                        width: 40,
+                                                        height: 40,
+                                                        fit: BoxFit.cover,
+                                                      ),
+                                                    )
+                                                  : Icon(
+                                                      Icons.dns,
+                                                      size: 20,
+                                                      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
                                                     ),
-                                                  ),
-                                                ),
-                                                if (isCurrent)
-                                                  const Icon(
-                                                    Icons.check_circle,
-                                                    color: Color(0xFF5B8DEF),
-                                                    size: 20,
-                                                  ),
-                                              ],
                                             ),
-                                          ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Text(
+                                                server.name,
+                                                style: TextStyle(
+                                                  fontSize: 15,
+                                                  fontWeight: FontWeight.w500,
+                                                  color: Theme.of(context).colorScheme.onSurface,
+                                                ),
+                                              ),
+                                            ),
+                                            if (isCurrent)
+                                              Icon(
+                                                Icons.check_circle,
+                                                color: Theme.of(context).colorScheme.primary,
+                                                size: 20,
+                                              ),
+                                          ],
                                         ),
-                                      );
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                              ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
                             ),
                           ),
                         ),

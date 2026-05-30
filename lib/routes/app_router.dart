@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../ui/screens/home/home_screen.dart';
 import '../ui/screens/server/server_list_screen.dart';
 import '../ui/screens/server/add_server_screen.dart';
+import '../ui/screens/server/edit_server_screen.dart';
 import '../ui/screens/server/server_lines_screen.dart';
 import '../ui/screens/server/icon_select_screen.dart';
 import '../ui/screens/search/search_screen.dart';
@@ -47,6 +48,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                   GoRoute(
                     path: 'add',
                     builder: (context, state) => const AddServerScreen(),
+                  ),
+                  GoRoute(
+                    path: 'edit/:serverId',
+                    builder: (context, state) => EditServerScreen(
+                      serverId: state.pathParameters['serverId']!,
+                    ),
                   ),
                   GoRoute(
                     path: 'lines/:serverId',
