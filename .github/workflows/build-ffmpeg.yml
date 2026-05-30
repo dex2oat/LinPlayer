@@ -248,11 +248,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore: update FFmpeg extension AAR (auto-build)
-
-- ExoPlayer ${{ env.EXOPLAYER_VERSION }}
-- FFmpeg ${{ env.FFMPEG_VERSION }}
-- Supported decoders: PGS, DVB, DVD, ASS, SSA, SRT, WEBVTT"
+            git commit -m "chore: update FFmpeg extension AAR (auto-build)" -m "- ExoPlayer ${{ env.EXOPLAYER_VERSION }}" -m "- FFmpeg ${{ env.FFMPEG_VERSION }}" -m "- Supported decoders: PGS, DVB, DVD, ASS, SSA, SRT, WEBVTT"
             git push
             echo "✅ AAR committed to android/exoplayer-ffmpeg/libs/"
           fi
