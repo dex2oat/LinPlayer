@@ -358,6 +358,12 @@ class _HomeAppBarState extends ConsumerState<_HomeAppBar> {
   }
 
   @override
+  void deactivate() {
+    _hideServerMenu();
+    super.deactivate();
+  }
+
+  @override
   void dispose() {
     _hideServerMenu();
     super.dispose();
@@ -406,14 +412,14 @@ class _HomeAppBarState extends ConsumerState<_HomeAppBar> {
               IconButton(
                 icon: const Icon(Icons.collections_bookmark),
                 onPressed: () {
-                  context.push('/libraries');
+                  context.go('/libraries');
                 },
               ),
               // 搜索按钮
               IconButton(
                 icon: const Icon(Icons.search),
                 onPressed: () {
-                  context.push('/search');
+                  context.go('/search');
                 },
               ),
             ],
@@ -954,7 +960,7 @@ class LibrariesSection extends ConsumerWidget {
                     ),
                   ),
                   GestureDetector(
-                    onTap: () => context.push('/libraries'),
+                    onTap: () => context.go('/libraries'),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [

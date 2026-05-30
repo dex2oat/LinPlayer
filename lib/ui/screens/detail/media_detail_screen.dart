@@ -778,7 +778,7 @@ class _MoviePlayButtons extends ConsumerWidget {
               title: const Text('搜索其他播放源'),
               onTap: () {
                 Navigator.pop(context);
-                context.push('/search');
+                context.go('/search');
               },
             ),
             ListTile(

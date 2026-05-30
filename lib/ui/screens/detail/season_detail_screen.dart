@@ -592,7 +592,7 @@ class _PlayButtons extends ConsumerWidget {
               title: const Text('搜索其他播放源'),
               onTap: () {
                 Navigator.pop(ctx);
-                context.push('/search');
+                context.go('/search');
               },
             ),
             ListTile(

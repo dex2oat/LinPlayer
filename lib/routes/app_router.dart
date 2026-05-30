@@ -23,12 +23,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
     initialLocation: '/',
+    // 处理导航异常，避免闪退
     onException: (context, state, router) {
-      // 处理导航异常，防止根路由pop导致闪退
-      if (state.uri.path == '/' || state.uri.path == '/home') {
-        // 在根路由时不做任何操作，避免闪退
-        return;
-      }
+      // 安全地回到根路由
       router.go('/');
     },
     routes: [
@@ -45,6 +42,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 path: '/',
                 builder: (context, state) => const ServerListScreen(),
                 routes: [
+                  GoRoute(
+                    path: 'home',
+                    builder: (context, state) => const HomeScreen(),
+                  ),
                   GoRoute(
                     path: 'add',
                     builder: (context, state) => const AddServerScreen(),
@@ -90,12 +91,6 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
         ],
-      ),
-      
-      // 首页（从服务器进入）
-      GoRoute(
-        path: '/home',
-        builder: (context, state) => const HomeScreen(),
       ),
       
       // 媒体详情
