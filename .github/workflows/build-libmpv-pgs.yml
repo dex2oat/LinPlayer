@@ -124,8 +124,9 @@ jobs:
             echo "Extracting $abi from $(basename $jar)..."
             mkdir -p "built-libraries/$abi"
             
-            # Extract JAR contents using absolute path
-            jar xf "$jar" -C "built-libraries/$abi" 2>&1 || echo "Warning: failed to extract $jar"
+            # Extract JAR contents - use subshell with absolute path
+            jar_abs_path="$PWD/$jar"
+            (cd "built-libraries/$abi" && jar xf "$jar_abs_path") 2>&1 || echo "Warning: failed to extract $jar"
           done
           
           echo "=== Extracted libraries ==="
