@@ -91,10 +91,17 @@ jobs:
             for abi in arm64-v8a armeabi-v7a x86 x86_64; do
               jar_name="default-${abi}.jar"
               url="https://github.com/${{ env.BUILD_REPO }}/releases/download/${{ env.RELEASE_TAG }}/${jar_name}"
-              echo "Downloading $jar_name..."
-              wget -q "$url" -O "$jar_name" || echo "Failed to download $jar_name"
+              echo "Downloading $jar_name from $url..."
+              wget --timeout=60 "$url" -O "$jar_name" 2>&1 | tail -5
+              if [ $? -eq 0 ] && [ -f "$jar_name" ]; then
+                echo "✅ Downloaded $jar_name ($(stat -c%s "$jar_name") bytes)"
+              else
+                echo "❌ Failed to download $jar_name"
+                rm -f "$jar_name"
+              fi
             done
             
+            echo "=== Downloaded files ==="
             ls -la
           fi
       
@@ -104,11 +111,18 @@ jobs:
           
           # Extract from built or downloaded JARs
           find libmpv-build -name "default-*.jar" -type f | while read jar; do
+            if [ ! -f "$jar" ]; then
+              echo "Skipping non-existent file: $jar"
+              continue
+            fi
+            
             abi=$(basename "$jar" .jar | sed 's/default-//')
             echo "Extracting $abi from $(basename $jar)..."
             mkdir -p "built-libraries/$abi"
+            
+            # Extract JAR contents
             cd "built-libraries/$abi"
-            jar xf "$jar"
+            jar xf "$jar" 2>&1 || echo "Warning: failed to extract $jar"
             cd ../..
           done
           
