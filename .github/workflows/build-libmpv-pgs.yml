@@ -6,37 +6,43 @@ on:
     - cron: '0 0 * * 3'
 
 env:
-  MEDIA_KIT_TAG: 1.3.6
+  BUILD_REPO: media-kit/libmpv-android-video-build
 
 jobs:
   build-libmpv:
-    name: Build libmpv (${{ matrix.arch }})
+    name: Build libmpv with PGS
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - arch: arm64
-            abi: arm64-v8a
-            ndk_arch: aarch64
-          - arch: armv7
-            abi: armeabi-v7a
-            ndk_arch: arm
-          - arch: x86_64
-            abi: x86_64
-            ndk_arch: x86_64
-          - arch: x86
-            abi: x86
-            ndk_arch: i686
     
     steps:
-      - name: Checkout media-kit
+      - name: Checkout libmpv-android-video-build
         uses: actions/checkout@v4
         with:
-          repository: alexmercerind/media-kit
-          ref: libs-android-video-v${{ env.MEDIA_KIT_TAG }}
-          path: media-kit
+          repository: ${{ env.BUILD_REPO }}
+          path: libmpv-build
       
-      - name: Setup dependencies
+      - name: Check build configuration
+        run: |
+          echo "=== Build configuration files ==="
+          find libmpv-build -name "*.sh" -o -name "build.gradle" -o -name "CMakeLists.txt" | head -20
+          
+          echo "=== Looking for decoder configuration ==="
+          grep -r "pgssub\|subtitle\|decoder" libmpv-build --include="*.sh" --include="*.gradle" --include="*.txt" 2>/dev/null | head -20 || true
+      
+      - name: Enable PGS decoder in build
+        run: |
+          # Find and modify build scripts to enable pgssub
+          cd libmpv-build
+          
+          # Look for ffmpeg configuration
+          FFMPEG_CONFIG=$(find . -name "*.sh" -exec grep -l "disable-everything\|enable-decoder" {} \; | head -1)
+          if [ -n "$FFMPEG_CONFIG" ]; then
+            echo "Found ffmpeg config: $FFMPEG_CONFIG"
+            # Add pgssub decoder
+            sed -i 's/--disable-everything/--disable-everything --enable-decoder=pgssub --enable-decoder=dvdsub --enable-decoder=dvbsub/' "$FFMPEG_CONFIG" || true
+            echo "Modified ffmpeg config"
+          fi
+      
+      - name: Setup build environment
         run: |
           sudo apt-get update
           sudo apt-get install -y python3 python3-pip ninja-build cmake pkg-config
@@ -48,112 +54,96 @@ jobs:
           ndk-version: r25c
           link-to-sdk: true
       
-      - name: List available build scripts
+      - name: Build libmpv (all architectures)
         run: |
-          echo "=== Available build scripts ==="
-          find media-kit -name "build.sh" -path "*/android/*" | sort
-          echo "=== Script directories ==="
-          ls -la media-kit/build/scripts/android/ 2>/dev/null || true
-      
-      - name: Build libmpv
-        run: |
-          cd media-kit
-          # Check if build script exists with different naming
-          SCRIPT_PATH="build/scripts/android/${{ matrix.arch }}/build.sh"
-          if [ ! -f "$SCRIPT_PATH" ]; then
-            # Try alternative names
-            ALT_PATHS=(
-              "build/scripts/android/${{ matrix.abi }}/build.sh"
-              "build/scripts/android/${{ matrix.ndk_arch }}/build.sh"
-            )
-            for alt in "${ALT_PATHS[@]}"; do
-              if [ -f "$alt" ]; then
-                SCRIPT_PATH="$alt"
-                break
-              fi
-            done
-          fi
+          cd libmpv-build
+          # Check available build scripts
+          ls -la build/ 2>/dev/null || true
+          ls -la scripts/ 2>/dev/null || true
           
-          if [ ! -f "$SCRIPT_PATH" ]; then
-            echo "❌ Build script not found for ${{ matrix.arch }}"
-            echo "Searched paths:"
-            echo "  - build/scripts/android/${{ matrix.arch }}/build.sh"
-            echo "  - build/scripts/android/${{ matrix.abi }}/build.sh"
-            echo "  - build/scripts/android/${{ matrix.ndk_arch }}/build.sh"
-            exit 1
+          # Try to build
+          if [ -f "build.sh" ]; then
+            bash build.sh
+          elif [ -f "gradlew" ]; then
+            ./gradlew assembleRelease
+          else
+            echo "No build script found"
+            find . -name "build.sh" -o -name "gradlew" | head -10
           fi
-          
-          echo "📦 Using build script: $SCRIPT_PATH"
-          chmod +x "$SCRIPT_PATH"
-          bash "$SCRIPT_PATH"
         continue-on-error: true
       
-      - name: Find built libraries
+      - name: Extract JARs
         run: |
-          echo "=== Searching for built libmpv.so ==="
-          find media-kit -name "libmpv.so" -type f 2>/dev/null | while read f; do
-            echo "Found: $f ($(stat -c%s "$f") bytes)"
+          echo "=== Looking for built JARs ==="
+          find libmpv-build -name "*.jar" -type f 2>/dev/null | while read jar; do
+            echo "Found JAR: $jar"
           done
           
-          # Check common output directories
-          for dir in "media-kit/build" "media-kit/output" "media-kit/libs"; do
-            if [ -d "$dir" ]; then
-              echo "=== Contents of $dir ==="
-              find "$dir" -name "*.so" -type f 2>/dev/null
-            fi
+          # Create output directory
+          mkdir -p built-libraries
+          
+          # Extract libmpv.so from JARs
+          find libmpv-build -name "default-*.jar" -type f | while read jar; do
+            abi=$(basename "$jar" .jar | sed 's/default-//')
+            echo "Extracting $abi from $jar..."
+            mkdir -p "built-libraries/$abi"
+            cd "built-libraries/$abi"
+            jar xf "$jar"
+            cd ../..
           done
+          
+          echo "=== Extracted libraries ==="
+          find built-libraries -name "libmpv.so" -exec ls -lh {} \;
       
       - name: Verify PGS support
         run: |
-          find media-kit -name "libmpv.so" -type f | head -1 | while read lib; do
-            if [ -f "$lib" ]; then
-              echo "Checking $lib..."
-              if strings "$lib" | grep -q "pgssub"; then
-                echo "✅ PGS decoder found"
-              else
-                echo "⚠️ PGS decoder not found"
-              fi
+          find built-libraries -name "libmpv.so" | while read lib; do
+            echo "Checking $(basename $(dirname $lib))..."
+            if strings "$lib" | grep -q "pgssub"; then
+              echo "✅ PGS decoder found"
+            else
+              echo "⚠️ PGS decoder not found"
             fi
           done
         continue-on-error: true
       
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: libmpv-${{ matrix.abi }}
-          path: media-kit/**/libmpv.so
+          name: libmpv-pgs-build
+          path: built-libraries/**/libmpv.so
           if-no-files-found: ignore
           retention-days: 90
 
   commit-libraries:
-    name: Commit built libraries
+    name: Commit to LinPlayer
     needs: build-libmpv
     runs-on: ubuntu-latest
     steps:
       - name: Checkout LinPlayer
         uses: actions/checkout@v4
       
-      - name: Download artifacts
+      - name: Download built libraries
         uses: actions/download-artifact@v4
         with:
-          path: built-libs
-          pattern: libmpv-*
+          name: libmpv-pgs-build
+          path: downloaded
       
       - name: Copy to jniLibs
         run: |
           mkdir -p android/app/src/main/jniLibs
           
-          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
-            if [ -d "built-libs/libmpv-$abi" ]; then
-              mkdir -p "android/app/src/main/jniLibs/$abi"
-              find "built-libs/libmpv-$abi" -name "libmpv.so" -exec cp {} "android/app/src/main/jniLibs/$abi/" \;
-              echo "✅ Copied libmpv.so for $abi"
-            fi
+          find downloaded -name "libmpv.so" | while read lib; do
+            # Extract ABI from path
+            abi=$(basename $(dirname "$lib"))
+            mkdir -p "android/app/src/main/jniLibs/$abi"
+            cp "$lib" "android/app/src/main/jniLibs/$abi/"
+            echo "✅ Copied libmpv.so for $abi"
           done
       
-      - name: Verify and commit
+      - name: Commit and push
         run: |
-          echo "=== jniLibs contents ==="
+          echo "=== Final jniLibs ==="
           find android/app/src/main/jniLibs -name "*.so" -exec ls -lh {} \;
           
           git config --local user.email "action@github.com"
@@ -161,9 +151,12 @@ jobs:
           git add android/app/src/main/jniLibs/
           
           if git diff --cached --quiet; then
-            echo "No libraries to commit"
+            echo "No changes to commit"
           else
-            git commit -m "chore: update libmpv with PGS support (media-kit v${{ env.MEDIA_KIT_TAG }})"
+            git commit -m "chore: update libmpv with PGS support
+
+Built from ${{ env.BUILD_REPO }}
+Enabled decoders: pgssub, dvdsub, dvbsub"
             git push
             echo "✅ Libraries committed"
           fi
