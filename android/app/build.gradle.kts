@@ -42,6 +42,17 @@ android {
         }
     }
 
+    packagingOptions {
+        // 优先使用 jniLibs 中的 libmpv.so（支持 PGS 的版本）
+        // 覆盖 media_kit 内置的 libmpv.so
+        pickFirsts += listOf(
+            "lib/arm64-v8a/libmpv.so",
+            "lib/armeabi-v7a/libmpv.so",
+            "lib/x86/libmpv.so",
+            "lib/x86_64/libmpv.so"
+        )
+    }
+
     sourceSets {
         getByName("main") {
             jniLibs.srcDirs("src/main/jniLibs")
