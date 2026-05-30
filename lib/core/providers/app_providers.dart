@@ -5,6 +5,7 @@ import '../api/api_interfaces.dart';
 import '../api/emby_api.dart';
 import '../api/mock_api.dart';
 import '../services/cache_service.dart';
+import '../services/ext_domain_service.dart';
 
 /// 当前API客户端Provider
 /// 
@@ -514,3 +515,116 @@ class WebdavConfig {
     required this.password,
   });
 }
+
+/// ==========================================
+/// 扩展线路同步Providers
+/// ==========================================
+
+/// 扩展线路同步服务Provider
+final extDomainServiceProvider = Provider<ExtDomainService>((ref) {
+  return ExtDomainService();
+});
+
+/// 扩展线路同步配置Provider
+final extDomainConfigProvider = StateNotifierProvider<ExtDomainConfigNotifier, ExtDomainConfig?>((ref) {
+  return ExtDomainConfigNotifier();
+});
+
+class ExtDomainConfigNotifier extends StateNotifier<ExtDomainConfig?> {
+  ExtDomainConfigNotifier() : super(null) {
+    _loadConfig();
+  }
+
+  static const _configKey = 'linplayer_ext_domain_config';
+
+  Future<void> _loadConfig() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonStr = prefs.getString(_configKey);
+      if (jsonStr != null) {
+        final json = jsonDecode(jsonStr) as Map<String, dynamic>;
+        state = ExtDomainConfig(
+          extDomainUrl: json['extDomainUrl'] as String,
+          autoSync: json['autoSync'] as bool? ?? false,
+        );
+      }
+    } catch (e) {
+      // 加载失败
+    }
+  }
+
+  Future<void> _saveConfig() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (state != null) {
+        await prefs.setString(_configKey, jsonEncode({
+          'extDomainUrl': state!.extDomainUrl,
+          'autoSync': state!.autoSync,
+        }));
+      } else {
+        await prefs.remove(_configKey);
+      }
+    } catch (e) {
+      // 保存失败
+    }
+  }
+
+  void setConfig(String extDomainUrl, {bool autoSync = false}) {
+    state = ExtDomainConfig(
+      extDomainUrl: extDomainUrl,
+      autoSync: autoSync,
+    );
+    _saveConfig();
+  }
+
+  void clearConfig() {
+    state = null;
+    _saveConfig();
+  }
+
+  void setAutoSync(bool autoSync) {
+    if (state != null) {
+      state = ExtDomainConfig(
+        extDomainUrl: state!.extDomainUrl,
+        autoSync: autoSync,
+      );
+      _saveConfig();
+    }
+  }
+}
+
+class ExtDomainConfig {
+  final String extDomainUrl;
+  final bool autoSync;
+
+  ExtDomainConfig({
+    required this.extDomainUrl,
+    this.autoSync = false,
+  });
+}
+
+/// 同步线路结果Provider
+final syncExtDomainsProvider = FutureProvider.family<List<ExtServerLine>, String>((ref, serverId) async {
+  final service = ref.read(extDomainServiceProvider);
+  final config = ref.read(extDomainConfigProvider);
+  final servers = ref.read(serverListProvider);
+  
+  if (config == null || config.extDomainUrl.isEmpty) {
+    return [];
+  }
+  
+  final server = servers.where((s) => s.id == serverId).firstOrNull;
+  if (server == null || server.authToken == null) {
+    return [];
+  }
+  
+  try {
+    return await service.fetchExtDomains(
+      extDomainUrl: config.extDomainUrl,
+      embyServerUrl: server.baseUrl,
+      embyToken: server.authToken!,
+    );
+  } catch (e) {
+    return [];
+  }
+});

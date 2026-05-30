@@ -236,9 +236,9 @@ class _DetailHeaderState extends ConsumerState<_DetailHeader> {
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
     final isMovie = widget.item.type == 'Movie';
-    // 电影：根据手机屏幕比例适配，使用 cover 填满宽度，高度设为屏幕宽度的70%（接近16:9）
+    // 电影：根据手机屏幕比例适配，使用 cover 填满宽度，高度设为屏幕宽度的85%（显示更多海报内容）
     // 剧集：使用 cover 展示更多 backdrop
-    final headerHeight = isMovie ? screenWidth * 0.7 : screenWidth * 0.55;
+    final headerHeight = isMovie ? screenWidth * 0.85 : screenWidth * 0.75;
     final api = ref.read(apiClientProvider);
     
     final imageUrl = widget.item.primaryImageTag != null

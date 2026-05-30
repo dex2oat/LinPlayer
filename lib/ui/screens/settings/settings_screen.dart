@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/services/webdav_service.dart';
+import '../../../core/services/ext_domain_service.dart';
 import '../../../core/services/app_logger.dart';
 import '../../../core/services/cache_service.dart';
 import '../../../core/utils/danmaku_filter.dart';
@@ -54,6 +55,17 @@ class SettingsScreen extends ConsumerWidget {
             title: '备份与恢复',
             subtitle: '导出/导入服务器配置、WebDAV同步',
             onTap: () => _showBackupRestore(context),
+          ),
+          _SettingsCard(
+            icon: Icons.sync,
+            title: '线路同步',
+            subtitle: '配置扩展线路同步服务',
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const ExtDomainSettingsScreen()),
+              );
+            },
           ),
         ],
       ),
@@ -1850,6 +1862,258 @@ class BackupRestoreScreen extends ConsumerWidget {
             },
             child: const Text('还原'),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 扩展线路同步设置页面
+class ExtDomainSettingsScreen extends ConsumerStatefulWidget {
+  const ExtDomainSettingsScreen({super.key});
+
+  @override
+  ConsumerState<ExtDomainSettingsScreen> createState() => _ExtDomainSettingsScreenState();
+}
+
+class _ExtDomainSettingsScreenState extends ConsumerState<ExtDomainSettingsScreen> {
+  final _urlController = TextEditingController();
+  bool _isLoading = false;
+  String? _testResult;
+
+  @override
+  void initState() {
+    super.initState();
+    final config = ref.read(extDomainConfigProvider);
+    if (config != null) {
+      _urlController.text = config.extDomainUrl;
+    }
+  }
+
+  @override
+  void dispose() {
+    _urlController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _testConnection() async {
+    final url = _urlController.text.trim();
+    if (url.isEmpty) return;
+
+    setState(() {
+      _isLoading = true;
+      _testResult = null;
+    });
+
+    try {
+      final service = ref.read(extDomainServiceProvider);
+      final available = await service.checkServiceAvailable(url);
+      setState(() {
+        _testResult = available ? '连接成功' : '连接失败';
+      });
+    } catch (e) {
+      setState(() {
+        _testResult = '连接失败: $e';
+      });
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _saveConfig() async {
+    final url = _urlController.text.trim();
+    if (url.isEmpty) {
+      ref.read(extDomainConfigProvider.notifier).clearConfig();
+    } else {
+      ref.read(extDomainConfigProvider.notifier).setConfig(url);
+    }
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已保存')),
+      );
+    }
+  }
+
+  Future<void> _syncLines() async {
+    final config = ref.read(extDomainConfigProvider);
+    if (config == null || config.extDomainUrl.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先配置线路同步地址')),
+      );
+      return;
+    }
+
+    final currentServer = ref.read(currentServerProvider);
+    if (currentServer == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先选择一个服务器')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final service = ref.read(extDomainServiceProvider);
+      final lines = await service.fetchExtDomains(
+        extDomainUrl: config.extDomainUrl,
+        embyServerUrl: currentServer.baseUrl,
+        embyToken: currentServer.authToken ?? '',
+      );
+
+      if (lines.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('未获取到线路列表')),
+          );
+        }
+        return;
+      }
+
+      // 将获取的线路转换为 ServerLine 并更新到当前服务器
+      final newLines = lines.map((l) => ServerLine(
+        id: const Uuid().v4(),
+        name: l.name,
+        url: l.url,
+        remark: l.remark,
+      )).toList();
+
+      // 合并现有线路和新线路（去重）
+      final existingLines = currentServer.lines;
+      final mergedLines = [...existingLines];
+      for (final newLine in newLines) {
+        if (!mergedLines.any((l) => l.url == newLine.url)) {
+          mergedLines.add(newLine);
+        }
+      }
+
+      final updatedServer = currentServer.copyWith(lines: mergedLines);
+      ref.read(serverListProvider.notifier).updateServer(updatedServer);
+      ref.read(currentServerProvider.notifier).state = updatedServer;
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('成功同步 ${lines.length} 条线路')),
+        );
+      }
+    } on ExtDomainException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('同步失败: ${e.message}')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('同步失败: $e')),
+        );
+      }
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final config = ref.watch(extDomainConfigProvider);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('线路同步'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '扩展线路同步服务',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '配置 emby_ext_domains 服务地址，自动同步服务器线路列表。',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Theme.of(context).textTheme.bodySmall?.color,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _urlController,
+                    decoration: InputDecoration(
+                      labelText: '服务地址',
+                      hintText: 'https://ext.example.com',
+                      prefixIcon: const Icon(Icons.cloud_sync),
+                      border: const OutlineInputBorder(),
+                      suffixIcon: _isLoading
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: Padding(
+                                padding: EdgeInsets.all(12),
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            )
+                          : IconButton(
+                              icon: const Icon(Icons.check_circle_outline),
+                              onPressed: _testConnection,
+                            ),
+                    ),
+                    keyboardType: TextInputType.url,
+                  ),
+                  if (_testResult != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      _testResult!,
+                      style: TextStyle(
+                        color: _testResult == '连接成功'
+                            ? Colors.green
+                            : Theme.of(context).colorScheme.error,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _isLoading ? null : _saveConfig,
+            icon: const Icon(Icons.save),
+            label: const Text('保存配置'),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _isLoading ? null : _syncLines,
+            icon: const Icon(Icons.sync),
+            label: const Text('立即同步线路'),
+          ),
+          if (config != null && config.extDomainUrl.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(
+              '当前配置: ${config.extDomainUrl}',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).textTheme.bodySmall?.color,
+              ),
+            ),
+          ],
         ],
       ),
     );

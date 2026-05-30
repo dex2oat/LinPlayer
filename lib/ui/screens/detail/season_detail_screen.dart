@@ -198,8 +198,8 @@ class _EpisodeDetailScreenState extends ConsumerState<EpisodeDetailScreen> {
             // 播放选项
             SliverToBoxAdapter(
               child: playbackAsync.when(
-                data: (info) => PlaybackOptions(
-                  itemId: widget.episodeId,
+                data: (info) => _EpisodePlaybackOptions(
+                  episodeId: widget.episodeId,
                   info: info,
                 ),
                 loading: () => const SizedBox.shrink(),
@@ -298,8 +298,8 @@ class _DetailHeaderState extends ConsumerState<_DetailHeader> {
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
-    // 增加高度到 65% 屏幕宽度，让封面更完整可见
-    final headerHeight = screenWidth * 0.65;
+    // 增加高度到 85% 屏幕宽度，让封面显示更多内容
+    final headerHeight = screenWidth * 0.85;
     final api = ref.read(apiClientProvider);
     final imageUrl = widget.item.backdropImageTag != null
         ? api.image.getBackdropImageUrl(widget.item.id, tag: widget.item.backdropImageTag, maxWidth: 800)
@@ -441,6 +441,26 @@ class _DetailHeaderState extends ConsumerState<_DetailHeader> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 集播放选项包装器（确保 ConsumerWidget 正确 rebuild）
+class _EpisodePlaybackOptions extends ConsumerWidget {
+  final String episodeId;
+  final PlaybackInfo info;
+
+  const _EpisodePlaybackOptions({
+    required this.episodeId,
+    required this.info,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return PlaybackOptions(
+      key: ValueKey('episode_playback_${episodeId}_${info.mediaSources.length}'),
+      itemId: episodeId,
+      info: info,
     );
   }
 }

@@ -30,7 +30,10 @@ class PlaybackOptions extends ConsumerWidget {
       return streams.where((stream) => stream.isDefault == true).firstOrNull ??
           streams.firstOrNull;
     }
-    return streams.where((stream) => stream.index == selectedIndex).firstOrNull;
+    // 先尝试精确匹配 index，找不到则回退到默认或第一个
+    return streams.where((stream) => stream.index == selectedIndex).firstOrNull ??
+        streams.where((stream) => stream.isDefault == true).firstOrNull ??
+        streams.firstOrNull;
   }
 
   @override

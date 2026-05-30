@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -115,7 +116,232 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
     );
   }
+}
 
+/// 服务器选择器覆盖层（带动画和透明效果）
+class _ServerSelectorOverlay extends StatefulWidget {
+  final List<ServerConfig> servers;
+  final Offset buttonPosition;
+  final Size buttonSize;
+  final double screenWidth;
+  final double screenHeight;
+  final VoidCallback onDismiss;
+
+  const _ServerSelectorOverlay({
+    required this.servers,
+    required this.buttonPosition,
+    required this.buttonSize,
+    required this.screenWidth,
+    required this.screenHeight,
+    required this.onDismiss,
+  });
+
+  @override
+  State<_ServerSelectorOverlay> createState() => _ServerSelectorOverlayState();
+}
+
+class _ServerSelectorOverlayState extends State<_ServerSelectorOverlay>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _animationController;
+  late Animation<double> _fadeAnimation;
+  late Animation<Offset> _slideAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
+    );
+    _fadeAnimation = CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.easeOut,
+    );
+    _slideAnimation = Tween<Offset>(
+      begin: const Offset(0, -0.1),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.easeOutCubic,
+    ));
+    _animationController.forward();
+  }
+
+  @override
+  void dispose() {
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  void _dismiss() {
+    _animationController.reverse().then((_) {
+      widget.onDismiss();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: _dismiss,
+      child: AnimatedBuilder(
+        animation: _fadeAnimation,
+        builder: (context, child) {
+          return Container(
+            color: Colors.black.withValues(alpha: 0.3 * _fadeAnimation.value),
+            child: child,
+          );
+        },
+        child: Stack(
+          children: [
+            Positioned(
+              left: 16,
+              top: widget.buttonPosition.dy + widget.buttonSize.height + 8,
+              width: widget.screenWidth - 32,
+              child: SlideTransition(
+                position: _slideAnimation,
+                child: FadeTransition(
+                  opacity: _fadeAnimation,
+                  child: Consumer(
+                    builder: (context, ref, _) {
+                      final currentServerId = ref.watch(currentServerProvider)?.id;
+                      return ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: BackdropFilter(
+                          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.85),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.1),
+                                width: 1,
+                              ),
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.swap_horiz,
+                                        size: 20,
+                                        color: Theme.of(context).colorScheme.primary,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      const Text(
+                                        '切换服务器',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Divider(
+                                  height: 1,
+                                  color: Colors.white.withValues(alpha: 0.1),
+                                ),
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(maxHeight: 350),
+                                  child: ListView.builder(
+                                    shrinkWrap: true,
+                                    itemCount: widget.servers.length,
+                                    itemBuilder: (context, index) {
+                                      final server = widget.servers[index];
+                                      final isCurrent = server.id == currentServerId;
+                                      return Material(
+                                        color: Colors.transparent,
+                                        child: InkWell(
+                                          onTap: () {
+                                            _dismiss();
+                                            Future.delayed(const Duration(milliseconds: 200), () {
+                                              ref.read(currentServerProvider.notifier).state = server;
+                                              if (server.authToken != null) {
+                                                ref.read(authStateProvider.notifier).state = AuthState.authenticated;
+                                              }
+                                              ref.invalidate(librariesProvider);
+                                              ref.invalidate(resumeItemsProvider);
+                                              ref.invalidate(randomRecommendationsProvider);
+                                            });
+                                          },
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                            child: Row(
+                                              children: [
+                                                Container(
+                                                  width: 40,
+                                                  height: 40,
+                                                  decoration: BoxDecoration(
+                                                    color: isCurrent
+                                                        ? const Color(0xFF5B8DEF).withValues(alpha: 0.2)
+                                                        : Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                                                    borderRadius: BorderRadius.circular(10),
+                                                  ),
+                                                  child: server.iconUrl != null
+                                                      ? ClipRRect(
+                                                          borderRadius: BorderRadius.circular(10),
+                                                          child: MediaImage(
+                                                            imageUrl: server.iconUrl,
+                                                            width: 40,
+                                                            height: 40,
+                                                            fit: BoxFit.cover,
+                                                          ),
+                                                        )
+                                                      : Icon(
+                                                          Icons.dns,
+                                                          size: 20,
+                                                          color: isCurrent
+                                                              ? const Color(0xFF5B8DEF)
+                                                              : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                                                        ),
+                                                ),
+                                                const SizedBox(width: 12),
+                                                Expanded(
+                                                  child: Text(
+                                                    server.name,
+                                                    style: TextStyle(
+                                                      fontSize: 15,
+                                                      fontWeight: isCurrent ? FontWeight.w600 : FontWeight.w500,
+                                                      color: isCurrent
+                                                          ? const Color(0xFF5B8DEF)
+                                                          : Theme.of(context).colorScheme.onSurface,
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (isCurrent)
+                                                  const Icon(
+                                                    Icons.check_circle,
+                                                    color: Color(0xFF5B8DEF),
+                                                    size: 20,
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// 首页顶部栏
@@ -151,90 +377,16 @@ class _HomeAppBarState extends ConsumerState<_HomeAppBar> {
     final position = renderBox.localToGlobal(Offset.zero, ancestor: overlay);
     final size = renderBox.size;
     final screenWidth = MediaQuery.of(context).size.width;
+    final screenHeight = MediaQuery.of(context).size.height;
 
     _serverMenuOverlay = OverlayEntry(
-      builder: (context) => Stack(
-        children: [
-          GestureDetector(
-            onTap: _hideServerMenu,
-            child: Container(color: Colors.black54),
-          ),
-          Positioned(
-            left: 16,
-            top: position.dy + size.height + 8,
-            width: screenWidth - 32,
-            child: Material(
-              elevation: 8,
-              borderRadius: BorderRadius.circular(16),
-              color: Theme.of(context).colorScheme.surface,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text(
-                        '切换服务器',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                    const Divider(height: 1),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 350),
-                      child: ListView.builder(
-                        shrinkWrap: true,
-                        itemCount: servers.length,
-                        itemBuilder: (context, index) {
-                          final server = servers[index];
-                          final isCurrent = server.id == ref.read(currentServerProvider)?.id;
-                          return ListTile(
-                            leading: Container(
-                              width: 36,
-                              height: 36,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF5B8DEF).withValues(alpha: 0.15),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: server.iconUrl != null
-                                  ? ClipRRect(
-                                      borderRadius: BorderRadius.circular(8),
-                                      child: MediaImage(imageUrl: server.iconUrl, width: 36, height: 36, fit: BoxFit.cover),
-                                    )
-                                  : const Icon(Icons.dns, size: 18, color: Color(0xFF5B8DEF)),
-                            ),
-                            title: Text(server.name),
-                            subtitle: Text(
-                              server.activeLineUrl,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                            trailing: isCurrent
-                                ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
-                                : null,
-                            onTap: () {
-                              _hideServerMenu();
-                              ref.read(currentServerProvider.notifier).state = server;
-                              if (server.authToken != null) {
-                                ref.read(authStateProvider.notifier).state = AuthState.authenticated;
-                              }
-                              ref.invalidate(librariesProvider);
-                              ref.invalidate(resumeItemsProvider);
-                              ref.invalidate(randomRecommendationsProvider);
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
+      builder: (context) => _ServerSelectorOverlay(
+        servers: servers,
+        buttonPosition: position,
+        buttonSize: size,
+        screenWidth: screenWidth,
+        screenHeight: screenHeight,
+        onDismiss: _hideServerMenu,
       ),
     );
 
