@@ -27,6 +27,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import io.github.peerless2012.ass.media.kt.buildWithAssSupport
+import io.github.peerless2012.ass.media.type.AssRenderType
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -101,7 +103,15 @@ class ExoPlayerPlugin(
                 val startPositionMs = call.argument<Int>("startPositionMs") ?: 0
                 val dolbyVisionFix = call.argument<Boolean>("dolbyVisionFix") ?: false
                 val preferredSubtitleLanguage = call.argument<String>("preferredSubtitleLanguage")
-                createPlayer(videoUrl, startPositionMs, dolbyVisionFix, preferredSubtitleLanguage, result)
+                val enableAssSupport = call.argument<Boolean>("enableAssSupport") ?: false
+                createPlayer(
+                    videoUrl,
+                    startPositionMs,
+                    dolbyVisionFix,
+                    preferredSubtitleLanguage,
+                    enableAssSupport,
+                    result
+                )
             }
             "play" -> {
                 val playerId = call.argument<String>("playerId") ?: ""
@@ -229,6 +239,7 @@ class ExoPlayerPlugin(
         startPositionMs: Int,
         dolbyVisionFix: Boolean,
         preferredSubtitleLanguage: String?,
+        enableAssSupport: Boolean,
         result: MethodChannel.Result
     ) {
         mainHandler.post {
@@ -265,10 +276,21 @@ class ExoPlayerPlugin(
                     android.util.Log.w("ExoPlayerPlugin", "FFmpeg extension not found in classpath: ${e.message}")
                 }
 
-                val exoPlayer = ExoPlayer.Builder(context)
+                val playerBuilder = ExoPlayer.Builder(context)
                     .setTrackSelector(trackSelector)
-                    .setRenderersFactory(renderersFactory)
-                    .build()
+
+                val exoPlayer = if (enableAssSupport) {
+                    android.util.Log.i("ExoPlayerPlugin", "Creating ExoPlayer with ass-media subtitle pipeline")
+                    playerBuilder.buildWithAssSupport(
+                        context = context,
+                        renderType = AssRenderType.CUES,
+                        renderersFactory = renderersFactory
+                    )
+                } else {
+                    playerBuilder
+                        .setRenderersFactory(renderersFactory)
+                        .build()
+                }
                 exoPlayer.setVideoSurface(surface)
 
                 val mediaItem = MediaItem.Builder()

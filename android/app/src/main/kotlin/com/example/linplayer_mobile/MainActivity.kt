@@ -22,8 +22,8 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.linplayer/exoplayer")
             .setMethodCallHandler(exoPlayerPlugin)
 
-        // 注册 libass JNI 桥接 MethodChannel
-        // 用于 ExoPlayer 内核的内封/外挂 ASS 字幕特效渲染
+        // 注册 legacy libass JNI 桥接 MethodChannel
+        // 当前 ExoPlayer 已优先走 Media3/libass 原生字幕管线，这里仅保留兼容实现
         libassChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "com.linplayer/libass"

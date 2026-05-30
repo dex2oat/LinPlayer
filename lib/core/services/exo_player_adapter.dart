@@ -4,7 +4,6 @@ import 'dart:math' show max, min;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'player_adapter.dart';
-import 'libass_bridge.dart';
 import 'app_logger.dart';
 
 class ExoPlayerAdapter implements PlayerAdapter {
@@ -45,19 +44,11 @@ class ExoPlayerAdapter implements PlayerAdapter {
   final ValueNotifier<String> subtitleNotifier = ValueNotifier('');
   final ValueNotifier<String?> bitmapNotifier = ValueNotifier(null);
   final ValueNotifier<int> _subtitleSettingsVersion = ValueNotifier(0);
-  final ValueNotifier<bool> libassOverlayNotifier = ValueNotifier(false);
 
-  bool _useLibassForCurrentSub = false;
-  bool _libassInited = false;
-  bool _libassReinitializing = false;
   int _videoWidth = 0;
   int _videoHeight = 0;
-  int _libassRenderWidth = 0;
-  int _libassRenderHeight = 0;
   String _aspectRatio = '自动';
-  String? _currentLibassPath;
-  Uint8List? _currentLibassData;
-  String _currentLibassCodec = 'ass';
+  bool _enableAssSupport = false;
 
   @override
   bool get isInitialized => _isInitialized;
@@ -86,29 +77,12 @@ class ExoPlayerAdapter implements PlayerAdapter {
   @override
   String? get errorMessage => _errorMessage;
   @override
-  bool get libassReady => _libassAvailable;
+  bool get libassReady => _enableAssSupport;
   double? get videoAspectRatio {
     if (_videoWidth <= 0 || _videoHeight <= 0) return null;
     return _videoWidth / _videoHeight;
   }
   String get aspectRatioMode => _aspectRatio;
-  int get libassRenderWidth =>
-      _libassRenderWidth > 0 ? _libassRenderWidth : (_videoWidth > 0 ? _videoWidth : 1920);
-  int get libassRenderHeight =>
-      _libassRenderHeight > 0 ? _libassRenderHeight : (_videoHeight > 0 ? _videoHeight : 1080);
-
-  static bool _libassAvailable = false;
-  static bool _libassChecked = false;
-
-  static Future<void> checkLibassAvailability() async {
-    if (_libassChecked) return;
-    _libassChecked = true;
-    try {
-      _libassAvailable = await LibassBridge.isAvailable();
-    } catch (_) {
-      _libassAvailable = false;
-    }
-  }
   @override
   int? get textureId => _textureId;
   @override
@@ -137,19 +111,14 @@ class ExoPlayerAdapter implements PlayerAdapter {
       _subtitleBitmapBase64 = '';
       _videoWidth = 0;
       _videoHeight = 0;
-      _libassRenderWidth = 0;
-      _libassRenderHeight = 0;
-      _currentLibassPath = null;
-      _currentLibassData = null;
-      _currentLibassCodec = 'ass';
-
-      await checkLibassAvailability();
+      _enableAssSupport = useLibass;
 
       final result = await _channel.invokeMethod<Map<dynamic, dynamic>>('createPlayer', {
         'videoUrl': videoUrl,
         'startPositionMs': startPosition?.inMilliseconds ?? 0,
         'dolbyVisionFix': dolbyVisionFix,
         'preferredSubtitleLanguage': preferredSubtitleLanguage,
+        'enableAssSupport': useLibass,
       });
 
       if (result == null) {
@@ -213,9 +182,6 @@ class ExoPlayerAdapter implements PlayerAdapter {
         final isBitmap = target['isBitmap'] == true || target['type'] == 'bitmap';
 
         _isBitmapSubtitle = isBitmap;
-        _useLibassForCurrentSub = false;
-        libassOverlayNotifier.value = false;
-        _clearLibassSource();
 
         _logger.i('ExoPlayer', '调用selectTrack: group=$groupIndex, track=$trackIndex, nativeType=$nativeTrackType, isBitmap=$isBitmap');
         await _channel.invokeMethod('selectTrack', {
@@ -239,9 +205,6 @@ class ExoPlayerAdapter implements PlayerAdapter {
       await _channel.invokeMethod('deselectSubtitleTrack', {
         'playerId': _playerId,
       });
-      _useLibassForCurrentSub = false;
-      libassOverlayNotifier.value = false;
-      _clearLibassSource();
       _subtitleText = '';
       subtitleNotifier.value = '';
       _subtitleBitmapBase64 = '';
@@ -299,46 +262,10 @@ class ExoPlayerAdapter implements PlayerAdapter {
 
     _isBitmapSubtitle = isPgs;
 
-    if (isAss && _libassAvailable) {
-      _rememberLibassPath(path);
-      final ready = await _ensureLibassInitialized();
-      if (ready) {
-        // 关闭 ExoPlayer 原生字幕轨道，避免与 libass 叠加层冲突
-        try {
-          await _channel.invokeMethod('deselectSubtitleTrack', {
-            'playerId': _playerId,
-          });
-        } catch (_) {}
-
-        final loaded = await LibassBridge.loadSubFile(path);
-        if (loaded) {
-          _useLibassForCurrentSub = true;
-          libassOverlayNotifier.value = true;
-          _logger.i(
-            'ExoPlayer',
-            'ASS字幕通过libass加载成功，渲染尺寸=$libassRenderWidth x $libassRenderHeight',
-          );
-          return;
-        }
-        _logger.w('ExoPlayer', 'libass加载ASS字幕失败，回退ExoPlayer文本渲染');
-      }
-      _clearLibassSource();
-    }
-
     if (isPgs) {
-      _useLibassForCurrentSub = false;
-      libassOverlayNotifier.value = false;
-      _clearLibassSource();
       _logger.w('ExoPlayer', 'PGS/SUP图形字幕仍依赖设备侧 Media3 解析，如无法显示请切换MPV内核');
     } else if (isAss) {
-      _useLibassForCurrentSub = false;
-      libassOverlayNotifier.value = false;
-      _clearLibassSource();
       emitEvent('subtitleType', 'ass');
-    } else {
-      _useLibassForCurrentSub = false;
-      libassOverlayNotifier.value = false;
-      _clearLibassSource();
     }
 
     try {
@@ -370,47 +297,7 @@ class ExoPlayerAdapter implements PlayerAdapter {
 
   @override
   Future<void> loadLibassSubtitleMemory(Uint8List data, {String codec = 'ass'}) async {
-    if (_playerId == null || !_isInitialized) return;
-    final lowerCodec = codec.toLowerCase();
-    if (lowerCodec != 'ass' && lowerCodec != 'ssa') {
-      _logger.w('ExoPlayer', 'loadLibassSubtitleMemory 仅支持 ASS/SSA，当前 codec=$codec');
-      return;
-    }
-
-    await checkLibassAvailability();
-    if (!_libassAvailable) {
-      _logger.w('ExoPlayer', 'libass 不可用，无法加载内存 ASS 字幕');
-      return;
-    }
-
-    _rememberLibassMemory(data, lowerCodec);
-    final ready = await _ensureLibassInitialized();
-    if (!ready) {
-      _clearLibassSource();
-      return;
-    }
-
-    try {
-      await _channel.invokeMethod('deselectSubtitleTrack', {
-        'playerId': _playerId,
-      });
-    } catch (_) {}
-
-    final loaded = await LibassBridge.loadSubMemory(data, codec: lowerCodec);
-    if (!loaded) {
-      _clearLibassSource();
-      _useLibassForCurrentSub = false;
-      libassOverlayNotifier.value = false;
-      _logger.w('ExoPlayer', 'libass 加载内存 ASS 字幕失败');
-      return;
-    }
-
-    _useLibassForCurrentSub = true;
-    libassOverlayNotifier.value = true;
-    _logger.i(
-      'ExoPlayer',
-      '内存ASS字幕通过libass加载成功，渲染尺寸=$libassRenderWidth x $libassRenderHeight',
-    );
+    _logger.w('ExoPlayer', 'ExoPlayer 暂不支持从内存直接加载 ASS 字幕，请先写入文件后再加载');
   }
 
   String? _detectSubtitleMimeType(String path) {
@@ -458,7 +345,12 @@ class ExoPlayerAdapter implements PlayerAdapter {
         if (value != null) {
           final width = (value['width'] as num?)?.toInt() ?? 0;
           final height = (value['height'] as num?)?.toInt() ?? 0;
-          _handleVideoSizeChanged(width, height);
+          if (width > 0 && height > 0) {
+            _videoWidth = width;
+            _videoHeight = height;
+            _logger.i('ExoPlayer', '视频尺寸更新: ${width}x$height');
+            _callbacks?.onPositionChanged?.call();
+          }
         }
         break;
       case 'tracksChanged':
@@ -470,12 +362,7 @@ class ExoPlayerAdapter implements PlayerAdapter {
         break;
       case 'subtitle':
         _subtitleText = event['value'] as String? ?? '';
-        if (_useLibassForCurrentSub) {
-          subtitleNotifier.value = '';
-          _subtitleText = '';
-        } else {
-          subtitleNotifier.value = _subtitleText;
-        }
+        subtitleNotifier.value = _subtitleText;
         bitmapNotifier.value = null;
         _subtitleBitmapBase64 = '';
         if (_subtitleText.isEmpty) {
@@ -507,10 +394,6 @@ class ExoPlayerAdapter implements PlayerAdapter {
           }
           _subtitleText = data['text'] as String? ?? '';
           subtitleNotifier.value = _subtitleText;
-          if (_isBitmapSubtitle) {
-            _useLibassForCurrentSub = false;
-            libassOverlayNotifier.value = false;
-          }
         }
         break;
       case 'subtitleType':
@@ -518,159 +401,10 @@ class ExoPlayerAdapter implements PlayerAdapter {
         _logger.d('ExoPlayer', '字幕类型: $subType');
         if (subType == 'bitmap') {
           _isBitmapSubtitle = true;
-          _useLibassForCurrentSub = false;
-          libassOverlayNotifier.value = false;
         } else {
           _isBitmapSubtitle = false;
-          _useLibassForCurrentSub = false;
-          libassOverlayNotifier.value = false;
         }
         break;
-    }
-  }
-
-  void _clearLibassSource() {
-    _currentLibassPath = null;
-    _currentLibassData = null;
-    _currentLibassCodec = 'ass';
-  }
-
-  void _rememberLibassPath(String path) {
-    _currentLibassPath = path;
-    _currentLibassData = null;
-    _currentLibassCodec = _extractExtension(path);
-  }
-
-  void _rememberLibassMemory(Uint8List data, String codec) {
-    _currentLibassPath = null;
-    _currentLibassData = Uint8List.fromList(data);
-    _currentLibassCodec = codec;
-  }
-
-  bool get _hasLibassSource => _currentLibassPath != null || _currentLibassData != null;
-
-  Future<Size?> _fetchVideoSize() async {
-    if (_playerId == null) return null;
-    try {
-      final result = await _channel.invokeMethod<Map<dynamic, dynamic>>('getVideoSize', {
-        'playerId': _playerId,
-      });
-      final width = (result?['width'] as num?)?.toInt() ?? 0;
-      final height = (result?['height'] as num?)?.toInt() ?? 0;
-      if (width > 0 && height > 0) {
-        _handleVideoSizeChanged(width, height, triggerReinit: false);
-        return Size(width.toDouble(), height.toDouble());
-      }
-    } catch (e) {
-      _logger.d('ExoPlayer', '获取视频尺寸失败: $e');
-    }
-    return null;
-  }
-
-  Future<bool> _reloadCurrentLibassSource() async {
-    if (_currentLibassData != null) {
-      return LibassBridge.loadSubMemory(_currentLibassData!, codec: _currentLibassCodec);
-    }
-    if (_currentLibassPath != null) {
-      return LibassBridge.loadSubFile(_currentLibassPath!);
-    }
-    return false;
-  }
-
-  Future<bool> _ensureLibassInitialized({bool forceReinit = false}) async {
-    final available = await LibassBridge.isAvailable();
-    if (!available) {
-      _logger.w('ExoPlayer', 'libass 不可用，无法启用 ASS 特效渲染');
-      return false;
-    }
-
-    await _fetchVideoSize();
-
-    var targetWidth = _videoWidth;
-    var targetHeight = _videoHeight;
-    if (targetWidth <= 0 || targetHeight <= 0) {
-      targetWidth = _libassRenderWidth > 0 ? _libassRenderWidth : 1920;
-      targetHeight = _libassRenderHeight > 0 ? _libassRenderHeight : 1080;
-    }
-
-    final needsInit = forceReinit ||
-        !_libassInited ||
-        _libassRenderWidth != targetWidth ||
-        _libassRenderHeight != targetHeight;
-    if (!needsInit) {
-      return true;
-    }
-
-    if (_libassInited) {
-      try {
-        await LibassBridge.dispose();
-      } catch (_) {}
-      _libassInited = false;
-    }
-
-    final success = await LibassBridge.init(width: targetWidth, height: targetHeight);
-    if (!success) {
-      _libassRenderWidth = 0;
-      _libassRenderHeight = 0;
-      return false;
-    }
-
-    _libassInited = true;
-    _libassRenderWidth = targetWidth;
-    _libassRenderHeight = targetHeight;
-    _logger.i('ExoPlayer', 'libass 视口已同步到 $targetWidth x $targetHeight');
-    return true;
-  }
-
-  Future<void> _reinitializeLibassForVideoSize() async {
-    if (_libassReinitializing || !_useLibassForCurrentSub || !_hasLibassSource) return;
-    if (_videoWidth <= 0 || _videoHeight <= 0) return;
-    if (_libassInited &&
-        _libassRenderWidth == _videoWidth &&
-        _libassRenderHeight == _videoHeight) {
-      return;
-    }
-
-    _libassReinitializing = true;
-    try {
-      _logger.i(
-        'ExoPlayer',
-        '检测到真实视频尺寸 $_videoWidth x $_videoHeight，重新初始化 libass 以避免 ASS 定位/裁切异常',
-      );
-      final ready = await _ensureLibassInitialized(forceReinit: true);
-      if (!ready) {
-        _useLibassForCurrentSub = false;
-        libassOverlayNotifier.value = false;
-        return;
-      }
-
-      final reloaded = await _reloadCurrentLibassSource();
-      if (!reloaded) {
-        _logger.w('ExoPlayer', 'libass 重新初始化后重载字幕失败');
-        _useLibassForCurrentSub = false;
-        libassOverlayNotifier.value = false;
-        return;
-      }
-
-      _useLibassForCurrentSub = true;
-      libassOverlayNotifier.value = true;
-      _callbacks?.onPositionChanged?.call();
-    } finally {
-      _libassReinitializing = false;
-    }
-  }
-
-  void _handleVideoSizeChanged(int width, int height, {bool triggerReinit = true}) {
-    if (width <= 0 || height <= 0) return;
-    final changed = _videoWidth != width || _videoHeight != height;
-    _videoWidth = width;
-    _videoHeight = height;
-    if (!changed) return;
-
-    _logger.i('ExoPlayer', '视频尺寸更新: ${width}x$height');
-    _callbacks?.onPositionChanged?.call();
-    if (triggerReinit) {
-      _reinitializeLibassForVideoSize();
     }
   }
 
@@ -1006,19 +740,9 @@ class ExoPlayerAdapter implements PlayerAdapter {
       } catch (_) {}
       _playerId = null;
     }
-    if (_libassInited) {
-      try {
-        await LibassBridge.dispose();
-      } catch (_) {}
-      _libassInited = false;
-    }
-    _useLibassForCurrentSub = false;
-    libassOverlayNotifier.value = false;
     _videoWidth = 0;
     _videoHeight = 0;
-    _libassRenderWidth = 0;
-    _libassRenderHeight = 0;
-    _clearLibassSource();
+    _enableAssSupport = false;
     _textureId = null;
     _isInitialized = false;
     _isPlaying = false;

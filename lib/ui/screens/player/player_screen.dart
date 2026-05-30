@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,7 +16,6 @@ import '../../widgets/common/media_widgets.dart';
 import '../../../core/services/video_player_service.dart';
 import '../../../core/services/mpv_player_adapter.dart';
 import '../../../core/services/exo_player_adapter.dart';
-import '../../../core/services/libass_bridge.dart';
 import '../../../core/services/app_logger.dart';
 import '../../../core/services/subtitle_processor.dart';
 
@@ -355,28 +353,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       final isExoAss = isAss && !isGraphical && _playerService.coreType == PlayerCoreType.exoPlayer;
 
       if (isExoAss) {
-        logger.i('Player', 'EXO内核: 内封ASS字幕优先走libass，必要时回退SRT兜底');
+        logger.i('Player', 'EXO内核: 内封ASS字幕直接走Media3轨道选择，由原生ASS管线处理');
         try {
-          await _playerService.deselectSubtitleTrack();
-          final api = ref.read(apiClientProvider);
-          final embyCodec = _embySubtitleCodec(codec);
-          final subUrl = api.playback.getSubtitleStreamUrl(
-            item.id, mediaSource.id, targetIndex, embyCodec,
-          );
-          final subFile = await _prepareSubtitleFileForPlayer(
-            subtitleUrl: subUrl,
-            fileName: 'subtitle_${item.id}_$targetIndex.ass',
-            codec: codec,
-            coreType: _playerService.coreType,
-            logger: logger,
-          );
-          logger.i('Player', 'EXO内封ASS字幕准备完成 - ${await subFile.length()} bytes');
-          if (subFile.existsSync() && await subFile.length() > 0) {
-            await _playerService.loadLibassSubtitle(subFile.path);
-            logger.i('Player', 'EXO内封ASS字幕已加载，优先保留ASS特效渲染链路');
-          }
+          await _selectInternalSubtitleEXO(target, preferredLang, logger);
         } catch (e, stackTrace) {
-          logger.eWithStack('Player', 'EXO内封ASS转SRT失败，回退原生选择', e, stackTrace);
+          logger.eWithStack('Player', 'EXO内封ASS轨道选择失败，回退原生选择', e, stackTrace);
           await _selectInternalSubtitleEXO(target, preferredLang, logger);
         }
       } else {
@@ -539,11 +520,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
 
     if (_isAssSubtitleCodec(codec)) {
       final preferLibass = ref.read(exoLibassProvider);
-      final adapter = _playerService.adapter;
-      final canUseExperimentalLibass =
-          preferLibass && adapter is ExoPlayerAdapter && adapter.libassReady;
-      if (canUseExperimentalLibass) {
-        logger.i('Player', 'EXO内核: ASS/SSA 保留原文件，优先尝试实验性 libass 渲染');
+      if (preferLibass) {
+        logger.i('Player', 'EXO内核: ASS/SSA 保留原文件，交给Media3原生ASS管线处理');
         return sourceFile;
       }
 
@@ -991,29 +969,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
 
         if (isExoAss) {
           try {
-            await _playerService.deselectSubtitleTrack();
-            final embyCodec = _embySubtitleCodec(codec);
-            final subUrl = api.playback.getSubtitleStreamUrl(
-              item.id,
-              mediaSource.id,
-              target.index,
-              embyCodec,
-            );
-            final subFile = await _prepareSubtitleFileForPlayer(
-              subtitleUrl: subUrl,
-              fileName: 'subtitle_${item.id}_${target.index}.ass',
-              codec: codec,
-              coreType: _playerService.coreType,
-              logger: logger,
-            );
-            logger.i('Player', 'EXO内封ASS切换准备完成 - ${await subFile.length()} bytes');
-
-            if (subFile.existsSync() && await subFile.length() > 0) {
-              await _playerService.loadLibassSubtitle(subFile.path);
-            logger.i('Player', 'EXO内封ASS切换已加载，优先保留ASS特效渲染链路');
-            }
+            logger.i('Player', 'EXO内核: 内封ASS切换直接走Media3轨道选择');
+            await _selectInternalSubtitleViaTrack(target, next, logger);
           } catch (e, stackTrace) {
-            logger.eWithStack('Player', 'EXO内封ASS切换转SRT失败，回退原生轨道选择', e, stackTrace);
+            logger.eWithStack('Player', 'EXO内封ASS切换失败，回退原生轨道选择', e, stackTrace);
             await _selectInternalSubtitleViaTrack(target, next, logger);
           }
         } else {
@@ -1438,22 +1397,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
                   densityFactor: danmakuDensity,
                 ),
               ),
-            Positioned.fromRect(
-              rect: contentRect,
-              child: IgnorePointer(
-                child: ValueListenableBuilder<bool>(
-                  valueListenable: adapter.libassOverlayNotifier,
-                  builder: (context, showLibass, _) {
-                    if (!showLibass) return const SizedBox.shrink();
-                    return _LibassOverlay(
-                      playerService: _playerService,
-                      referenceWidth: adapter.libassRenderWidth,
-                      referenceHeight: adapter.libassRenderHeight,
-                    );
-                  },
-                ),
-              ),
-            ),
             if (contentRect == Rect.zero)
               Positioned.fill(
                 child: IgnorePointer(
@@ -2867,7 +2810,8 @@ class _SubtitleSettingsContentState extends ConsumerState<_SubtitleSettingsConte
           var pathToLoad = filePath;
           final lowerExt = filePath.split('.').last.toLowerCase();
           if (playerService.coreType == PlayerCoreType.exoPlayer &&
-              (lowerExt == 'ass' || lowerExt == 'ssa')) {
+              (lowerExt == 'ass' || lowerExt == 'ssa') &&
+              !ref.read(exoLibassProvider)) {
             pathToLoad = await SubtitleProcessor.convertAssToSrt(filePath);
             logger.i('Player', '导入字幕: EXO内核已将 ASS/SSA 转为 SRT: $pathToLoad');
           }
@@ -3338,141 +3282,6 @@ class _EpisodeSelectorContentState extends ConsumerState<_EpisodeSelectorContent
       error: (_, __) => const Center(child: Text('加载失败')),
     );
   }
-}
-
-/// libass 字幕位图叠加层
-class _LibassOverlay extends StatefulWidget {
-  final VideoPlayerService playerService;
-  final int referenceWidth;
-  final int referenceHeight;
-
-  const _LibassOverlay({
-    required this.playerService,
-    required this.referenceWidth,
-    required this.referenceHeight,
-  });
-
-  @override
-  State<_LibassOverlay> createState() => _LibassOverlayState();
-}
-
-class _LibassOverlayState extends State<_LibassOverlay> {
-  List<LibassBlendRect>? _rects;
-  List<ui.Image>? _images;
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _timer = Timer.periodic(const Duration(milliseconds: 41), (_) => _render());
-  }
-
-  Future<void> _render() async {
-    if (!mounted || !widget.playerService.libassReady) return;
-    final ptsMs = widget.playerService.position.inMilliseconds;
-    final rects = await LibassBridge.renderFrame(ptsMs);
-    if (rects == null || rects.isEmpty || !mounted) {
-      if (_images != null && _images!.isNotEmpty && mounted) {
-        for (final img in _images!) {
-          img.dispose();
-        }
-        setState(() {
-          _rects = null;
-          _images = null;
-        });
-      }
-      return;
-    }
-
-    final images = <ui.Image>[];
-    for (final rect in rects) {
-      final image = await rect.toImage();
-      images.add(image);
-    }
-
-    if (!mounted) {
-      for (final img in images) {
-        img.dispose();
-      }
-      return;
-    }
-
-    final oldImages = _images;
-    setState(() {
-      _rects = rects;
-      _images = images;
-    });
-
-    for (final img in oldImages ?? <ui.Image>[]) {
-      img.dispose();
-    }
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    for (final img in _images ?? <ui.Image>[]) {
-      img.dispose();
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_images == null || _images!.isEmpty) return const SizedBox.shrink();
-    return CustomPaint(
-      painter: _LibassPainter(
-        _images!,
-        _rects!,
-        widget.referenceWidth,
-        widget.referenceHeight,
-      ),
-      size: Size.infinite,
-    );
-  }
-}
-
-class _LibassPainter extends CustomPainter {
-  final List<ui.Image> images;
-  final List<LibassBlendRect> rects;
-  final int referenceWidth;
-  final int referenceHeight;
-
-  _LibassPainter(
-    this.images,
-    this.rects,
-    this.referenceWidth,
-    this.referenceHeight,
-  );
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final width = referenceWidth > 0 ? referenceWidth.toDouble() : 1920.0;
-    final height = referenceHeight > 0 ? referenceHeight.toDouble() : 1080.0;
-    final scaleX = size.width / width;
-    final scaleY = size.height / height;
-
-    for (int i = 0; i < images.length && i < rects.length; i++) {
-      final paint = Paint()..filterQuality = FilterQuality.medium;
-      final rect = rects[i];
-      final src = Rect.fromLTWH(
-        0,
-        0,
-        images[i].width.toDouble(),
-        images[i].height.toDouble(),
-      );
-      final dst = Rect.fromLTWH(
-        rect.dstX * scaleX,
-        rect.dstY * scaleY,
-        rect.width * scaleX,
-        rect.height * scaleY,
-      );
-      canvas.drawImageRect(images[i], src, dst, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _LibassPainter oldDelegate) => true;
 }
 
 /// 设置区块容器
