@@ -120,10 +120,8 @@ jobs:
             echo "Extracting $abi from $(basename $jar)..."
             mkdir -p "built-libraries/$abi"
             
-            # Extract JAR contents
-            cd "built-libraries/$abi"
-            jar xf "$jar" 2>&1 || echo "Warning: failed to extract $jar"
-            cd ../..
+            # Extract JAR contents using absolute path
+            jar xf "$jar" -C "built-libraries/$abi" 2>&1 || echo "Warning: failed to extract $jar"
           done
           
           echo "=== Extracted libraries ==="
