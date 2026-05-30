@@ -235,35 +235,33 @@ jobs:
           echo "AAR_PATH=$AAR_PATH" >> $GITHUB_ENV
           ls -la "$AAR_PATH"
       
-      # 上传 AAR Artifact
+      # 复制 AAR 到项目目录并提交
+      - name: Commit AAR to repository
+        run: |
+          mkdir -p android/exoplayer-ffmpeg/libs
+          cp "$AAR_PATH" android/exoplayer-ffmpeg/libs/lib-decoder-ffmpeg-release.aar
+          
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add android/exoplayer-ffmpeg/libs/
+          
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update FFmpeg extension AAR (auto-build)
+
+- ExoPlayer ${{ env.EXOPLAYER_VERSION }}
+- FFmpeg ${{ env.FFMPEG_VERSION }}
+- Supported decoders: PGS, DVB, DVD, ASS, SSA, SRT, WEBVTT"
+            git push
+            echo "✅ AAR committed to android/exoplayer-ffmpeg/libs/"
+          fi
+        continue-on-error: true
+      
+      # 上传 AAR Artifact（备用）
       - name: Upload AAR
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-extension-all
           path: ${{ env.AAR_PATH }}
           retention-days: 90
-      
-      # 可选：创建 Release 并上传 AAR
-      - name: Create Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ffmpeg-extension-${{ github.run_number }}
-          name: FFmpeg Extension Build ${{ github.run_number }}
-          body: |
-            自动编译的 ExoPlayer FFmpeg 扩展
-            
-            - ExoPlayer 版本: ${{ env.EXOPLAYER_VERSION }}
-            - FFmpeg 版本: ${{ env.FFMPEG_VERSION }}
-            - 支持的架构: arm64-v8a, armeabi-v7a
-            - 支持的字幕格式: PGS, SUP, DVB, DVD, ASS, SSA, SRT, WEBVTT
-            
-            使用方式：
-            1. 下载 `ffmpeg-extension-all` artifact
-            2. 解压后将 `.aar` 文件放入 `android/exoplayer-ffmpeg/libs/`
-            3. 在 `android/app/build.gradle.kts` 中添加依赖
-          files: ${{ env.AAR_PATH }}
-          draft: false
-          prerelease: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
