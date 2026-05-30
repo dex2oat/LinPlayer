@@ -763,7 +763,15 @@ class MpvPlayerAdapter implements PlayerAdapter {
   @override
   Widget buildVideo() {
     if (_videoController != null) {
-      return Video(controller: _videoController!, fit: BoxFit.contain, controls: null);
+      return Video(
+        controller: _videoController!,
+        fit: BoxFit.contain,
+        controls: null,
+        // Keep Flutter's text subtitle overlay disabled.
+        // We rely on mpv's native subtitle pipeline to avoid duplicate ASS
+        // rendering and to preserve bitmap subtitle support.
+        subtitleViewConfiguration: const SubtitleViewConfiguration(visible: false),
+      );
     }
     return const Center(child: CircularProgressIndicator());
   }

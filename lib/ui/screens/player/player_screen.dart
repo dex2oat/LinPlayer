@@ -176,7 +176,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
   Future<void> _loadSubtitles(MediaItem item, MediaSource mediaSource) async {
     final logger = AppLogger();
     final api = ref.read(apiClientProvider);
-    final server = ref.read(currentServerProvider);
     final subtitleStreams = mediaSource.mediaStreams
         .where((s) => s.isSubtitle)
         .toList();
@@ -219,25 +218,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
           try {
             await _playerService.deselectSubtitleTrack();
             final api = ref.read(apiClientProvider);
-            final server = ref.read(currentServerProvider);
             final embyCodec = _embySubtitleCodec(codec);
             final subUrl = api.playback.getSubtitleStreamUrl(
               item.id, mediaSource.id, targetIndex, embyCodec,
             );
-            final tempDir = await getTemporaryDirectory();
-            final subFile = File('${tempDir.path}/subtitle_${item.id}_${targetIndex}.ass');
-            if (!subFile.existsSync() || await subFile.length() == 0) {
-              final dio = Dio(BaseOptions(
-                connectTimeout: const Duration(seconds: 15),
-                receiveTimeout: const Duration(seconds: 60),
-              ));
-              if (server?.authToken != null) {
-                dio.options.headers['X-Emby-Token'] = server!.authToken;
-                dio.options.headers['X-MediaBrowser-Token'] = server.authToken;
-              }
-              await dio.download(subUrl, subFile.path);
-              logger.i('Player', 'ASS字幕下载完成 - ${subFile.lengthSync()} bytes');
-            }
+            final subFile = await _downloadSubtitleToTempFile(
+              subtitleUrl: subUrl,
+              fileName: 'subtitle_${item.id}_${targetIndex}.ass',
+            );
+            logger.i('Player', 'ASS字幕下载完成/使用缓存 - ${await subFile.length()} bytes');
             if (subFile.existsSync() && await subFile.length() > 0) {
               await _playerService.loadLibassSubtitle(subFile.path);
               logger.i('Player', '内封ASS字幕通过libass加载成功');
@@ -265,20 +254,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       return;
     }
 
-    if (isGraphical) {
-      logger.i('Player', '图形外挂字幕 (PGS/SUP)，通过播放器加载');
-      try {
-        if (_playerService.coreType == PlayerCoreType.mpv) {
-          await _selectInternalSubtitleMPV(target, preferredLang, logger);
-        } else {
-          await _selectInternalSubtitleEXO(target, preferredLang, logger);
-        }
-      } catch (e) {
-        logger.e('Player', '图形字幕选择失败: $e');
-      }
-      return;
-    }
-
     try {
       if (_playerService.coreType == PlayerCoreType.mpv) {
         final embyCodec = _embySubtitleCodec(codec);
@@ -288,8 +263,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
           targetIndex,
           embyCodec,
         );
-        logger.i('Player', 'MPV内核: 直接加载Emby字幕URL: $subUrl');
-        await _playerService.loadLibassSubtitle(subUrl);
+        if (isGraphical) {
+          final ext = _subtitleFileExtension(codec, _playerService.coreType);
+          final subFile = await _downloadSubtitleToTempFile(
+            subtitleUrl: subUrl,
+            fileName: 'subtitle_${widget.itemId}_${targetIndex}.$ext',
+          );
+          logger.i('Player', 'MPV内核: 图形外挂字幕使用本地文件: ${subFile.path}');
+          if (subFile.existsSync() && await subFile.length() > 0) {
+            await _playerService.loadLibassSubtitle(subFile.path);
+          }
+        } else {
+          logger.i('Player', 'MPV内核: 直接加载Emby字幕URL: $subUrl');
+          await _playerService.loadLibassSubtitle(subUrl);
+        }
         logger.i('Player', 'MPV外挂字幕加载成功');
 
         if (mounted) {
@@ -307,24 +294,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
         );
         logger.i('Player', 'EXO内核: 下载字幕后再加载: $subUrl');
 
-        final tempDir = await getTemporaryDirectory();
         final ext = _subtitleFileExtension(codec, _playerService.coreType);
-        final subFile = File('${tempDir.path}/subtitle_${widget.itemId}_${targetIndex}.$ext');
-
-        if (!subFile.existsSync() || await subFile.length() == 0) {
-          final dio = Dio(BaseOptions(
-            connectTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 60),
-          ));
-          if (server?.authToken != null) {
-            dio.options.headers['X-Emby-Token'] = server!.authToken;
-            dio.options.headers['X-MediaBrowser-Token'] = server.authToken;
-          }
-          await dio.download(subUrl, subFile.path);
-          logger.i('Player', '字幕下载完成 - ${subFile.lengthSync()} bytes');
-        } else {
-          logger.i('Player', '使用已缓存字幕 (${await subFile.length()} bytes)');
-        }
+        final subFile = await _downloadSubtitleToTempFile(
+          subtitleUrl: subUrl,
+          fileName: 'subtitle_${widget.itemId}_${targetIndex}.$ext',
+        );
+        logger.i('Player', '字幕下载完成/使用缓存 (${await subFile.length()} bytes)');
 
         if (subFile.existsSync() && await subFile.length() > 0) {
           await _playerService.loadLibassSubtitle(subFile.path);
@@ -385,6 +360,29 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     if (lower == 'pgssub' || lower == 'pgs' || lower == 'sup' || lower == 'dvdsub' || lower == 'vobsub' || lower.contains('hdmv') || lower.contains('pgs')) return 'sup';
     if (coreType == PlayerCoreType.mpv) return 'ass';
     return 'srt';
+  }
+
+  Future<File> _downloadSubtitleToTempFile({
+    required String subtitleUrl,
+    required String fileName,
+  }) async {
+    final server = ref.read(currentServerProvider);
+    final tempDir = await getTemporaryDirectory();
+    final subFile = File('${tempDir.path}/$fileName');
+
+    if (!subFile.existsSync() || await subFile.length() == 0) {
+      final dio = Dio(BaseOptions(
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 60),
+      ));
+      if (server?.authToken != null) {
+        dio.options.headers['X-Emby-Token'] = server!.authToken;
+        dio.options.headers['X-MediaBrowser-Token'] = server.authToken;
+      }
+      await dio.download(subtitleUrl, subFile.path);
+    }
+
+    return subFile;
   }
 
   Future<void> _selectInternalSubtitleMPV(MediaStream target, String? preferredLang, AppLogger logger) async {
@@ -576,6 +574,55 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     return candidates.first['id']?.toString();
   }
 
+  String? _matchMpvSecondarySubtitleTrack(
+    List<Map<String, dynamic>> subtitleTracks,
+    MediaStream target,
+    String? primaryTrackId,
+  ) {
+    if (subtitleTracks.isEmpty) return null;
+
+    final codec = target.codec?.toLowerCase() ?? '';
+    final isGraphical = codec == 'pgssub' ||
+        codec == 'sup' ||
+        codec == 'pgs' ||
+        codec.contains('hdmv') ||
+        codec.contains('pgs');
+    if (isGraphical) return null;
+
+    final filtered = subtitleTracks.where((t) {
+      final isBitmap = t['type'] == 'bitmap' || t['isBitmap'] == true;
+      if (isBitmap) return false;
+      final embyIndex = _extractEmbySubtitleIndex(t['id']?.toString());
+      if (embyIndex != null && embyIndex == target.index) return true;
+      return false;
+    }).toList();
+    if (filtered.isNotEmpty) {
+      return filtered.first['id']?.toString();
+    }
+
+    final title = target.displayTitle ?? target.title;
+    if (title != null && title.isNotEmpty) {
+      for (final t in subtitleTracks) {
+        if (t['id']?.toString() == primaryTrackId) continue;
+        final isBitmap = t['type'] == 'bitmap' || t['isBitmap'] == true;
+        if (isBitmap) continue;
+        final tTitle = t['title']?.toString() ?? '';
+        if (tTitle.isNotEmpty && _titlesMatch(title, tTitle)) {
+          return t['id']?.toString();
+        }
+      }
+    }
+
+    for (final t in subtitleTracks) {
+      if (t['id']?.toString() == primaryTrackId) continue;
+      final isBitmap = t['type'] == 'bitmap' || t['isBitmap'] == true;
+      if (isBitmap) continue;
+      return t['id']?.toString();
+    }
+
+    return null;
+  }
+
   String? _matchExoSubtitleTrack(
     List<Map<String, dynamic>> subtitleTracks,
     String? targetLang,
@@ -658,6 +705,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     return -1;
   }
 
+  int? _extractEmbySubtitleIndex(String? trackId) {
+    if (trackId == null || trackId.isEmpty) return null;
+    final parts = trackId.split('_');
+    if (parts.length != 2) return null;
+    return int.tryParse(parts.first);
+  }
+
   bool _titlesMatch(String embyTitle, String playerTitle) {
     final e = embyTitle.toLowerCase();
     final p = playerTitle.toLowerCase();
@@ -715,7 +769,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     if (item == null) return;
 
     final api = ref.read(apiClientProvider);
-    final server = ref.read(currentServerProvider);
     final logger = AppLogger();
 
     try {
@@ -748,21 +801,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
                 target.index,
                 embyCodec,
               );
-              final tempDir = await getTemporaryDirectory();
-              final subFile = File('${tempDir.path}/subtitle_${item.id}_${target.index}.ass');
-
-              if (!subFile.existsSync() || await subFile.length() == 0) {
-                final dio = Dio(BaseOptions(
-                  connectTimeout: const Duration(seconds: 15),
-                  receiveTimeout: const Duration(seconds: 60),
-                ));
-                if (server?.authToken != null) {
-                  dio.options.headers['X-Emby-Token'] = server!.authToken;
-                  dio.options.headers['X-MediaBrowser-Token'] = server.authToken;
-                }
-                await dio.download(subUrl, subFile.path);
-                logger.i('Player', 'EXO+libass: ASS字幕下载完成 - ${subFile.lengthSync()} bytes');
-              }
+              final subFile = await _downloadSubtitleToTempFile(
+                subtitleUrl: subUrl,
+                fileName: 'subtitle_${item.id}_${target.index}.ass',
+              );
+              logger.i('Player', 'EXO+libass: ASS字幕下载完成/使用缓存 - ${await subFile.length()} bytes');
 
               if (subFile.existsSync() && await subFile.length() > 0) {
                 await _playerService.loadLibassSubtitle(subFile.path);
@@ -793,23 +836,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
           await _playerService.deselectSubtitleTrack();
 
           if (isGraphicalExternal) {
-            await _playerService.loadLibassSubtitle(subUrl);
-          } else {
-            final tempDir = await getTemporaryDirectory();
             final ext = _subtitleFileExtension(codec, _playerService.coreType);
-            final subFile = File('${tempDir.path}/subtitle_${item.id}_${target.index}.$ext');
-
-            if (!subFile.existsSync() || await subFile.length() == 0) {
-              final dio = Dio(BaseOptions(
-                connectTimeout: const Duration(seconds: 15),
-                receiveTimeout: const Duration(seconds: 60),
-              ));
-              if (server?.authToken != null) {
-                dio.options.headers['X-Emby-Token'] = server!.authToken;
-                dio.options.headers['X-MediaBrowser-Token'] = server.authToken;
-              }
-              await dio.download(subUrl, subFile.path);
+            final subFile = await _downloadSubtitleToTempFile(
+              subtitleUrl: subUrl,
+              fileName: 'subtitle_${item.id}_${target.index}.$ext',
+            );
+            if (subFile.existsSync() && await subFile.length() > 0) {
+              await _playerService.loadLibassSubtitle(subFile.path);
             }
+          } else {
+            final ext = _subtitleFileExtension(codec, _playerService.coreType);
+            final subFile = await _downloadSubtitleToTempFile(
+              subtitleUrl: subUrl,
+              fileName: 'subtitle_${item.id}_${target.index}.$ext',
+            );
 
             if (subFile.existsSync() && await subFile.length() > 0) {
               await _playerService.loadLibassSubtitle(subFile.path);
@@ -823,21 +863,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
             embyCodec,
           );
           if (_playerService.coreType == PlayerCoreType.exoPlayer) {
-            final tempDir = await getTemporaryDirectory();
             final ext = _subtitleFileExtension(codec, _playerService.coreType);
-            final subFile = File('${tempDir.path}/subtitle_${item.id}_${target.index}.$ext');
-
-            if (!subFile.existsSync() || await subFile.length() == 0) {
-              final dio = Dio(BaseOptions(
-                connectTimeout: const Duration(seconds: 15),
-                receiveTimeout: const Duration(seconds: 60),
-              ));
-              if (server?.authToken != null) {
-                dio.options.headers['X-Emby-Token'] = server!.authToken;
-                dio.options.headers['X-MediaBrowser-Token'] = server.authToken;
-              }
-              await dio.download(subUrl, subFile.path);
-            }
+            final subFile = await _downloadSubtitleToTempFile(
+              subtitleUrl: subUrl,
+              fileName: 'subtitle_${item.id}_${target.index}.$ext',
+            );
 
             if (subFile.existsSync() && await subFile.length() > 0) {
               await _playerService.loadLibassSubtitle(subFile.path);
@@ -904,15 +934,28 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
         final subtitleTracks = tracks.where((t) =>
             (t['type'] == 'text' || t['type'] == 'bitmap') &&
             t['id'] != 'auto' && t['id'] != 'no').toList();
+        final currentPrimaryIndex = ref.read(subtitleTrackProvider);
+        String? primaryTrackId;
+        if (currentPrimaryIndex != null) {
+          final primaryTarget = subtitleStreams.where((s) => s.index == currentPrimaryIndex).firstOrNull;
+          if (primaryTarget != null) {
+            primaryTrackId = _matchMpvSubtitleTrack(
+              subtitleTracks,
+              primaryTarget.language,
+              primaryTarget.displayTitle ?? primaryTarget.title,
+              primaryTarget.codec,
+              primaryTarget.index,
+            );
+          }
+        }
 
-        final preferredLang = target.language;
-        final langMatch = subtitleTracks.where((t) =>
-            t['language'] == preferredLang ||
-            (preferredLang != null && t['title']?.toString().contains(preferredLang) == true)).toList();
-        final trackTarget = langMatch.isNotEmpty ? langMatch.first : (subtitleTracks.isNotEmpty ? subtitleTracks.first : null);
+        final trackId = _matchMpvSecondarySubtitleTrack(
+          subtitleTracks,
+          target,
+          primaryTrackId,
+        );
 
-        if (trackTarget != null) {
-          final trackId = trackTarget['id']?.toString() ?? '';
+        if (trackId != null && trackId.isNotEmpty) {
           await _playerService.selectSecondarySubtitleTrack(trackId);
           logger.i('Player', '内封次字幕已设置: trackId=$trackId');
         } else {
@@ -2528,7 +2571,7 @@ class _SubtitleSettingsContentState extends ConsumerState<_SubtitleSettingsConte
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['srt', 'ass', 'ssa', 'vtt'],
+        allowedExtensions: ['srt', 'ass', 'ssa', 'vtt', 'sup', 'pgs'],
       );
       if (result != null && result.files.single.path != null) {
         final filePath = result.files.single.path!;
@@ -3121,10 +3164,27 @@ class _LibassPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    const referenceWidth = 1920.0;
+    const referenceHeight = 1080.0;
+    final scaleX = size.width / referenceWidth;
+    final scaleY = size.height / referenceHeight;
+
     for (int i = 0; i < images.length && i < rects.length; i++) {
       final paint = Paint()..filterQuality = FilterQuality.medium;
-      final offset = Offset(rects[i].dstX.toDouble(), rects[i].dstY.toDouble());
-      canvas.drawImage(images[i], offset, paint);
+      final rect = rects[i];
+      final src = Rect.fromLTWH(
+        0,
+        0,
+        images[i].width.toDouble(),
+        images[i].height.toDouble(),
+      );
+      final dst = Rect.fromLTWH(
+        rect.dstX * scaleX,
+        rect.dstY * scaleY,
+        rect.width * scaleX,
+        rect.height * scaleY,
+      );
+      canvas.drawImageRect(images[i], src, dst, paint);
     }
   }
 

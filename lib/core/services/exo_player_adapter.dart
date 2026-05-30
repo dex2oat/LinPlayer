@@ -636,13 +636,12 @@ class ExoPlayerAdapter implements PlayerAdapter {
                   if (bitmapB64 != null && bitmapB64.isNotEmpty) {
                     try {
                       final bytes = base64Decode(bitmapB64);
+                      final videoSize = MediaQuery.of(context).size;
                       if (_hasBitmapPosition && _isBitmapSubtitle) {
-                        final screenW = MediaQuery.of(context).size.width;
-                        final screenH = MediaQuery.of(context).size.height;
                         return Positioned(
-                          left: _bitmapLeft * screenW,
-                          top: _bitmapTop * screenH,
-                          width: _bitmapWidth * screenW,
+                          left: (_bitmapLeft.clamp(0.0, 1.0)) * videoSize.width,
+                          top: (_bitmapTop.clamp(0.0, 1.0)) * videoSize.height,
+                          width: (_bitmapWidth.clamp(0.0, 1.0)) * videoSize.width,
                           child: Image.memory(
                             bytes,
                             fit: BoxFit.fitWidth,

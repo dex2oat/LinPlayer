@@ -385,6 +385,7 @@ class ExoPlayerPlugin(
                     
                     val trackSelection = TrackSelectionOverride(group.mediaTrackGroup, listOf(trackIndex))
                     val paramsBuilder = trackSelector.buildUponParameters()
+                    paramsBuilder.clearOverridesOfType(actualTrackType)
                     paramsBuilder.setOverrideForType(trackSelection)
                     if (actualTrackType == C.TRACK_TYPE_TEXT || actualTrackType == C.TRACK_TYPE_IMAGE) {
                         paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
@@ -624,7 +625,11 @@ class ExoPlayerPlugin(
                         val bmpInfo = mutableMapOf<String, Any>("data" to base64)
                         try {
                             if (cue.position != Cue.DIMEN_UNSET) bmpInfo["left"] = cue.position
-                            if (cue.line != Cue.DIMEN_UNSET) bmpInfo["top"] = cue.line
+                            if (cue.line != Cue.DIMEN_UNSET &&
+                                cue.lineType == Cue.LINE_TYPE_FRACTION
+                            ) {
+                                bmpInfo["top"] = cue.line
+                            }
                             if (cue.size != Cue.DIMEN_UNSET) bmpInfo["width"] = cue.size
                         } catch (_: Exception) {}
                         bitmapParts.add(bmpInfo)
