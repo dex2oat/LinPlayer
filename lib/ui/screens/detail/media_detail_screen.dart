@@ -5,9 +5,11 @@ import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
 import '../../../core/services/cast_service.dart';
+import '../../../core/utils/color_extractor.dart';
 import '../../screens/download/download_screen.dart';
 import '../../utils/media_helpers.dart';
 import '../../widgets/common/media_widgets.dart';
+import '../../widgets/common/playback_options.dart';
 
 /// 媒体详情页（剧/电影通用）
 class MediaDetailScreen extends ConsumerWidget {
@@ -32,53 +34,68 @@ class MediaDetailScreen extends ConsumerWidget {
   }
 }
 
-class _DetailContent extends StatelessWidget {
+class _DetailContent extends StatefulWidget {
   final MediaItem item;
   final String itemId;
 
   const _DetailContent({required this.item, required this.itemId});
 
   @override
+  State<_DetailContent> createState() => _DetailContentState();
+}
+
+class _DetailContentState extends State<_DetailContent> {
+  Color _backgroundColor = const Color(0xFF121212);
+
+  void _onColorChanged(Color color) {
+    if (_backgroundColor != color) {
+      setState(() {
+        _backgroundColor = color;
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return CustomScrollView(
-      slivers: [
-        // 封面区域
-        SliverToBoxAdapter(
-          child: _DetailHeader(item: item),
-        ),
-
-        // 简介
-        if (item.overview != null && item.overview!.isNotEmpty)
+    return Scaffold(
+      backgroundColor: _backgroundColor,
+      body: CustomScrollView(
+        slivers: [
+          // 封面区域
           SliverToBoxAdapter(
-            child: _OverviewSection(overview: item.overview!),
-          ),
-
-        // 剧集相关区块
-        if (item.type == 'Series') ...[
-          SliverToBoxAdapter(
-            child: _SeasonsAndEpisodesSection(
-              itemId: itemId,
-              onEpisodeTap: (episode) => context.push('/episode/${episode.id}'),
-              onSeasonTap: (season) => context.push('/season/${season.id}'),
+            child: _DetailHeader(
+              item: widget.item,
+              onColorChanged: _onColorChanged,
             ),
           ),
-        ],
 
-        // 电影播放按钮
-        if (item.type == 'Movie') ...[
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: _MoviePlayButtons(itemId: itemId),
+          // 简介
+          if (widget.item.overview != null && widget.item.overview!.isNotEmpty)
+            SliverToBoxAdapter(
+              child: _OverviewSection(overview: widget.item.overview!),
             ),
-          ),
-          SliverToBoxAdapter(
-            child: _VersionInfoSection(itemId: itemId),
-          ),
-        ],
 
-        const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
-      ],
+          // 剧集相关区块
+          if (widget.item.type == 'Series') ...[
+            SliverToBoxAdapter(
+              child: _SeasonsAndEpisodesSection(
+                itemId: widget.itemId,
+                onEpisodeTap: (episode) => context.push('/episode/${episode.id}'),
+                onSeasonTap: (season) => context.push('/season/${season.id}'),
+              ),
+            ),
+          ],
+
+          // 电影播放选项 + 按钮
+          if (widget.item.type == 'Movie') ...[
+            SliverToBoxAdapter(
+              child: _MoviePlaybackSection(itemId: widget.itemId),
+            ),
+          ],
+
+          const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
+        ],
+      ),
     );
   }
 }
@@ -167,36 +184,82 @@ class _ErrorView extends StatelessWidget {
 }
 
 /// 详情页头部
-class _DetailHeader extends ConsumerWidget {
+class _DetailHeader extends ConsumerStatefulWidget {
   final MediaItem item;
+  final ValueChanged<Color>? onColorChanged;
 
-  const _DetailHeader({required this.item});
+  const _DetailHeader({required this.item, this.onColorChanged});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final headerHeight = screenWidth * 0.55;
+  ConsumerState<_DetailHeader> createState() => _DetailHeaderState();
+}
+
+class _DetailHeaderState extends ConsumerState<_DetailHeader> {
+  Color _dominantColor = Colors.black;
+  Color _backgroundColor = const Color(0xFF121212);
+
+  @override
+  void initState() {
+    super.initState();
+    _extractColor();
+  }
+
+  @override
+  void didUpdateWidget(covariant _DetailHeader oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.id != widget.item.id) {
+      _extractColor();
+    }
+  }
+
+  Future<void> _extractColor() async {
     final api = ref.read(apiClientProvider);
-    // 使用Primary封面图作为背景（2:3海报比例，显示效果更好）
-    final imageUrl = item.primaryImageTag != null
-        ? api.image.getPrimaryImageUrl(item.id, tag: item.primaryImageTag, maxWidth: 600)
-        : item.backdropImageTag != null
-            ? api.image.getBackdropImageUrl(item.id, tag: item.backdropImageTag, maxWidth: 800)
+    final imageUrl = widget.item.primaryImageTag != null
+        ? api.image.getPrimaryImageUrl(widget.item.id, tag: widget.item.primaryImageTag, maxWidth: 400)
+        : widget.item.backdropImageTag != null
+            ? api.image.getBackdropImageUrl(widget.item.id, tag: widget.item.backdropImageTag, maxWidth: 400)
             : null;
+
+    if (imageUrl == null) return;
+
+    final colors = await ColorExtractor.extractFromUrl(imageUrl);
+    if (mounted) {
+      setState(() {
+        _dominantColor = colors.gradientStart;
+        _backgroundColor = colors.background;
+      });
+      widget.onColorChanged?.call(colors.background);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMovie = widget.item.type == 'Movie';
+    // 电影：使用 contain 完整展示海报；剧集：使用 cover 展示更多 backdrop
+    final headerHeight = isMovie ? screenWidth * 1.2 : screenWidth * 0.55;
+    final api = ref.read(apiClientProvider);
     
+    final imageUrl = widget.item.primaryImageTag != null
+        ? api.image.getPrimaryImageUrl(widget.item.id, tag: widget.item.primaryImageTag, maxWidth: 600)
+        : widget.item.backdropImageTag != null
+            ? api.image.getBackdropImageUrl(widget.item.id, tag: widget.item.backdropImageTag, maxWidth: 800)
+            : null;
+
     return Stack(
       children: [
-        SizedBox(
+        Container(
           height: headerHeight,
           width: double.infinity,
+          color: _dominantColor,
           child: MediaImage(
             imageUrl: imageUrl,
             width: double.infinity,
             height: headerHeight,
-            fit: BoxFit.cover,
+            fit: isMovie ? BoxFit.contain : BoxFit.cover,
           ),
         ),
-        
+
         // 底部渐变
         Positioned(
           bottom: 0,
@@ -210,14 +273,14 @@ class _DetailHeader extends ConsumerWidget {
                 end: Alignment.bottomCenter,
                 colors: [
                   Colors.transparent,
-                  Theme.of(context).scaffoldBackgroundColor.withValues(alpha: 0.9),
-                  Theme.of(context).scaffoldBackgroundColor,
+                  _backgroundColor.withValues(alpha: 0.9),
+                  _backgroundColor,
                 ],
               ),
             ),
           ),
         ),
-        
+
         // 返回按钮
         SafeArea(
           child: Padding(
@@ -231,7 +294,7 @@ class _DetailHeader extends ConsumerWidget {
             ),
           ),
         ),
-        
+
         // 标题信息
         Positioned(
           bottom: 16,
@@ -242,32 +305,57 @@ class _DetailHeader extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                item.name,
+                widget.item.name,
                 style: const TextStyle(
                   fontSize: 26,
                   fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                  shadows: [
+                    Shadow(blurRadius: 8, color: Colors.black54),
+                  ],
                 ),
               ),
               const SizedBox(height: 8),
               Row(
                 children: [
-                  if (item.communityRating != null) ...[
-                    RatingBadge(rating: item.communityRating),
+                  if (widget.item.communityRating != null) ...[
+                    const Icon(Icons.star, size: 16, color: Colors.amber),
+                    const SizedBox(width: 4),
+                    Text(
+                      widget.item.communityRating!.toStringAsFixed(1),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                        shadows: [Shadow(blurRadius: 4, color: Colors.black54)],
+                      ),
+                    ),
                     const SizedBox(width: 12),
                   ],
-                  ...?item.genres?.take(5).map((genre) => Padding(
+                  ...?widget.item.genres?.take(5).map((genre) => Padding(
                     padding: const EdgeInsets.only(right: 6),
-                    child: TagBadge(text: genre),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        genre,
+                        style: const TextStyle(fontSize: 11, color: Colors.white),
+                      ),
+                    ),
                   )),
                 ],
               ),
-              if (item.type == 'Movie' && item.productionYear != null) ...[
+              if (isMovie && widget.item.productionYear != null) ...[
                 const SizedBox(height: 8),
                 Text(
-                  '${item.productionYear} · ${item.formattedRuntime ?? ''}',
-                  style: TextStyle(
+                  '${widget.item.productionYear} · ${widget.item.formattedRuntime ?? ''}',
+                  style: const TextStyle(
                     fontSize: 14,
-                    color: Theme.of(context).textTheme.bodySmall?.color,
+                    color: Colors.white,
+                    shadows: [Shadow(blurRadius: 4, color: Colors.black54)],
                   ),
                 ),
               ],
@@ -589,20 +677,59 @@ class _EpisodeListTile extends ConsumerWidget {
   }
 }
 
+/// 电影播放区块（选项 + 按钮 + 版本信息）
+class _MoviePlaybackSection extends ConsumerWidget {
+  final String itemId;
+
+  const _MoviePlaybackSection({required this.itemId});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final playbackAsync = ref.watch(playbackInfoProvider(itemId));
+
+    return playbackAsync.when(
+      data: (info) => Column(
+        children: [
+          PlaybackOptions(
+            key: ValueKey('movie_playback_$itemId'),
+            itemId: itemId,
+            info: info,
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: _MoviePlayButtons(itemId: itemId),
+          ),
+          _VersionInfoSection(itemId: itemId),
+        ],
+      ),
+      loading: () => const Padding(
+        padding: EdgeInsets.all(16),
+        child: Center(child: CircularProgressIndicator()),
+      ),
+      error: (_, __) => const SizedBox.shrink(),
+    );
+  }
+}
+
 /// 电影播放按钮
 class _MoviePlayButtons extends ConsumerWidget {
   final String itemId;
-  
+
   const _MoviePlayButtons({required this.itemId});
   
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final mediaSourceId = ref.watch(selectedMediaSourceProvider);
     return Row(
       children: [
         Expanded(
           flex: 5,
           child: FilledButton.icon(
-            onPressed: () => context.push('/player/$itemId'),
+            onPressed: () => context.push(
+              mediaSourceId != null && mediaSourceId.isNotEmpty
+                  ? '/player/$itemId?mediaSourceId=$mediaSourceId'
+                  : '/player/$itemId',
+            ),
             icon: const Icon(Icons.play_arrow),
             label: const Text('播放'),
             style: FilledButton.styleFrom(

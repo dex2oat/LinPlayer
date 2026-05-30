@@ -5,9 +5,11 @@ import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
 import '../../../core/services/cast_service.dart';
+import '../../../core/utils/color_extractor.dart';
 import '../../screens/download/download_screen.dart';
 import '../../utils/media_helpers.dart';
 import '../../widgets/common/media_widgets.dart';
+import '../../widgets/common/playback_options.dart';
 
 /// 季详情页
 class SeasonDetailScreen extends ConsumerStatefulWidget {
@@ -159,18 +161,32 @@ class _EpisodeDetailScreenState extends ConsumerState<EpisodeDetailScreen> {
     ref.read(secondarySubtitleTrackProvider.notifier).state = null;
   }
 
+  Color _backgroundColor = const Color(0xFF121212);
+
+  void _onColorChanged(Color color) {
+    if (_backgroundColor != color) {
+      setState(() {
+        _backgroundColor = color;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final itemAsync = ref.watch(mediaItemProvider(widget.episodeId));
     final playbackAsync = ref.watch(playbackInfoProvider(widget.episodeId));
 
     return Scaffold(
+      backgroundColor: _backgroundColor,
       body: itemAsync.when(
         data: (item) => CustomScrollView(
           slivers: [
             // 封面区域
             SliverToBoxAdapter(
-              child: _DetailHeader(item: item),
+              child: _DetailHeader(
+                item: item,
+                onColorChanged: _onColorChanged,
+              ),
             ),
 
             // 简介
@@ -182,8 +198,8 @@ class _EpisodeDetailScreenState extends ConsumerState<EpisodeDetailScreen> {
             // 播放选项
             SliverToBoxAdapter(
               child: playbackAsync.when(
-                data: (info) => _PlaybackOptions(
-                  episodeId: widget.episodeId,
+                data: (info) => PlaybackOptions(
+                  itemId: widget.episodeId,
                   info: info,
                 ),
                 loading: () => const SizedBox.shrink(),
@@ -231,27 +247,72 @@ class _EpisodeDetailScreenState extends ConsumerState<EpisodeDetailScreen> {
 }
 
 /// 详情页头部封面
-class _DetailHeader extends ConsumerWidget {
+class _DetailHeader extends ConsumerStatefulWidget {
   final MediaItem item;
+  final ValueChanged<Color>? onColorChanged;
 
-  const _DetailHeader({required this.item});
+  const _DetailHeader({required this.item, this.onColorChanged});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final screenHeight = MediaQuery.of(context).size.height;
-    final headerHeight = screenHeight * 0.30;
+  ConsumerState<_DetailHeader> createState() => _DetailHeaderState();
+}
+
+class _DetailHeaderState extends ConsumerState<_DetailHeader> {
+  Color _dominantColor = Colors.black;
+  Color _backgroundColor = const Color(0xFF121212);
+
+  @override
+  void initState() {
+    super.initState();
+    _extractColor();
+  }
+
+  @override
+  void didUpdateWidget(covariant _DetailHeader oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.id != widget.item.id) {
+      _extractColor();
+    }
+  }
+
+  Future<void> _extractColor() async {
     final api = ref.read(apiClientProvider);
-    final imageUrl = item.backdropImageTag != null
-        ? api.image.getBackdropImageUrl(item.id, tag: item.backdropImageTag, maxWidth: 800)
-        : item.primaryImageTag != null
-            ? api.image.getPrimaryImageUrl(item.id, tag: item.primaryImageTag, maxWidth: 600)
+    final imageUrl = widget.item.backdropImageTag != null
+        ? api.image.getBackdropImageUrl(widget.item.id, tag: widget.item.backdropImageTag, maxWidth: 400)
+        : widget.item.primaryImageTag != null
+            ? api.image.getPrimaryImageUrl(widget.item.id, tag: widget.item.primaryImageTag, maxWidth: 400)
+            : null;
+
+    if (imageUrl == null) return;
+
+    final colors = await ColorExtractor.extractFromUrl(imageUrl);
+    if (mounted) {
+      setState(() {
+        _dominantColor = colors.gradientStart;
+        _backgroundColor = colors.background;
+      });
+      widget.onColorChanged?.call(colors.background);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    // 增加高度到 55% 屏幕宽度，接近 16:9 比例，显示更多封面内容
+    final headerHeight = screenWidth * 0.55;
+    final api = ref.read(apiClientProvider);
+    final imageUrl = widget.item.backdropImageTag != null
+        ? api.image.getBackdropImageUrl(widget.item.id, tag: widget.item.backdropImageTag, maxWidth: 800)
+        : widget.item.primaryImageTag != null
+            ? api.image.getPrimaryImageUrl(widget.item.id, tag: widget.item.primaryImageTag, maxWidth: 600)
             : null;
 
     return Stack(
       children: [
-        SizedBox(
+        Container(
           height: headerHeight,
           width: double.infinity,
+          color: _dominantColor,
           child: MediaImage(
             imageUrl: imageUrl,
             width: double.infinity,
@@ -260,24 +321,22 @@ class _DetailHeader extends ConsumerWidget {
           ),
         ),
 
-        // 底部渐变
+        // 底部渐变（使用提取的颜色）
         Positioned(
           bottom: 0,
           left: 0,
           right: 0,
           child: Container(
-            height: 120,
+            height: 150,
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
                   Colors.transparent,
-                  Colors.black.withValues(alpha: 0.5),
-                  Theme.of(context).scaffoldBackgroundColor.withValues(alpha: 0.95),
-                  Theme.of(context).scaffoldBackgroundColor,
+                  _backgroundColor.withValues(alpha: 0.9),
+                  _backgroundColor,
                 ],
-                stops: const [0.0, 0.3, 0.8, 1.0],
               ),
             ),
           ),
@@ -307,7 +366,7 @@ class _DetailHeader extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                item.name,
+                widget.item.name,
                 style: const TextStyle(
                   fontSize: 26,
                   fontWeight: FontWeight.w800,
@@ -320,11 +379,11 @@ class _DetailHeader extends ConsumerWidget {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  if (item.communityRating != null) ...[
+                  if (widget.item.communityRating != null) ...[
                     const Icon(Icons.star, size: 16, color: Colors.amber),
                     const SizedBox(width: 4),
                     Text(
-                      item.communityRating!.toStringAsFixed(1),
+                      widget.item.communityRating!.toStringAsFixed(1),
                       style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
@@ -334,16 +393,16 @@ class _DetailHeader extends ConsumerWidget {
                     ),
                     const SizedBox(width: 12),
                   ],
-                  if (item.productionYear != null)
+                  if (widget.item.productionYear != null)
                     Text(
-                      '${item.productionYear}',
+                      '${widget.item.productionYear}',
                       style: const TextStyle(
                         fontSize: 14,
                         color: Colors.white,
                         shadows: [Shadow(blurRadius: 4, color: Colors.black54)],
                       ),
                     ),
-                  if (item.productionYear != null && item.formattedRuntime != null)
+                  if (widget.item.productionYear != null && widget.item.formattedRuntime != null)
                     const Text(
                       ' · ',
                       style: TextStyle(
@@ -352,9 +411,9 @@ class _DetailHeader extends ConsumerWidget {
                         shadows: [Shadow(blurRadius: 4, color: Colors.black54)],
                       ),
                     ),
-                  if (item.formattedRuntime != null)
+                  if (widget.item.formattedRuntime != null)
                     Text(
-                      item.formattedRuntime!,
+                      widget.item.formattedRuntime!,
                       style: const TextStyle(
                         fontSize: 14,
                         color: Colors.white,
@@ -362,7 +421,7 @@ class _DetailHeader extends ConsumerWidget {
                       ),
                     ),
                   const SizedBox(width: 12),
-                  ...?item.genres?.take(5).map((genre) => Padding(
+                  ...?widget.item.genres?.take(5).map((genre) => Padding(
                     padding: const EdgeInsets.only(right: 6),
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -447,382 +506,7 @@ class _OverviewSectionState extends State<_OverviewSection> {
   }
 }
 
-/// 播放选项区块
-class _PlaybackOptions extends ConsumerWidget {
-  final String episodeId;
-  final PlaybackInfo info;
 
-  const _PlaybackOptions({required this.episodeId, required this.info});
-
-  MediaSource? _resolveMediaSource(PlaybackInfo info, String? selectedSourceId) {
-    if (info.mediaSources.isEmpty) {
-      return null;
-    }
-    if (selectedSourceId == null || selectedSourceId.isEmpty) {
-      return info.mediaSources.firstOrNull;
-    }
-    return info.mediaSources.where((source) => source.id == selectedSourceId).firstOrNull ??
-        info.mediaSources.firstOrNull;
-  }
-
-  MediaStream? _resolveSelectedStream(List<MediaStream> streams, int? selectedIndex) {
-    if (streams.isEmpty) {
-      return null;
-    }
-    if (selectedIndex == null) {
-      return streams.where((stream) => stream.isDefault == true).firstOrNull ??
-          streams.firstOrNull;
-    }
-    return streams.where((stream) => stream.index == selectedIndex).firstOrNull;
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final server = ref.watch(currentServerProvider);
-    final selectedLineIndex = server?.activeLineIndex ?? 0;
-    final selectedAudioIndex = ref.watch(audioTrackProvider);
-    final selectedSubtitleIndex = ref.watch(subtitleTrackProvider);
-    final selectedSecondarySubtitleIndex = ref.watch(secondarySubtitleTrackProvider);
-    final selectedSourceId = ref.watch(selectedMediaSourceProvider);
-
-    final mediaSource = _resolveMediaSource(info, selectedSourceId);
-    if (mediaSource == null) {
-      return const SizedBox.shrink();
-    }
-    if (selectedSourceId != null && selectedSourceId != mediaSource.id) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (ref.read(selectedMediaSourceProvider) == selectedSourceId) {
-          ref.read(selectedMediaSourceProvider.notifier).state = mediaSource.id;
-        }
-      });
-    }
-
-    final audioStreams = mediaSource.mediaStreams.where((s) => s.isAudio).toList();
-    final subtitleStreams = mediaSource.mediaStreams.where((s) => s.isSubtitle).toList();
-
-    final selectedAudio = _resolveSelectedStream(audioStreams, selectedAudioIndex);
-
-    final selectedSubtitle =
-        _resolveSelectedStream(subtitleStreams, selectedSubtitleIndex);
-
-    final availableSecondarySubs = subtitleStreams.where((s) =>
-      selectedSubtitle == null || s.index != selectedSubtitle.index
-    ).toList();
-    final selectedSecondarySubtitle = _resolveSelectedStream(
-      availableSecondarySubs,
-      selectedSecondarySubtitleIndex,
-    );
-    if (selectedAudioIndex == null && selectedAudio?.index != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (ref.read(audioTrackProvider) == null) {
-          ref.read(audioTrackProvider.notifier).state = selectedAudio!.index;
-        }
-      });
-    }
-    if (selectedSubtitleIndex == null && selectedSubtitle?.index != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (ref.read(subtitleTrackProvider) == null) {
-          ref.read(subtitleTrackProvider.notifier).state = selectedSubtitle!.index;
-        }
-      });
-    }
-
-    final currentLine = server?.lines.isNotEmpty == true
-        ? server!.lines[selectedLineIndex.clamp(0, server.lines.length - 1)]
-        : null;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildDropdownTile(
-            context,
-            icon: Icons.route,
-            title: '线路选择',
-            value: currentLine?.name ?? '当前线路',
-            onTap: () => _showLineSelector(context, ref),
-          ),
-          if (info.mediaSources.length > 1)
-            _buildDropdownTile(
-              context,
-              icon: Icons.layers,
-              title: '版本选择',
-              value: mediaSource.name ?? '默认',
-              onTap: () => _showSourceSelector(context, ref, info, mediaSource.id),
-            ),
-          _buildDropdownTile(
-            context,
-            icon: Icons.audiotrack,
-            title: '音频选择',
-            value: selectedAudio?.displayTitle ?? '默认音轨',
-            onTap: () => _showStreamSelector(context, ref, audioStreams, 'Audio'),
-          ),
-          _buildDropdownTile(
-            context,
-            icon: Icons.subtitles,
-            title: '字幕选择',
-            value: selectedSubtitle?.displayTitle ?? '无字幕',
-            onTap: () => _showStreamSelector(context, ref, subtitleStreams, 'Subtitle'),
-          ),
-          _buildDropdownTile(
-            context,
-            icon: Icons.subtitles_outlined,
-            title: '次字幕选择',
-            value: selectedSecondarySubtitle?.displayTitle ?? '无',
-            onTap: () => _showSecondarySubtitleSelector(context, ref, availableSecondarySubs),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showLineSelector(BuildContext context, WidgetRef ref) {
-    final server = ref.read(currentServerProvider);
-    if (server == null) return;
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => Consumer(
-        builder: (context, ref, _) {
-          final currentServer = ref.watch(currentServerProvider) ?? server;
-          return SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text(
-                    '选择线路',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                  ),
-                ),
-                const Divider(height: 1),
-                ...currentServer.lines.asMap().entries.map((entry) {
-                  final idx = entry.key;
-                  final line = entry.value;
-                  return ListTile(
-                    title: Text(line.name),
-                    trailing: idx == currentServer.activeLineIndex
-                        ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
-                        : null,
-                    onTap: () {
-                      ref.read(serverListProvider.notifier).setActiveLine(currentServer.id, idx);
-                      final updatedServer = ref.read(serverListProvider).firstWhere((s) => s.id == currentServer.id);
-                      ref.read(currentServerProvider.notifier).state = updatedServer;
-                      ref.read(selectedMediaSourceProvider.notifier).state = null;
-                      ref.read(audioTrackProvider.notifier).state = null;
-                      ref.read(subtitleTrackProvider.notifier).state = null;
-                      ref.read(secondarySubtitleTrackProvider.notifier).state = null;
-                      ref.invalidate(playbackInfoProvider(episodeId));
-                      Navigator.pop(ctx);
-                    },
-                  );
-                }),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  void _showSourceSelector(BuildContext context, WidgetRef ref, PlaybackInfo info, String currentSourceId) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => Consumer(
-        builder: (context, ref, _) {
-          final selectedSourceId = ref.watch(selectedMediaSourceProvider) ?? currentSourceId;
-          return SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text(
-                    '选择版本',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                  ),
-                ),
-                const Divider(height: 1),
-                ...info.mediaSources.map((source) {
-                  return ListTile(
-                    title: Text(source.name ?? '默认'),
-                    subtitle: Text(source.container ?? ''),
-                    trailing: source.id == selectedSourceId
-                        ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
-                        : null,
-                    onTap: () {
-                      ref.read(selectedMediaSourceProvider.notifier).state = source.id;
-                      ref.read(audioTrackProvider.notifier).state = null;
-                      ref.read(subtitleTrackProvider.notifier).state = null;
-                      ref.read(secondarySubtitleTrackProvider.notifier).state = null;
-                      Navigator.pop(ctx);
-                    },
-                  );
-                }),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  void _showStreamSelector(BuildContext context, WidgetRef ref, List<MediaStream> streams, String type) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => Consumer(
-        builder: (context, ref, _) {
-          final currentIndex = type == 'Audio'
-              ? ref.watch(audioTrackProvider)
-              : ref.watch(subtitleTrackProvider);
-          final secondaryIndex = ref.watch(secondarySubtitleTrackProvider);
-          return SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      Text(
-                        type == 'Audio' ? '选择音频轨道' : '选择字幕轨道',
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        onPressed: () => Navigator.pop(ctx),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(height: 1),
-                if (streams.isEmpty)
-                  const ListTile(title: Text('无可用轨道'))
-                else
-                  ...streams.map((stream) {
-                    final isSelected = currentIndex == stream.index;
-                    return ListTile(
-                      title: Text(stream.readableLabel(siblings: streams)),
-                      subtitle: stream.codec != null ? Text('编码: ${stream.codec}') : null,
-                      trailing: isSelected
-                          ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
-                          : null,
-                      onTap: () {
-                        if (type == 'Audio') {
-                          ref.read(audioTrackProvider.notifier).state = stream.index;
-                        } else {
-                          ref.read(subtitleTrackProvider.notifier).state = stream.index;
-                          if (secondaryIndex == stream.index) {
-                            ref.read(secondarySubtitleTrackProvider.notifier).state = null;
-                          }
-                        }
-                        Navigator.pop(ctx);
-                      },
-                    );
-                  }),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  void _showSecondarySubtitleSelector(BuildContext context, WidgetRef ref, List<MediaStream> streams) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => Consumer(
-        builder: (context, ref, _) {
-          final secondaryIndex = ref.watch(secondarySubtitleTrackProvider);
-          return SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      const Text(
-                        '选择次字幕轨道',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        onPressed: () => Navigator.pop(ctx),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  title: const Text('关闭次字幕'),
-                  trailing: secondaryIndex == null
-                      ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
-                      : null,
-                  onTap: () {
-                    ref.read(secondarySubtitleTrackProvider.notifier).state = null;
-                    Navigator.pop(ctx);
-                  },
-                ),
-                const Divider(height: 1),
-                if (streams.isEmpty)
-                  const ListTile(title: Text('无可用轨道'))
-                else
-                  ...streams.map((stream) {
-                    final isSelected = secondaryIndex == stream.index;
-                    return ListTile(
-                      title: Text(stream.readableLabel(siblings: streams)),
-                      subtitle: stream.codec != null ? Text('编码: ${stream.codec}') : null,
-                      trailing: isSelected
-                          ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
-                          : null,
-                      onTap: () {
-                        ref.read(secondarySubtitleTrackProvider.notifier).state = stream.index;
-                        Navigator.pop(ctx);
-                      },
-                    );
-                  }),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildDropdownTile(
-    BuildContext context, {
-    required IconData icon,
-    required String title,
-    required String value,
-    required VoidCallback onTap,
-  }) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: Icon(icon),
-        title: Text(title),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Flexible(
-              child: Text(
-                value,
-                style: TextStyle(color: Theme.of(context).textTheme.bodySmall?.color),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const Icon(Icons.arrow_drop_down),
-          ],
-        ),
-        onTap: onTap,
-      ),
-    );
-  }
-}
 
 /// 播放按钮组（播放 5/6 + 更多 1/6）
 class _PlayButtons extends ConsumerWidget {

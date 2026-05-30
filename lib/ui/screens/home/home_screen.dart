@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../../core/utils/color_extractor.dart';
 import '../../utils/media_helpers.dart';
 import '../../widgets/common/media_widgets.dart';
 
@@ -19,6 +20,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   final ScrollController _scrollController = ScrollController();
   double _appBarOpacity = 1.0;
   double _lastScrollOffset = 0.0;
+  Color _backgroundColor = const Color(0xFF121212);
 
   @override
   void initState() {
@@ -49,7 +51,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     _lastScrollOffset = offset;
   }
-  
+
+  void _onBackgroundColorChanged(Color color) {
+    if (_backgroundColor != color) {
+      setState(() {
+        _backgroundColor = color;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentServer = ref.watch(currentServerProvider);
@@ -57,20 +67,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final recommendationsAsync = ref.watch(randomRecommendationsProvider);
 
     return Scaffold(
+      backgroundColor: _backgroundColor,
       body: Stack(
         children: [
           CustomScrollView(
             controller: _scrollController,
             slivers: [
-              // 占位区域（顶栏高度）
-              const SliverToBoxAdapter(
-                child: SizedBox(height: 60),
-              ),
-
-              // 随机推荐轮播（可被隐藏）
+              // 随机推荐轮播（可被隐藏）- 直接顶到最上方
               if (!hideDailyRecommendations)
-                const SliverToBoxAdapter(
-                  child: RandomRecommendationCarousel(),
+                SliverToBoxAdapter(
+                  child: RandomRecommendationCarousel(
+                    onColorChanged: _onBackgroundColorChanged,
+                  ),
                 ),
 
               // 继续观看
@@ -85,7 +93,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
             ],
           ),
-          // 顶部栏（悬浮，透明背景+封面）
+          // 顶部栏（悬浮，透明背景）
           Positioned(
             top: 0,
             left: 0,
@@ -307,8 +315,10 @@ class _HomeAppBarState extends ConsumerState<_HomeAppBar> {
 
 /// 随机推荐轮播
 class RandomRecommendationCarousel extends ConsumerStatefulWidget {
-  const RandomRecommendationCarousel({super.key});
-  
+  final ValueChanged<Color>? onColorChanged;
+
+  const RandomRecommendationCarousel({super.key, this.onColorChanged});
+
   @override
   ConsumerState<RandomRecommendationCarousel> createState() => _RandomRecommendationCarouselState();
 }
@@ -316,23 +326,61 @@ class RandomRecommendationCarousel extends ConsumerStatefulWidget {
 class _RandomRecommendationCarouselState extends ConsumerState<RandomRecommendationCarousel> {
   final PageController _pageController = PageController();
   int _currentPage = 0;
-  
+  Color _dominantColor = Colors.transparent;
+  Color _backgroundColor = const Color(0xFF121212);
+  bool _initialColorExtracted = false;
+
   @override
   void dispose() {
     _pageController.dispose();
     super.dispose();
   }
-  
+
+  Future<void> _extractColor(MediaItem item) async {
+    final api = ref.read(apiClientProvider);
+    final imageUrl = item.backdropImageTag != null
+        ? api.image.getBackdropImageUrl(item.id, tag: item.backdropImageTag, maxWidth: 400)
+        : item.primaryImageTag != null
+            ? api.image.getPrimaryImageUrl(item.id, tag: item.primaryImageTag, maxWidth: 400)
+            : null;
+
+    if (imageUrl == null) return;
+
+    final colors = await ColorExtractor.extractFromUrl(imageUrl);
+    if (mounted) {
+      setState(() {
+        _dominantColor = colors.gradientStart;
+        _backgroundColor = colors.background;
+      });
+      widget.onColorChanged?.call(colors.background);
+    }
+  }
+
+  void _onPageChanged(int index, List<MediaItem> items) {
+    setState(() {
+      _currentPage = index;
+    });
+    if (index < items.length) {
+      _extractColor(items[index]);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final recommendationsAsync = ref.watch(randomRecommendationsProvider);
     final screenHeight = MediaQuery.of(context).size.height;
     final carouselHeight = screenHeight * 0.6;
-    
+
     return recommendationsAsync.when(
       data: (items) {
         if (items.isEmpty) return const SizedBox.shrink();
-        
+
+        // 首次加载时提取第一个item的颜色
+        if (!_initialColorExtracted && items.isNotEmpty) {
+          _initialColorExtracted = true;
+          _extractColor(items[0]);
+        }
+
         return SizedBox(
           height: carouselHeight,
           child: Stack(
@@ -341,20 +389,18 @@ class _RandomRecommendationCarouselState extends ConsumerState<RandomRecommendat
               PageView.builder(
                 controller: _pageController,
                 itemCount: items.length,
-                onPageChanged: (index) {
-                  setState(() {
-                    _currentPage = index;
-                  });
-                },
+                onPageChanged: (index) => _onPageChanged(index, items),
                 itemBuilder: (context, index) {
                   final item = items[index];
                   return _CarouselItem(
                     item: item,
+                    dominantColor: _dominantColor,
+                    backgroundColor: _backgroundColor,
                     onTap: () => context.push(mediaRouteForItem(item)),
                   );
                 },
               ),
-              
+
               // 指示器
               Positioned(
                 bottom: 16,
@@ -393,9 +439,16 @@ class _RandomRecommendationCarouselState extends ConsumerState<RandomRecommendat
 class _CarouselItem extends ConsumerWidget {
   final MediaItem item;
   final VoidCallback onTap;
-  
-  const _CarouselItem({required this.item, required this.onTap});
-  
+  final Color dominantColor;
+  final Color backgroundColor;
+
+  const _CarouselItem({
+    required this.item,
+    required this.onTap,
+    required this.dominantColor,
+    required this.backgroundColor,
+  });
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final api = ref.read(apiClientProvider);
@@ -404,7 +457,7 @@ class _CarouselItem extends ConsumerWidget {
         : item.primaryImageTag != null
             ? api.image.getPrimaryImageUrl(item.id, tag: item.primaryImageTag, maxWidth: 800)
             : null;
-    
+
     return GestureDetector(
       onTap: onTap,
       child: Stack(
@@ -416,12 +469,32 @@ class _CarouselItem extends ConsumerWidget {
             height: double.infinity,
           ),
 
-          // 底部渐变遮罩（过渡到页面背景色）
+          // 顶部渐变遮罩（确保顶栏文字可见）
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 120,
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.bottomCenter,
+                  end: Alignment.topCenter,
+                  colors: [
+                    Colors.transparent,
+                    Colors.black54,
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // 底部渐变遮罩（平滑过渡到背景色，修复细线问题）
           Positioned(
             bottom: 0,
             left: 0,
             right: 0,
-            height: 280,
+            height: 320,
             child: Container(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
@@ -429,11 +502,12 @@ class _CarouselItem extends ConsumerWidget {
                   end: Alignment.bottomCenter,
                   colors: [
                     Colors.transparent,
-                    Colors.black.withValues(alpha: 0.3),
-                    Theme.of(context).scaffoldBackgroundColor.withValues(alpha: 0.95),
-                    Theme.of(context).scaffoldBackgroundColor,
+                    Colors.transparent,
+                    dominantColor.withValues(alpha: 0.5),
+                    dominantColor.withValues(alpha: 0.85),
+                    backgroundColor,
                   ],
-                  stops: const [0.0, 0.3, 0.8, 1.0],
+                  stops: const [0.0, 0.4, 0.65, 0.85, 1.0],
                 ),
               ),
             ),
