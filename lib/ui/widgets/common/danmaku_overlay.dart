@@ -110,7 +110,6 @@ class DanmakuPainter extends CustomPainter {
   final double speedFactor;
   final double densityFactor;
 
-  static const double _baseFontSize = 16.0;
   static const double _maxFontSize = 36.0;
   static const double _minFontSize = 12.0;
   static const double _baseSpeed = 120.0;

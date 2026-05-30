@@ -159,7 +159,7 @@ class _SettingsCard extends StatelessWidget {
           width: 48,
           height: 48,
           decoration: BoxDecoration(
-            color: const Color(0xFF5B8DEF).withOpacity(0.1),
+            color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Icon(icon, color: const Color(0xFF5B8DEF)),
@@ -386,20 +386,24 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('图片缓存过期天数'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: days.map((d) => RadioListTile<int>(
-            title: Text('$d 天'),
-            value: d,
-            groupValue: current,
-            onChanged: (value) async {
-              if (value != null) {
-                ref.read(imageCacheExpiryDaysProvider.notifier).state = value;
-                await CacheService.setImageCacheExpiryDays(value);
-              }
+        content: RadioGroup<int>(
+          groupValue: current,
+          onChanged: (value) async {
+            if (value != null) {
+              ref.read(imageCacheExpiryDaysProvider.notifier).state = value;
+              await CacheService.setImageCacheExpiryDays(value);
+            }
+            if (ctx.mounted) {
               Navigator.pop(ctx);
-            },
-          )).toList(),
+            }
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: days.map((d) => RadioListTile<int>(
+              title: Text('$d 天'),
+              value: d,
+            )).toList(),
+          ),
         ),
       ),
     );
@@ -413,20 +417,24 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('视频缓存上限'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: List.generate(sizes.length, (i) => RadioListTile<int>(
-            title: Text(labels[i]),
-            value: sizes[i],
-            groupValue: current,
-            onChanged: (value) async {
-              if (value != null) {
-                ref.read(videoCacheMaxSizeMBProvider.notifier).state = value;
-                await CacheService.setVideoCacheMaxSizeMB(value);
-              }
+        content: RadioGroup<int>(
+          groupValue: current,
+          onChanged: (value) async {
+            if (value != null) {
+              ref.read(videoCacheMaxSizeMBProvider.notifier).state = value;
+              await CacheService.setVideoCacheMaxSizeMB(value);
+            }
+            if (ctx.mounted) {
               Navigator.pop(ctx);
-            },
-          )),
+            }
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: List.generate(sizes.length, (i) => RadioListTile<int>(
+              title: Text(labels[i]),
+              value: sizes[i],
+            )),
+          ),
         ),
       ),
     );
@@ -437,28 +445,26 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('语言'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            RadioListTile<String>(
-              title: const Text('跟随系统'),
-              value: 'system',
-              groupValue: 'system',
-              onChanged: (_) => Navigator.pop(context),
-            ),
-            RadioListTile<String>(
-              title: const Text('简体中文'),
-              value: 'zh_CN',
-              groupValue: 'system',
-              onChanged: (_) => Navigator.pop(context),
-            ),
-            RadioListTile<String>(
-              title: const Text('English'),
-              value: 'en',
-              groupValue: 'system',
-              onChanged: (_) => Navigator.pop(context),
-            ),
-          ],
+        content: RadioGroup<String>(
+          groupValue: 'system',
+          onChanged: (_) => Navigator.pop(context),
+          child: const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              RadioListTile<String>(
+                title: Text('跟随系统'),
+                value: 'system',
+              ),
+              RadioListTile<String>(
+                title: Text('简体中文'),
+                value: 'zh_CN',
+              ),
+              RadioListTile<String>(
+                title: Text('English'),
+                value: 'en',
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -469,28 +475,26 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('启动页'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            RadioListTile<String>(
-              title: const Text('首页'),
-              value: 'home',
-              groupValue: 'home',
-              onChanged: (_) => Navigator.pop(context),
-            ),
-            RadioListTile<String>(
-              title: const Text('服务器列表'),
-              value: 'servers',
-              groupValue: 'home',
-              onChanged: (_) => Navigator.pop(context),
-            ),
-            RadioListTile<String>(
-              title: const Text('继续观看'),
-              value: 'resume',
-              groupValue: 'home',
-              onChanged: (_) => Navigator.pop(context),
-            ),
-          ],
+        content: RadioGroup<String>(
+          groupValue: 'home',
+          onChanged: (_) => Navigator.pop(context),
+          child: const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              RadioListTile<String>(
+                title: Text('首页'),
+                value: 'home',
+              ),
+              RadioListTile<String>(
+                title: Text('服务器列表'),
+                value: 'servers',
+              ),
+              RadioListTile<String>(
+                title: Text('继续观看'),
+                value: 'resume',
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -501,22 +505,22 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('聚合搜索优先级'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            RadioListTile<String>(
-              title: const Text('服务器名称优先'),
-              value: 'name',
-              groupValue: 'name',
-              onChanged: (_) => Navigator.pop(context),
-            ),
-            RadioListTile<String>(
-              title: const Text('响应速度优先'),
-              value: 'speed',
-              groupValue: 'name',
-              onChanged: (_) => Navigator.pop(context),
-            ),
-          ],
+        content: RadioGroup<String>(
+          groupValue: 'name',
+          onChanged: (_) => Navigator.pop(context),
+          child: const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              RadioListTile<String>(
+                title: Text('服务器名称优先'),
+                value: 'name',
+              ),
+              RadioListTile<String>(
+                title: Text('响应速度优先'),
+                value: 'speed',
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -528,19 +532,21 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('外观'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: ThemeModeOption.values.map((mode) => RadioListTile<ThemeModeOption>(
-            title: Text(mode.name),
-            value: mode,
-            groupValue: current,
-            onChanged: (value) {
-              if (value != null) {
-                ref.read(themeModeProvider.notifier).state = value;
-              }
-              Navigator.pop(context);
-            },
-          )).toList(),
+        content: RadioGroup<ThemeModeOption>(
+          groupValue: current,
+          onChanged: (value) {
+            if (value != null) {
+              ref.read(themeModeProvider.notifier).state = value;
+            }
+            Navigator.pop(context);
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: ThemeModeOption.values.map((mode) => RadioListTile<ThemeModeOption>(
+              title: Text(mode.name),
+              value: mode,
+            )).toList(),
+          ),
         ),
       ),
     );
@@ -753,34 +759,29 @@ class PlayerSettingsScreen extends ConsumerWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('播放器内核'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            RadioListTile<String>(
-              title: const Text('ExoPlayer/AVPlayer（默认）'),
-              subtitle: const Text('轻量稳定，适合大多数场景'),
-              value: 'video_player',
-              groupValue: ref.read(playerCoreProvider),
-              onChanged: (value) {
-                if (value != null) {
-                  ref.read(playerCoreProvider.notifier).state = value;
-                }
-                Navigator.pop(context);
-              },
-            ),
-            RadioListTile<String>(
-              title: const Text('MPV（media_kit）'),
-              subtitle: const Text('支持PGS/SUP图形字幕、HDR'),
-              value: 'media_kit',
-              groupValue: ref.read(playerCoreProvider),
-              onChanged: (value) {
-                if (value != null) {
-                  ref.read(playerCoreProvider.notifier).state = value;
-                }
-                Navigator.pop(context);
-              },
-            ),
-          ],
+        content: RadioGroup<String>(
+          groupValue: ref.read(playerCoreProvider),
+          onChanged: (value) {
+            if (value != null) {
+              ref.read(playerCoreProvider.notifier).state = value;
+            }
+            Navigator.pop(context);
+          },
+          child: const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              RadioListTile<String>(
+                title: Text('ExoPlayer/AVPlayer（默认）'),
+                subtitle: Text('轻量稳定，适合大多数场景'),
+                value: 'video_player',
+              ),
+              RadioListTile<String>(
+                title: Text('MPV（media_kit）'),
+                subtitle: Text('支持PGS/SUP图形字幕、HDR'),
+                value: 'media_kit',
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -792,19 +793,21 @@ class PlayerSettingsScreen extends ConsumerWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('默认播放速度'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: speeds.map((speed) => RadioListTile<double>(
-            title: Text('${speed}x'),
-            value: speed,
-            groupValue: ref.read(defaultPlaybackSpeedProvider),
-            onChanged: (value) {
-              if (value != null) {
-                ref.read(defaultPlaybackSpeedProvider.notifier).state = value;
-              }
-              Navigator.pop(context);
-            },
-          )).toList(),
+        content: RadioGroup<double>(
+          groupValue: ref.read(defaultPlaybackSpeedProvider),
+          onChanged: (value) {
+            if (value != null) {
+              ref.read(defaultPlaybackSpeedProvider.notifier).state = value;
+            }
+            Navigator.pop(context);
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: speeds.map((speed) => RadioListTile<double>(
+              title: Text('${speed}x'),
+              value: speed,
+            )).toList(),
+          ),
         ),
       ),
     );
@@ -816,19 +819,21 @@ class PlayerSettingsScreen extends ConsumerWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('快进步长'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: steps.map((step) => RadioListTile<int>(
-            title: Text('$step秒'),
-            value: step,
-            groupValue: ref.read(skipForwardStepProvider),
-            onChanged: (value) {
-              if (value != null) {
-                ref.read(skipForwardStepProvider.notifier).state = value;
-              }
-              Navigator.pop(context);
-            },
-          )).toList(),
+        content: RadioGroup<int>(
+          groupValue: ref.read(skipForwardStepProvider),
+          onChanged: (value) {
+            if (value != null) {
+              ref.read(skipForwardStepProvider.notifier).state = value;
+            }
+            Navigator.pop(context);
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: steps.map((step) => RadioListTile<int>(
+              title: Text('$step秒'),
+              value: step,
+            )).toList(),
+          ),
         ),
       ),
     );
@@ -840,19 +845,21 @@ class PlayerSettingsScreen extends ConsumerWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('长按快进倍速'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: speeds.map((speed) => RadioListTile<double>(
-            title: Text('${speed}x'),
-            value: speed,
-            groupValue: ref.read(longPressSpeedProvider),
-            onChanged: (value) {
-              if (value != null) {
-                ref.read(longPressSpeedProvider.notifier).state = value;
-              }
-              Navigator.pop(context);
-            },
-          )).toList(),
+        content: RadioGroup<double>(
+          groupValue: ref.read(longPressSpeedProvider),
+          onChanged: (value) {
+            if (value != null) {
+              ref.read(longPressSpeedProvider.notifier).state = value;
+            }
+            Navigator.pop(context);
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: speeds.map((speed) => RadioListTile<double>(
+              title: Text('${speed}x'),
+              value: speed,
+            )).toList(),
+          ),
         ),
       ),
     );
@@ -870,19 +877,21 @@ class PlayerSettingsScreen extends ConsumerWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('首选字幕语言'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: languages.entries.map((entry) => RadioListTile<String>(
-            title: Text(entry.value),
-            value: entry.key,
-            groupValue: current,
-            onChanged: (value) {
-              if (value != null) {
-                ref.read(preferredSubtitleLanguageProvider.notifier).state = value;
-              }
-              Navigator.pop(context);
-            },
-          )).toList(),
+        content: RadioGroup<String>(
+          groupValue: current,
+          onChanged: (value) {
+            if (value != null) {
+              ref.read(preferredSubtitleLanguageProvider.notifier).state = value;
+            }
+            Navigator.pop(context);
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: languages.entries.map((entry) => RadioListTile<String>(
+              title: Text(entry.value),
+              value: entry.key,
+            )).toList(),
+          ),
         ),
       ),
     );
@@ -900,19 +909,21 @@ class PlayerSettingsScreen extends ConsumerWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('首选音频语言'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: languages.entries.map((entry) => RadioListTile<String>(
-            title: Text(entry.value),
-            value: entry.key,
-            groupValue: current,
-            onChanged: (value) {
-              if (value != null) {
-                ref.read(preferredAudioLanguageProvider.notifier).state = value;
-              }
-              Navigator.pop(context);
-            },
-          )).toList(),
+        content: RadioGroup<String>(
+          groupValue: current,
+          onChanged: (value) {
+            if (value != null) {
+              ref.read(preferredAudioLanguageProvider.notifier).state = value;
+            }
+            Navigator.pop(context);
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: languages.entries.map((entry) => RadioListTile<String>(
+              title: Text(entry.value),
+              value: entry.key,
+            )).toList(),
+          ),
         ),
       ),
     );
@@ -925,19 +936,21 @@ class PlayerSettingsScreen extends ConsumerWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('首选版本'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: versions.map((version) => RadioListTile<String>(
-            title: Text(version),
-            value: version,
-            groupValue: current,
-            onChanged: (value) {
-              if (value != null) {
-                ref.read(preferredVersionProvider.notifier).state = value;
-              }
-              Navigator.pop(context);
-            },
-          )).toList(),
+        content: RadioGroup<String>(
+          groupValue: current,
+          onChanged: (value) {
+            if (value != null) {
+              ref.read(preferredVersionProvider.notifier).state = value;
+            }
+            Navigator.pop(context);
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: versions.map((version) => RadioListTile<String>(
+              title: Text(version),
+              value: version,
+            )).toList(),
+          ),
         ),
       ),
     );
@@ -950,19 +963,21 @@ class PlayerSettingsScreen extends ConsumerWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('字幕字体'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: fonts.map((font) => RadioListTile<String>(
-            title: Text(font),
-            value: font,
-            groupValue: current,
-            onChanged: (value) {
-              if (value != null) {
-                ref.read(subtitleFontProvider.notifier).state = value;
-              }
-              Navigator.pop(context);
-            },
-          )).toList(),
+        content: RadioGroup<String>(
+          groupValue: current,
+          onChanged: (value) {
+            if (value != null) {
+              ref.read(subtitleFontProvider.notifier).state = value;
+            }
+            Navigator.pop(context);
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: fonts.map((font) => RadioListTile<String>(
+              title: Text(font),
+              value: font,
+            )).toList(),
+          ),
         ),
       ),
     );
@@ -1842,21 +1857,3 @@ class BackupRestoreScreen extends ConsumerWidget {
   }
 }
 
-/// 简化版 RadioGroup，用于主题选择
-class RadioGroup<T> extends StatelessWidget {
-  final T groupValue;
-  final ValueChanged<T?> onChanged;
-  final Widget child;
-
-  const RadioGroup({
-    super.key,
-    required this.groupValue,
-    required this.onChanged,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return child;
-  }
-}

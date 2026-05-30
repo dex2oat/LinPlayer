@@ -358,7 +358,7 @@ class _ServerCard extends StatelessWidget {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF5B8DEF).withOpacity(0.15),
+                  color: const Color(0xFF5B8DEF).withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: server.iconUrl != null

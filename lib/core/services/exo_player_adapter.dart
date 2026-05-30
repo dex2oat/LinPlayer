@@ -689,7 +689,7 @@ class ExoPlayerAdapter implements PlayerAdapter {
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: _subtitleBackground
                                 ? BoxDecoration(
-                                    color: Colors.black.withOpacity(0.7),
+                                    color: Colors.black.withValues(alpha: 0.7),
                                     borderRadius: BorderRadius.circular(4),
                                   )
                                 : null,
@@ -708,22 +708,22 @@ class ExoPlayerAdapter implements PlayerAdapter {
                                         Shadow(
                                           offset: const Offset(1, 1),
                                           blurRadius: 2,
-                                          color: Colors.black.withOpacity(0.8),
+                                          color: Colors.black.withValues(alpha: 0.8),
                                         ),
                                         Shadow(
                                           offset: const Offset(-1, -1),
                                           blurRadius: 2,
-                                          color: Colors.black.withOpacity(0.8),
+                                          color: Colors.black.withValues(alpha: 0.8),
                                         ),
                                         Shadow(
                                           offset: const Offset(1, -1),
                                           blurRadius: 2,
-                                          color: Colors.black.withOpacity(0.8),
+                                          color: Colors.black.withValues(alpha: 0.8),
                                         ),
                                         Shadow(
                                           offset: const Offset(-1, 1),
                                           blurRadius: 2,
-                                          color: Colors.black.withOpacity(0.8),
+                                          color: Colors.black.withValues(alpha: 0.8),
                                         ),
                                       ],
                               ),

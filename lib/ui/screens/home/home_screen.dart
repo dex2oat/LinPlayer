@@ -107,82 +107,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
-  void _showRandomRecommendations(BuildContext context, WidgetRef ref) {
-    final recommendationsAsync = ref.read(randomRecommendationsProvider);
-    recommendationsAsync.when(
-      data: (items) {
-        if (items.isEmpty) return;
-        showModalBottomSheet(
-          context: context,
-          isScrollControlled: true,
-          builder: (context) => DraggableScrollableSheet(
-            initialChildSize: 0.7,
-            minChildSize: 0.3,
-            maxChildSize: 0.9,
-            expand: false,
-            builder: (context, scrollController) {
-              return SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    children: [
-                      Row(
-                        children: [
-                          const Text(
-                            '随机推荐',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                          ),
-                          const Spacer(),
-                          IconButton(
-                            icon: const Icon(Icons.refresh),
-                            onPressed: () {
-                              ref.invalidate(randomRecommendationsProvider);
-                              Navigator.pop(context);
-                            },
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close),
-                            onPressed: () => Navigator.pop(context),
-                          ),
-                        ],
-                      ),
-                      const Divider(),
-                      Expanded(
-                        child: GridView.builder(
-                          controller: scrollController,
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 3,
-                            childAspectRatio: 0.55,
-                            crossAxisSpacing: 12,
-                            mainAxisSpacing: 12,
-                          ),
-                          itemCount: items.length,
-                          itemBuilder: (context, index) {
-                            final item = items[index];
-                            return MediaPoster(
-                              item: item,
-                              width: double.infinity,
-                              height: double.infinity,
-                              onTap: () {
-                                Navigator.pop(context);
-                                context.push('/detail/${item.id}');
-                              },
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        );
-      },
-      loading: () {},
-      error: (_, __) {},
-    );
-  }
 }
 
 /// 首页顶部栏
@@ -261,7 +185,7 @@ class _HomeAppBarState extends ConsumerState<_HomeAppBar> {
                               width: 36,
                               height: 36,
                               decoration: BoxDecoration(
-                                color: const Color(0xFF5B8DEF).withOpacity(0.15),
+                                color: const Color(0xFF5B8DEF).withValues(alpha: 0.15),
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               child: server.iconUrl != null
@@ -339,7 +263,7 @@ class _HomeAppBarState extends ConsumerState<_HomeAppBar> {
                       width: 32,
                       height: 32,
                       decoration: BoxDecoration(
-                        color: const Color(0xFF5B8DEF).withOpacity(0.15),
+                        color: const Color(0xFF5B8DEF).withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: const Icon(Icons.dns, size: 18, color: Color(0xFF5B8DEF)),
@@ -446,7 +370,7 @@ class _RandomRecommendationCarouselState extends ConsumerState<RandomRecommendat
                         borderRadius: BorderRadius.circular(3),
                         color: index == _currentPage
                             ? const Color(0xFF5B8DEF)
-                            : Colors.white.withOpacity(0.5),
+                            : Colors.white.withValues(alpha: 0.5),
                       ),
                     );
                   }),
@@ -504,8 +428,8 @@ class _CarouselItem extends ConsumerWidget {
                   end: Alignment.bottomCenter,
                   colors: [
                     Colors.transparent,
-                    Colors.black.withOpacity(0.3),
-                    Theme.of(context).scaffoldBackgroundColor.withOpacity(0.95),
+                    Colors.black.withValues(alpha: 0.3),
+                    Theme.of(context).scaffoldBackgroundColor.withValues(alpha: 0.95),
                     Theme.of(context).scaffoldBackgroundColor,
                   ],
                   stops: const [0.0, 0.3, 0.8, 1.0],
@@ -556,7 +480,7 @@ class _CarouselItem extends ConsumerWidget {
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.2),
+                          color: Colors.white.withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
@@ -732,7 +656,7 @@ class _ContinueWatchingCard extends ConsumerWidget {
                               end: Alignment.bottomCenter,
                               colors: [
                                 Colors.transparent,
-                                Colors.black.withOpacity(0.6),
+                                Colors.black.withValues(alpha: 0.6),
                               ],
                             ),
                           ),
@@ -748,7 +672,7 @@ class _ContinueWatchingCard extends ConsumerWidget {
                           borderRadius: BorderRadius.circular(2),
                           child: LinearProgressIndicator(
                             value: item.progress,
-                            backgroundColor: Colors.white.withOpacity(0.3),
+                            backgroundColor: Colors.white.withValues(alpha: 0.3),
                             valueColor: const AlwaysStoppedAnimation(Color(0xFF5B8DEF)),
                             minHeight: 3,
                           ),
@@ -888,7 +812,7 @@ class _LibraryCard extends ConsumerWidget {
                     borderRadius: BorderRadius.circular(12),
                   )
                 : Container(
-                    color: const Color(0xFF5B8DEF).withOpacity(0.1),
+                    color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
                     child: const Center(
                       child: Icon(
                         Icons.folder,

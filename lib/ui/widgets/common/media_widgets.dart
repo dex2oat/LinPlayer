@@ -171,7 +171,7 @@ class MediaPoster extends ConsumerWidget {
                             borderRadius: const BorderRadius.vertical(bottom: Radius.circular(8)),
                             child: LinearProgressIndicator(
                               value: item.progress,
-                              backgroundColor: Colors.black.withOpacity(0.3),
+                              backgroundColor: Colors.black.withValues(alpha: 0.3),
                               valueColor: const AlwaysStoppedAnimation(Color(0xFF5B8DEF)),
                               minHeight: 3,
                             ),
@@ -184,7 +184,7 @@ class MediaPoster extends ConsumerWidget {
                           child: Container(
                             padding: const EdgeInsets.all(4),
                             decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.6),
+                              color: Colors.black.withValues(alpha: 0.6),
                               shape: BoxShape.circle,
                             ),
                             child: const Icon(Icons.check, size: 14, color: Colors.white),
@@ -205,7 +205,7 @@ class MediaPoster extends ConsumerWidget {
                           borderRadius: const BorderRadius.vertical(bottom: Radius.circular(8)),
                           child: LinearProgressIndicator(
                             value: item.progress,
-                            backgroundColor: Colors.black.withOpacity(0.3),
+                            backgroundColor: Colors.black.withValues(alpha: 0.3),
                             valueColor: const AlwaysStoppedAnimation(Color(0xFF5B8DEF)),
                             minHeight: 3,
                           ),
@@ -218,7 +218,7 @@ class MediaPoster extends ConsumerWidget {
                         child: Container(
                           padding: const EdgeInsets.all(4),
                           decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.6),
+                            color: Colors.black.withValues(alpha: 0.6),
                             shape: BoxShape.circle,
                           ),
                           child: const Icon(Icons.check, size: 14, color: Colors.white),

@@ -224,7 +224,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
             );
             final subFile = await _downloadSubtitleToTempFile(
               subtitleUrl: subUrl,
-              fileName: 'subtitle_${item.id}_${targetIndex}.ass',
+              fileName: 'subtitle_${item.id}_$targetIndex.ass',
             );
             logger.i('Player', 'ASS字幕下载完成/使用缓存 - ${await subFile.length()} bytes');
             if (subFile.existsSync() && await subFile.length() > 0) {
@@ -267,7 +267,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
           final ext = _subtitleFileExtension(codec, _playerService.coreType);
           final subFile = await _downloadSubtitleToTempFile(
             subtitleUrl: subUrl,
-            fileName: 'subtitle_${widget.itemId}_${targetIndex}.$ext',
+            fileName: 'subtitle_${widget.itemId}_$targetIndex.$ext',
           );
           logger.i('Player', 'MPV内核: 图形外挂字幕使用本地文件: ${subFile.path}');
           if (subFile.existsSync() && await subFile.length() > 0) {
@@ -297,7 +297,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
         final ext = _subtitleFileExtension(codec, _playerService.coreType);
         final subFile = await _downloadSubtitleToTempFile(
           subtitleUrl: subUrl,
-          fileName: 'subtitle_${widget.itemId}_${targetIndex}.$ext',
+          fileName: 'subtitle_${widget.itemId}_$targetIndex.$ext',
         );
         logger.i('Player', '字幕下载完成/使用缓存 (${await subFile.length()} bytes)');
 
@@ -1151,7 +1151,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
                       icon: const Icon(Icons.skip_next, size: 18),
                       label: const Text('跳过片头'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.black.withOpacity(0.7),
+                        backgroundColor: Colors.black.withValues(alpha: 0.7),
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                       ),
@@ -1263,7 +1263,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.7),
+          color: Colors.black.withValues(alpha: 0.7),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Column(
@@ -1300,7 +1300,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.7),
+          color: Colors.black.withValues(alpha: 0.7),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Column(
@@ -1501,9 +1501,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
                 child: SliderTheme(
                   data: SliderTheme.of(context).copyWith(
                     activeTrackColor: const Color(0xFF5B8DEF),
-                    inactiveTrackColor: Colors.white.withOpacity(0.3),
+                    inactiveTrackColor: Colors.white.withValues(alpha: 0.3),
                     thumbColor: const Color(0xFF5B8DEF),
-                    overlayColor: const Color(0xFF5B8DEF).withOpacity(0.2),
+                    overlayColor: const Color(0xFF5B8DEF).withValues(alpha: 0.2),
                     trackHeight: 3,
                     thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
                   ),
@@ -1610,7 +1610,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.7),
+          color: Colors.black.withValues(alpha: 0.7),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Column(
@@ -1790,11 +1790,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
               ),
               margin: const EdgeInsets.only(right: 0),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.88),
+                color: Colors.black.withValues(alpha: 0.88),
                 borderRadius: const BorderRadius.horizontal(left: Radius.circular(16)),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.3),
+                    color: Colors.black.withValues(alpha: 0.3),
                     blurRadius: 20,
                     offset: const Offset(-5, 0),
                   ),
@@ -1810,10 +1810,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                       decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.5),
+                        color: Colors.black.withValues(alpha: 0.5),
                         border: Border(
                           bottom: BorderSide(
-                            color: Colors.white.withOpacity(0.1),
+                            color: Colors.white.withValues(alpha: 0.1),
                             width: 1,
                           ),
                         ),
@@ -2471,20 +2471,24 @@ class _SubtitleSettingsContentState extends ConsumerState<_SubtitleSettingsConte
                 title: Text('无可用字幕', style: TextStyle(color: Colors.white70)),
               )
             else
-              ...subtitles.map((stream) => RadioListTile<int>(
-                title: Text(
-                  nameMap[stream.index] ?? stream.readableLabel(siblings: subtitles),
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                ),
-                subtitle: stream.codec != null
-                    ? Text('编码: ${stream.codec}${stream.isExternal == true ? ' (外挂)' : ' (内封)'}', style: const TextStyle(color: Colors.white54, fontSize: 12))
-                    : null,
-                value: stream.index,
+              RadioGroup<int>(
                 groupValue: selectedSubtitleIndex,
                 onChanged: (value) {
                   ref.read(subtitleTrackProvider.notifier).state = value;
                 },
-              )),
+                child: Column(
+                  children: subtitles.map((stream) => RadioListTile<int>(
+                    title: Text(
+                      nameMap[stream.index] ?? stream.readableLabel(siblings: subtitles),
+                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                    subtitle: stream.codec != null
+                        ? Text('编码: ${stream.codec}${stream.isExternal == true ? ' (外挂)' : ' (内封)'}', style: const TextStyle(color: Colors.white54, fontSize: 12))
+                        : null,
+                    value: stream.index,
+                  )).toList(),
+                ),
+              ),
             const SizedBox(height: 8),
             _SettingsButton(
               icon: Icons.upload_file,
@@ -2494,30 +2498,32 @@ class _SubtitleSettingsContentState extends ConsumerState<_SubtitleSettingsConte
             const SizedBox(height: 16),
             const _Divider(),
             const _SectionTitle('次字幕（第二字幕）'),
-            RadioListTile<int?>(
-              title: const Text('关闭', style: TextStyle(color: Colors.white70, fontSize: 13)),
-              value: null,
+            RadioGroup<int?>(
               groupValue: selectedSecondaryIndex,
-              onChanged: (_) {
-                ref.read(secondarySubtitleTrackProvider.notifier).state = null;
+              onChanged: (value) {
+                ref.read(secondarySubtitleTrackProvider.notifier).state = value;
               },
+              child: Column(
+                children: [
+                  const RadioListTile<int?>(
+                    title: Text('关闭', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                    value: null,
+                  ),
+                  if (subtitles.isEmpty)
+                    const ListTile(
+                      title: Text('无可用次字幕', style: TextStyle(color: Colors.white70)),
+                    )
+                  else
+                    ...subtitles.map((stream) => RadioListTile<int?>(
+                      title: Text(
+                        nameMap[stream.index] ?? stream.readableLabel(siblings: subtitles),
+                        style: const TextStyle(color: Colors.white70, fontSize: 13),
+                      ),
+                      value: stream.index,
+                    )),
+                ],
+              ),
             ),
-            if (subtitles.isEmpty)
-              const ListTile(
-                title: Text('无可用次字幕', style: TextStyle(color: Colors.white70)),
-              )
-            else
-              ...subtitles.map((stream) => RadioListTile<int?>(
-                title: Text(
-                  nameMap[stream.index] ?? stream.readableLabel(siblings: subtitles),
-                  style: const TextStyle(color: Colors.white70, fontSize: 13),
-                ),
-                value: stream.index,
-                groupValue: selectedSecondaryIndex,
-                onChanged: (value) {
-                  ref.read(secondarySubtitleTrackProvider.notifier).state = value;
-                },
-              )),
             const _Divider(),
             const _SectionTitle('字体'),
             _SettingsItem(
@@ -2599,47 +2605,6 @@ class _SubtitleSettingsContentState extends ConsumerState<_SubtitleSettingsConte
           SnackBar(content: Text('导入失败: $e')),
         );
       }
-    }
-  }
-
-  void _searchOnlineSubtitle(String title) {
-    if (mounted) {
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('在线搜索字幕'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('正在搜索: $title'),
-              const SizedBox(height: 16),
-              const Center(child: CircularProgressIndicator()),
-              const SizedBox(height: 16),
-              Text(
-                '在线字幕搜索需要接入字幕 API（如 OpenSubtitles、射手网等），当前版本暂未集成。您可以先使用「导入字幕」功能加载本地字幕文件。',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).textTheme.bodySmall?.color,
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('关闭'),
-            ),
-            FilledButton(
-              onPressed: () {
-                Navigator.pop(context);
-                _pickExternalSubtitle();
-              },
-              child: const Text('导入本地字幕'),
-            ),
-          ],
-        ),
-      );
     }
   }
 
@@ -2803,15 +2768,7 @@ class _AudioSettingsContentState extends ConsumerState<_AudioSettingsContent> {
                 title: Text('无可用音轨', style: TextStyle(color: Colors.white70)),
               )
             else
-              ...audios.map((stream) => RadioListTile<int>(
-                title: Text(
-                  stream.readableLabel(),
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                ),
-                subtitle: stream.codec != null
-                    ? Text('编码: ${stream.codec}', style: const TextStyle(color: Colors.white54, fontSize: 12))
-                    : null,
-                value: stream.index,
+              RadioGroup<int>(
                 groupValue: selectedIndex,
                 onChanged: (value) {
                   if (value != null) {
@@ -2819,7 +2776,19 @@ class _AudioSettingsContentState extends ConsumerState<_AudioSettingsContent> {
                     _switchAudioTrack(value);
                   }
                 },
-              )),
+                child: Column(
+                  children: audios.map((stream) => RadioListTile<int>(
+                    title: Text(
+                      stream.readableLabel(),
+                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                    subtitle: stream.codec != null
+                        ? Text('编码: ${stream.codec}', style: const TextStyle(color: Colors.white54, fontSize: 12))
+                        : null,
+                    value: stream.index,
+                  )).toList(),
+                ),
+              ),
             const _Divider(),
             const _SectionTitle('音频同步'),
             _SyncControl(
@@ -2985,7 +2954,7 @@ class _EpisodeSelectorContentState extends ConsumerState<_EpisodeSelectorContent
                 child: Container(
                   decoration: BoxDecoration(
                     color: isCurrent
-                        ? const Color(0xFF5B8DEF).withOpacity(0.2)
+                        ? const Color(0xFF5B8DEF).withValues(alpha: 0.2)
                         : Theme.of(context).colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(8),
                     border: isCurrent
@@ -3235,7 +3204,7 @@ class _Divider extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Divider(
-      color: Colors.white.withOpacity(0.1),
+      color: Colors.white.withValues(alpha: 0.1),
       height: 1,
       indent: 16,
       endIndent: 16,
@@ -3260,7 +3229,7 @@ class _SettingsButton extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Material(
-        color: Colors.white.withOpacity(0.08),
+        color: Colors.white.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           onTap: onTap,

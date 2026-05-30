@@ -131,7 +131,7 @@ class WebDAVService {
     final backupPath = '/LinPlayer/backups/settings_$timestamp.json';
     
     // 同时更新最新备份
-    final latestPath = '/LinPlayer/backups/settings_latest.json';
+    const latestPath = '/LinPlayer/backups/settings_latest.json';
     
     await uploadFile(backupPath, appData);
     await uploadFile(latestPath, appData);
@@ -139,7 +139,7 @@ class WebDAVService {
 
   /// 从 WebDAV 还原应用
   Future<String> restoreApp() async {
-    final latestPath = '/LinPlayer/backups/settings_latest.json';
+    const latestPath = '/LinPlayer/backups/settings_latest.json';
     return await downloadFile(latestPath);
   }
 

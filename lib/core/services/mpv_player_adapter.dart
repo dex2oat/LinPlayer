@@ -151,7 +151,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
       final np = _nativePlayer;
       if (np != null) {
         final fontsDir = _configManager.fontsDirectory;
-        final systemFontsDir = '/system/fonts';
+        const systemFontsDir = '/system/fonts';
         final dir = Directory(fontsDir);
         if (dir.listSync().isNotEmpty) {
           await np.setProperty('sub-fonts-dir', fontsDir);
@@ -243,7 +243,9 @@ class MpvPlayerAdapter implements PlayerAdapter {
             codec.contains('dvbsub') ||
             (codec.contains('sub') && !codec.contains('ass') && !codec.contains('srt') && !codec.contains('subrip'));
         final isAss = codec.contains('ass') || codec.contains('ssa');
-        if (isBitmap) _hasBitmapSubtitle = true;
+        if (isBitmap) {
+          _hasBitmapSubtitle = true;
+        }
         trackList.add({
           'id': track.id,
           'type': isBitmap ? 'bitmap' : 'text',
@@ -311,23 +313,37 @@ class MpvPlayerAdapter implements PlayerAdapter {
 
   bool _detectAssCodec(SubtitleTrack track) {
     final codec = track.codec?.toLowerCase() ?? '';
-    if (codec.contains('ass') || codec.contains('ssa')) return true;
+    if (codec.contains('ass') || codec.contains('ssa')) {
+      return true;
+    }
     if (codec.contains('pgs') || codec.contains('hdmv') ||
         codec.contains('dvd') || codec.contains('vobsub') ||
-        codec.contains('dvbsub')) return false;
+        codec.contains('dvbsub')) {
+      return false;
+    }
     if (codec.contains('srt') || codec.contains('subrip') ||
-        codec.contains('vtt') || codec.contains('webvtt')) return false;
+        codec.contains('vtt') || codec.contains('webvtt')) {
+      return false;
+    }
     final trackInfo = _tracks.where((t) => t['id']?.toString() == track.id).firstOrNull;
     if (trackInfo != null) {
       final isAss = trackInfo['isAss'] == true;
-      if (isAss) return true;
+      if (isAss) {
+        return true;
+      }
       final isBitmap = trackInfo['isBitmap'] == true;
-      if (isBitmap) return false;
+      if (isBitmap) {
+        return false;
+      }
       final tCodec = (trackInfo['codec'] ?? '').toString().toLowerCase();
-      if (tCodec.contains('ass') || tCodec.contains('ssa')) return true;
+      if (tCodec.contains('ass') || tCodec.contains('ssa')) {
+        return true;
+      }
     }
     final title = track.title?.toLowerCase() ?? '';
-    if (title.contains('ass') || title.contains('ssa')) return true;
+    if (title.contains('ass') || title.contains('ssa')) {
+      return true;
+    }
     return false;
   }
 

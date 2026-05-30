@@ -120,7 +120,7 @@ class DandanplaySource extends DanmakuSource {
     int? fileSize,
     double? videoDuration,
   }) async {
-    final path = '/api/v2/match';
+    const path = '/api/v2/match';
     final resp = await _dio.post(
       '$_baseUrl$path',
       data: {
@@ -151,7 +151,7 @@ class DandanplaySource extends DanmakuSource {
 
   @override
   Future<DanmakuSearchResult> searchAnime({required String keyword}) async {
-    final path = '/api/v2/search/anime';
+    const path = '/api/v2/search/anime';
     final resp = await _dio.get(
       '$_baseUrl$path',
       queryParameters: {'keyword': keyword},
@@ -170,7 +170,7 @@ class DandanplaySource extends DanmakuSource {
     int? tmdbId,
     String? episode,
   }) async {
-    final path = '/api/v2/search/episodes';
+    const path = '/api/v2/search/episodes';
     final params = <String, dynamic>{};
     if (anime != null) params['anime'] = anime;
     if (tmdbId != null) params['tmdbId'] = tmdbId;

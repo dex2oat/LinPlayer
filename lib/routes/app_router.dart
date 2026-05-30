@@ -156,7 +156,7 @@ class MainShell extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       body: navigationShell,
-      bottomNavigationBar: SizedBox.shrink(),
+      bottomNavigationBar: const SizedBox.shrink(),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       floatingActionButton: _FloatingTabBar(navigationShell: navigationShell),
     );
@@ -175,17 +175,17 @@ class _FloatingTabBar extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface.withOpacity(0.95),
+        color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.95),
         borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.15),
+            color: Colors.black.withValues(alpha: 0.15),
             blurRadius: 20,
             offset: const Offset(0, 8),
             spreadRadius: 2,
           ),
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 4,
             offset: const Offset(0, 2),
           ),
@@ -218,7 +218,7 @@ class _FloatingTabBar extends StatelessWidget {
         curve: Curves.easeInOut,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF5B8DEF).withOpacity(0.15) : Colors.transparent,
+          color: isSelected ? const Color(0xFF5B8DEF).withValues(alpha: 0.15) : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
         ),
         child: Row(

@@ -218,7 +218,7 @@ class _GridView extends ConsumerWidget {
                               borderRadius: BorderRadius.circular(12),
                             )
                           : Container(
-                              color: const Color(0xFF5B8DEF).withOpacity(0.1),
+                              color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
                               child: const Center(
                                 child: Icon(
                                   Icons.folder,
@@ -236,7 +236,7 @@ class _GridView extends ConsumerWidget {
                           decoration: BoxDecoration(
                             color: isSelected
                                 ? const Color(0xFF5B8DEF)
-                                : Colors.white.withOpacity(0.8),
+                                : Colors.white.withValues(alpha: 0.8),
                             shape: BoxShape.circle,
                           ),
                           child: Icon(

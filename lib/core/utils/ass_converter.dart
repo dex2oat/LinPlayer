@@ -1,5 +1,3 @@
-import 'dart:io';
-
 /// ASS 字幕解析器和转换器
 /// 
 /// 将 ASS/SSA 格式转换为 SRT，支持：

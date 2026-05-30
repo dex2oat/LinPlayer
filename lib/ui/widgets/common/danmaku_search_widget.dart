@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/api/api_interfaces.dart';
-import '../../../core/api/danmaku/danmaku_source.dart';
 import '../../../core/api/danmaku/danmaku_service.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/utils/danmaku_filter.dart';
@@ -43,7 +42,7 @@ class _DanmakuSearchContentState extends ConsumerState<DanmakuSearchContent> {
     if (item == null) return;
 
     final service = ref.read(danmakuServiceProvider);
-    final title = item.name ?? item.seriesName ?? '';
+    final title = item.name.isNotEmpty ? item.name : (item.seriesName ?? '');
     if (title.isEmpty) return;
 
     setState(() {

@@ -118,7 +118,7 @@ class DanmakuFilter {
           continue;
         }
 
-        final content = item.text.trim();
+        final content = (item.value ?? '').trim();
         if (content.isEmpty) {
           skippedCount++;
           continue;
