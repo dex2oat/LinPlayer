@@ -1,0 +1,170 @@
+name: Build libmpv with PGS support
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 3'
+
+env:
+  MEDIA_KIT_TAG: 1.3.6
+
+jobs:
+  build-libmpv:
+    name: Build libmpv (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            abi: arm64-v8a
+            ndk_arch: aarch64
+          - arch: armv7
+            abi: armeabi-v7a
+            ndk_arch: arm
+          - arch: x86_64
+            abi: x86_64
+            ndk_arch: x86_64
+          - arch: x86
+            abi: x86
+            ndk_arch: i686
+    
+    steps:
+      - name: Checkout media-kit
+        uses: actions/checkout@v4
+        with:
+          repository: alexmercerind/media-kit
+          ref: libs-android-video-v${{ env.MEDIA_KIT_TAG }}
+          path: media-kit
+      
+      - name: Setup dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip ninja-build cmake pkg-config
+          pip3 install meson
+      
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25c
+          link-to-sdk: true
+      
+      - name: List available build scripts
+        run: |
+          echo "=== Available build scripts ==="
+          find media-kit -name "build.sh" -path "*/android/*" | sort
+          echo "=== Script directories ==="
+          ls -la media-kit/build/scripts/android/ 2>/dev/null || true
+      
+      - name: Build libmpv
+        run: |
+          cd media-kit
+          # Check if build script exists with different naming
+          SCRIPT_PATH="build/scripts/android/${{ matrix.arch }}/build.sh"
+          if [ ! -f "$SCRIPT_PATH" ]; then
+            # Try alternative names
+            ALT_PATHS=(
+              "build/scripts/android/${{ matrix.abi }}/build.sh"
+              "build/scripts/android/${{ matrix.ndk_arch }}/build.sh"
+            )
+            for alt in "${ALT_PATHS[@]}"; do
+              if [ -f "$alt" ]; then
+                SCRIPT_PATH="$alt"
+                break
+              fi
+            done
+          fi
+          
+          if [ ! -f "$SCRIPT_PATH" ]; then
+            echo "❌ Build script not found for ${{ matrix.arch }}"
+            echo "Searched paths:"
+            echo "  - build/scripts/android/${{ matrix.arch }}/build.sh"
+            echo "  - build/scripts/android/${{ matrix.abi }}/build.sh"
+            echo "  - build/scripts/android/${{ matrix.ndk_arch }}/build.sh"
+            exit 1
+          fi
+          
+          echo "📦 Using build script: $SCRIPT_PATH"
+          chmod +x "$SCRIPT_PATH"
+          bash "$SCRIPT_PATH"
+        continue-on-error: true
+      
+      - name: Find built libraries
+        run: |
+          echo "=== Searching for built libmpv.so ==="
+          find media-kit -name "libmpv.so" -type f 2>/dev/null | while read f; do
+            echo "Found: $f ($(stat -c%s "$f") bytes)"
+          done
+          
+          # Check common output directories
+          for dir in "media-kit/build" "media-kit/output" "media-kit/libs"; do
+            if [ -d "$dir" ]; then
+              echo "=== Contents of $dir ==="
+              find "$dir" -name "*.so" -type f 2>/dev/null
+            fi
+          done
+      
+      - name: Verify PGS support
+        run: |
+          find media-kit -name "libmpv.so" -type f | head -1 | while read lib; do
+            if [ -f "$lib" ]; then
+              echo "Checking $lib..."
+              if strings "$lib" | grep -q "pgssub"; then
+                echo "✅ PGS decoder found"
+              else
+                echo "⚠️ PGS decoder not found"
+              fi
+            fi
+          done
+        continue-on-error: true
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-${{ matrix.abi }}
+          path: media-kit/**/libmpv.so
+          if-no-files-found: ignore
+          retention-days: 90
+
+  commit-libraries:
+    name: Commit built libraries
+    needs: build-libmpv
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout LinPlayer
+        uses: actions/checkout@v4
+      
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: built-libs
+          pattern: libmpv-*
+      
+      - name: Copy to jniLibs
+        run: |
+          mkdir -p android/app/src/main/jniLibs
+          
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            if [ -d "built-libs/libmpv-$abi" ]; then
+              mkdir -p "android/app/src/main/jniLibs/$abi"
+              find "built-libs/libmpv-$abi" -name "libmpv.so" -exec cp {} "android/app/src/main/jniLibs/$abi/" \;
+              echo "✅ Copied libmpv.so for $abi"
+            fi
+          done
+      
+      - name: Verify and commit
+        run: |
+          echo "=== jniLibs contents ==="
+          find android/app/src/main/jniLibs -name "*.so" -exec ls -lh {} \;
+          
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add android/app/src/main/jniLibs/
+          
+          if git diff --cached --quiet; then
+            echo "No libraries to commit"
+          else
+            git commit -m "chore: update libmpv with PGS support (media-kit v${{ env.MEDIA_KIT_TAG }})"
+            git push
+            echo "✅ Libraries committed"
+          fi
+        continue-on-error: true
