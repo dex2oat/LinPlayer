@@ -27,7 +27,7 @@ android {
 }
 
 dependencies {
-    implementation("androidx.media3:media3-common:1.3.1")
-    implementation("androidx.media3:media3-decoder:1.3.1")
-    implementation("androidx.media3:media3-exoplayer:1.3.1")
+    implementation("androidx.media3:media3-common:1.8.0")
+    implementation("androidx.media3:media3-decoder:1.8.0")
+    implementation("androidx.media3:media3-exoplayer:1.8.0")
 }

@@ -76,7 +76,7 @@ android {
 }
 
 dependencies {
-    val media3Version = "1.6.0"
+    val media3Version = "1.8.0"
 
     // Media3 ExoPlayer（原生播放器内核）
     implementation("androidx.media3:media3-exoplayer:$media3Version")
@@ -84,7 +84,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
 
     // Mature ASS integration for Media3/ExoPlayer.
-    implementation("io.github.peerless2012:ass-media:0.2.2")
+    implementation("io.github.peerless2012:ass-media:0.4.0")
 
     // FFmpeg 扩展（可选，当前仅作为 Media3 扩展库附加能力保留）
     // GitHub Actions 会自动编译并放置到此路径

@@ -18,7 +18,7 @@ on:
         type: boolean
 
 env:
-  EXOPLAYER_VERSION: 1.3.1
+  EXOPLAYER_VERSION: 1.8.0
   FFMPEG_VERSION: n6.0
   NDK_VERSION: r25c
 
