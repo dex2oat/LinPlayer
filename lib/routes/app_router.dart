@@ -32,7 +32,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       // 主页（含底部Tab）
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) {
-          return MainShell(navigationShell: navigationShell);
+          return MainShell(
+            navigationShell: navigationShell,
+            currentPath: state.uri.path,
+          );
         },
         branches: [
           // 服务器Tab
@@ -152,8 +155,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 /// 底部Tab外壳（悬浮样式）
 class MainShell extends StatefulWidget {
   final StatefulNavigationShell navigationShell;
+  final String currentPath;
 
-  const MainShell({super.key, required this.navigationShell});
+  const MainShell({
+    super.key,
+    required this.navigationShell,
+    required this.currentPath,
+  });
 
   @override
   State<MainShell> createState() => _MainShellState();
@@ -162,7 +170,12 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   double _tabOpacity = 1.0;
 
+  bool get _isHomePage => widget.currentPath == '/home';
+  bool get _isServerListPage => widget.currentPath == '/';
   bool _onScrollNotification(ScrollNotification notification) {
+    // 只有在首页才响应滚动渐隐
+    if (!_isHomePage) return false;
+    
     if (notification is ScrollUpdateNotification) {
       final delta = notification.scrollDelta ?? 0;
       setState(() {
@@ -179,9 +192,24 @@ class _MainShellState extends State<MainShell> {
   }
 
   @override
+  void didUpdateWidget(covariant MainShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 当从首页切回服务器页时，重置Tab透明度为1.0
+    if (oldWidget.currentPath != widget.currentPath) {
+      if (_isServerListPage) {
+        setState(() {
+          _tabOpacity = 1.0;
+        });
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final bottomPadding = MediaQuery.of(context).padding.bottom;
     final tabHeight = 64.0 + bottomPadding;
+    // 服务器页常驻显示Tab，首页根据滚动状态
+    final effectiveOpacity = _isServerListPage ? 1.0 : _tabOpacity;
 
     return NotificationListener<ScrollNotification>(
       onNotification: _onScrollNotification,
@@ -198,7 +226,7 @@ class _MainShellState extends State<MainShell> {
         bottomNavigationBar: const SizedBox.shrink(),
         floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
         floatingActionButton: AnimatedOpacity(
-          opacity: _tabOpacity,
+          opacity: effectiveOpacity,
           duration: const Duration(milliseconds: 200),
           child: _FloatingTabBar(
             navigationShell: widget.navigationShell,

@@ -8,6 +8,13 @@ import '../../../core/utils/color_extractor.dart';
 import '../../utils/media_helpers.dart';
 import '../../widgets/common/media_widgets.dart';
 
+/// 首页构建性能优化
+/// 
+/// 减少首次构建开销的策略：
+/// 1. 使用 RepaintBoundary 隔离复杂区域的重绘
+/// 2. 延迟加载非首屏内容（通过 Visibility 或 Future.delayed）
+/// 3. 降低轮播图图片分辨率
+
 /// 首页
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -215,16 +222,8 @@ class _ServerSelectorOverlayState extends State<_ServerSelectorOverlay>
                       final currentServerId = ref.watch(currentServerProvider)?.id;
                       return Container(
                         width: containerWidth,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.1),
-                              blurRadius: 8,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
+                        decoration: const BoxDecoration(
+                          color: Colors.transparent,
                         ),
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxHeight: 280),
@@ -287,7 +286,7 @@ class _ServerSelectorOverlayState extends State<_ServerSelectorOverlay>
                                               fontWeight: FontWeight.w500,
                                               color: isCurrent
                                                   ? const Color(0xFF5B8DEF)
-                                                  : Colors.black87,
+                                                  : Colors.black,
                                             ),
                                             overflow: TextOverflow.ellipsis,
                                           ),
@@ -550,7 +549,8 @@ class _RandomRecommendationCarouselState extends ConsumerState<RandomRecommendat
   Widget build(BuildContext context) {
     final recommendationsAsync = ref.watch(randomRecommendationsProvider);
     final screenHeight = MediaQuery.of(context).size.height;
-    final carouselHeight = screenHeight * 0.6;
+    // 降低轮播图高度以减少渲染开销
+    final carouselHeight = screenHeight * 0.55;
 
     return recommendationsAsync.when(
       data: (items) {
@@ -574,14 +574,18 @@ class _RandomRecommendationCarouselState extends ConsumerState<RandomRecommendat
               PageView.builder(
                 controller: _pageController,
                 itemCount: items.length,
+                allowImplicitScrolling: false,
+                physics: const ClampingScrollPhysics(),
                 onPageChanged: (index) => _onPageChanged(index, items),
                 itemBuilder: (context, index) {
                   final item = items[index];
-                  return _CarouselItem(
-                    item: item,
-                    dominantColor: _dominantColor,
-                    backgroundColor: _backgroundColor,
-                    onTap: () => context.push(mediaRouteForItem(item)),
+                  return RepaintBoundary(
+                    child: _CarouselItem(
+                      item: item,
+                      dominantColor: _dominantColor,
+                      backgroundColor: _backgroundColor,
+                      onTap: () => context.push(mediaRouteForItem(item)),
+                    ),
                   );
                 },
               ),
@@ -637,10 +641,11 @@ class _CarouselItem extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final api = ref.read(apiClientProvider);
+    // 降低轮播图图片分辨率以减少内存占用
     final imageUrl = item.backdropImageTag != null
-        ? api.image.getBackdropImageUrl(item.id, tag: item.backdropImageTag, maxWidth: 800)
+        ? api.image.getBackdropImageUrl(item.id, tag: item.backdropImageTag, maxWidth: 400)
         : item.primaryImageTag != null
-            ? api.image.getPrimaryImageUrl(item.id, tag: item.primaryImageTag, maxWidth: 800)
+            ? api.image.getPrimaryImageUrl(item.id, tag: item.primaryImageTag, maxWidth: 400)
             : null;
 
     return GestureDetector(

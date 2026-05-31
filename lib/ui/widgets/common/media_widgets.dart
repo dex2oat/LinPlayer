@@ -381,8 +381,12 @@ class HorizontalList extends StatelessWidget {
         scrollDirection: Axis.horizontal,
         padding: padding,
         itemCount: children.length,
+        addAutomaticKeepAlives: false,
+        addRepaintBoundaries: false,
         separatorBuilder: (_, __) => SizedBox(width: spacing),
-        itemBuilder: (_, index) => children[index],
+        itemBuilder: (_, index) => RepaintBoundary(
+          child: children[index],
+        ),
       ),
     );
   }

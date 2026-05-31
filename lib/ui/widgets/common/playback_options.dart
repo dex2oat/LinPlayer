@@ -118,12 +118,18 @@ class PlaybackOptions extends ConsumerWidget {
             value: selectedAudio?.displayTitle ?? '默认音轨',
             onTap: () => _showStreamSelector(context, ref, audioStreams, 'Audio'),
           ),
-          _buildDropdownTile(
-            context,
-            icon: Icons.subtitles,
-            title: '字幕选择',
-            value: selectedSubtitle?.displayTitle ?? '无字幕',
-            onTap: () => _showStreamSelector(context, ref, subtitleStreams, 'Subtitle'),
+          Consumer(
+            builder: (context, ref, _) {
+              final selectedSubtitleIndex = ref.watch(subtitleTrackProvider);
+              final selectedSubtitle = _resolveSelectedStream(subtitleStreams, selectedSubtitleIndex);
+              return _buildDropdownTile(
+                context,
+                icon: Icons.subtitles,
+                title: '字幕选择',
+                value: selectedSubtitle?.displayTitle ?? '无字幕',
+                onTap: () => _showStreamSelector(context, ref, subtitleStreams, 'Subtitle'),
+              );
+            },
           ),
           _buildDropdownTile(
             context,

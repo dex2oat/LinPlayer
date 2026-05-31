@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/providers/app_providers.dart';
-import '../../../core/services/ext_domain_service.dart';
 
 /// 服务器线路管理页面
 class ServerLinesScreen extends ConsumerStatefulWidget {
@@ -17,22 +16,16 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
   bool _isSyncing = false;
   
   Future<void> _syncLines() async {
-    final configs = ref.read(extDomainConfigProvider);
-    final config = configs[widget.serverId];
-    if (config == null || config.extDomainUrl.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先配置线路同步地址')),
-      );
-      return;
-    }
-
     final servers = ref.read(serverListProvider);
     final server = servers.firstWhere((s) => s.id == widget.serverId);
     
     if (server.authToken == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('服务器未登录，无法同步')),
-      );
+      _showToast('服务器未登录，无法同步');
+      return;
+    }
+
+    if (server.lines.isEmpty) {
+      _showToast('当前没有可同步的线路');
       return;
     }
 
@@ -40,65 +33,70 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
       _isSyncing = true;
     });
 
+    int totalAdded = 0;
+    int syncSourceCount = 0;
+    String? lastError;
+
     try {
       final service = ref.read(extDomainServiceProvider);
-      final lines = await service.fetchExtDomains(
-        extDomainUrl: config.extDomainUrl,
-        embyServerUrl: server.baseUrl,
-        embyToken: server.authToken!,
-      );
-
-      if (lines.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('未获取到线路列表')),
-          );
-        }
-        return;
-      }
-
-      // 将获取的线路转换为 ServerLine 并更新到当前服务器
-      final newLines = lines.map((l) => ServerLine(
-        id: '${DateTime.now().millisecondsSinceEpoch}_${l.name}',
-        name: l.name,
-        url: l.url,
-        remark: l.remark,
-      )).toList();
-
-      // 合并现有线路和新线路（去重）
-      final existingLines = server.lines;
-      final mergedLines = [...existingLines];
-      for (final newLine in newLines) {
-        if (!mergedLines.any((l) => l.url == newLine.url)) {
-          mergedLines.add(newLine);
-        }
-      }
-
-      final updatedServer = server.copyWith(lines: mergedLines);
-      ref.read(serverListProvider.notifier).updateServer(updatedServer);
       
-      // 如果当前选中的就是这个服务器，也更新当前服务器
-      final currentServer = ref.read(currentServerProvider);
-      if (currentServer?.id == widget.serverId) {
-        ref.read(currentServerProvider.notifier).state = updatedServer;
+      // 尝试从每条现有线路同步
+      for (final line in server.lines) {
+        try {
+          final lines = await service.fetchExtDomains(
+            extDomainUrl: line.url,
+            embyServerUrl: server.baseUrl,
+            embyToken: server.authToken!,
+          );
+          
+          if (lines.isNotEmpty) {
+            syncSourceCount++;
+            // 将获取的线路转换为 ServerLine 并更新到当前服务器
+            final newLines = lines.map((l) => ServerLine(
+              id: '${DateTime.now().millisecondsSinceEpoch}_${l.name}',
+              name: l.name,
+              url: l.url,
+              remark: l.remark,
+            )).toList();
+
+            // 合并现有线路和新线路（去重）
+            final existingLines = server.lines;
+            final mergedLines = [...existingLines];
+            for (final newLine in newLines) {
+              if (!mergedLines.any((l) => l.url == newLine.url)) {
+                mergedLines.add(newLine);
+                totalAdded++;
+              }
+            }
+
+            final updatedServer = server.copyWith(lines: mergedLines);
+            ref.read(serverListProvider.notifier).updateServer(updatedServer);
+            
+            // 如果当前选中的就是这个服务器，也更新当前服务器
+            final currentServer = ref.read(currentServerProvider);
+            if (currentServer?.id == widget.serverId) {
+              ref.read(currentServerProvider.notifier).state = updatedServer;
+            }
+          }
+        } catch (e) {
+          lastError = e.toString();
+          // 继续尝试下一条线路
+          continue;
+        }
       }
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('成功同步 ${lines.length} 条线路')),
-        );
-      }
-    } on ExtDomainException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('同步失败: ${e.message}')),
-        );
+        if (totalAdded > 0) {
+          _showToast('成功同步 $totalAdded 条线路（从 $syncSourceCount 个源）');
+        } else if (syncSourceCount > 0) {
+          _showToast('所有线路已是最新，没有新线路添加');
+        } else {
+          _showToast('同步失败：当前线路不支持自动同步${lastError != null ? '\n$lastError' : ''}');
+        }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('同步失败: $e')),
-        );
+        _showToast('同步失败: $e');
       }
     } finally {
       if (mounted) {
@@ -109,105 +107,35 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
     }
   }
 
-  void _showSyncConfigDialog() {
-    final configs = ref.read(extDomainConfigProvider);
-    final config = configs[widget.serverId];
-    final controller = TextEditingController(text: config?.extDomainUrl ?? '');
-    bool isLoading = false;
-    String? testResult;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: const Text('线路同步配置'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '配置 emby_ext_domains 服务地址，用于同步该服务器的线路列表。',
-                style: TextStyle(fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                decoration: InputDecoration(
-                  labelText: '服务地址',
-                  hintText: 'https://ext.example.com',
-                  prefixIcon: const Icon(Icons.cloud_sync),
-                  border: const OutlineInputBorder(),
-                  suffixIcon: isLoading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: Padding(
-                            padding: EdgeInsets.all(12),
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        )
-                      : IconButton(
-                          icon: const Icon(Icons.check_circle_outline),
-                          onPressed: () async {
-                            final url = controller.text.trim();
-                            if (url.isEmpty) return;
-                            setDialogState(() { isLoading = true; testResult = null; });
-                            try {
-                              final service = ref.read(extDomainServiceProvider);
-                              final available = await service.checkServiceAvailable(url);
-                              setDialogState(() {
-                                testResult = available ? '连接成功' : '连接失败';
-                              });
-                            } catch (e) {
-                              setDialogState(() {
-                                testResult = '连接失败: $e';
-                              });
-                            } finally {
-                              setDialogState(() { isLoading = false; });
-                            }
-                          },
-                        ),
-                ),
-                keyboardType: TextInputType.url,
-              ),
-              if (testResult != null) ...[
-                const SizedBox(height: 8),
-                Text(
-                  testResult!,
-                  style: TextStyle(
-                    color: testResult == '连接成功'
-                        ? Colors.green
-                        : Theme.of(ctx).colorScheme.error,
-                    fontSize: 13,
-                  ),
-                ),
-              ],
-            ],
+  void _showToast(String message) {
+    final overlay = Overlay.of(context);
+    final overlayEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        top: MediaQuery.of(context).padding.top + 56,
+        left: 16,
+        right: 16,
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.black87,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              message,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              textAlign: TextAlign.center,
+            ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final url = controller.text.trim();
-                if (url.isEmpty) {
-                  ref.read(extDomainConfigProvider.notifier).clearConfig(widget.serverId);
-                } else {
-                  ref.read(extDomainConfigProvider.notifier).setConfig(widget.serverId, url);
-                }
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('配置已保存')),
-                );
-              },
-              child: const Text('保存'),
-            ),
-          ],
         ),
       ),
     );
+    
+    overlay.insert(overlayEntry);
+    Future.delayed(const Duration(seconds: 2), () {
+      overlayEntry.remove();
+    });
   }
   
   @override
@@ -228,9 +156,9 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: _showSyncConfigDialog,
-            tooltip: '同步配置',
+            icon: const Icon(Icons.add),
+            onPressed: () => _addLine(context, ref),
+            tooltip: '添加线路',
           ),
           IconButton(
             icon: _isSyncing
@@ -245,63 +173,49 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: server.lines.length,
-              itemBuilder: (context, index) {
-                final line = server.lines[index];
-                final isActive = index == server.activeLineIndex;
-                
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  color: isActive 
-                      ? Theme.of(context).colorScheme.primaryContainer
-                      : null,
-                  child: ListTile(
-                    onTap: () {
-                      ref.read(serverListProvider.notifier).setActiveLine(widget.serverId, index);
-                    },
-                    title: Text(line.name),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(line.url),
-                        if (line.remark != null)
-                          Text('备注：${line.remark}', style: const TextStyle(fontSize: 12)),
-                      ],
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (isActive)
-                          Icon(Icons.check_circle, color: Theme.of(context).colorScheme.primary),
-                        IconButton(
-                          icon: const Icon(Icons.edit, size: 20),
-                          onPressed: () => _editLine(context, ref, widget.serverId, line),
-                        ),
-                        IconButton(
-                          icon: Icon(Icons.delete, size: 20, color: Theme.of(context).colorScheme.error),
-                          onPressed: () => _deleteLine(context, ref, widget.serverId, line),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
+      body: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: server.lines.length,
+        itemBuilder: (context, index) {
+          final line = server.lines[index];
+          final isActive = index == server.activeLineIndex;
+          
+          return Card(
+            margin: const EdgeInsets.only(bottom: 12),
+            color: isActive 
+                ? Theme.of(context).colorScheme.primaryContainer
+                : null,
+            child: ListTile(
+              onTap: () {
+                ref.read(serverListProvider.notifier).setActiveLine(widget.serverId, index);
               },
+              title: Text(line.name),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(line.url),
+                  if (line.remark != null)
+                    Text('备注：${line.remark}', style: const TextStyle(fontSize: 12)),
+                ],
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (isActive)
+                    Icon(Icons.check_circle, color: Theme.of(context).colorScheme.primary),
+                  IconButton(
+                    icon: const Icon(Icons.edit, size: 20),
+                    onPressed: () => _editLine(context, ref, widget.serverId, line),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.delete, size: 20, color: Theme.of(context).colorScheme.error),
+                    onPressed: () => _deleteLine(context, ref, widget.serverId, line),
+                  ),
+                ],
+              ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: FilledButton.icon(
-              onPressed: () => _addLine(context, ref),
-              icon: const Icon(Icons.add),
-              label: const Text('添加线路'),
-            ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
