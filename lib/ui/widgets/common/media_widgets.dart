@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
+import '../../../core/utils/persistent_image_provider.dart';
 import '../../utils/media_helpers.dart';
 
 class MediaImage extends StatelessWidget {
@@ -123,28 +124,19 @@ class _FallbackNetworkImageState extends State<_FallbackNetworkImage> {
 
   @override
   Widget build(BuildContext context) {
-    final dpr = MediaQuery.of(context).devicePixelRatio;
-    final screenWidth = MediaQuery.of(context).size.width;
-    final screenHeight = MediaQuery.of(context).size.height;
-
-    // 修复：当width/height为无限时，使用屏幕尺寸作为缓存尺寸上限
-    final cw = widget.cacheWidth ??
-        (widget.width != null && widget.width!.isFinite && widget.width! > 0
-            ? (widget.width! * dpr).ceil()
-            : (screenWidth * dpr).ceil());
-    final ch = widget.cacheHeight ??
-        (widget.height != null && widget.height!.isFinite && widget.height! > 0
-            ? (widget.height! * dpr).ceil()
-            : (screenHeight * dpr).ceil());
-
-    return ExtendedImage.network(
-      widget.imageUrls[_currentIndex],
+    // 使用 PersistentNetworkImageProvider 替代默认的 ExtendedNetworkImageProvider
+    // 将缓存目录从临时目录改为应用文档目录，确保图片缓存持久化
+    return ExtendedImage(
+      image: PersistentNetworkImageProvider(
+        widget.imageUrls[_currentIndex],
+        cache: true,
+        cacheMaxAge: const Duration(days: 30),
+      ),
       width: widget.width,
       height: widget.height,
       fit: widget.fit,
-      cache: true,
-      cacheWidth: cw,
-      cacheHeight: ch,
+      enableMemoryCache: true,
+      clearMemoryCacheIfFailed: true,
       loadStateChanged: (state) {
         switch (state.extendedImageLoadState) {
           case LoadState.loading:

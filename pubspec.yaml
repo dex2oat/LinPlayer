@@ -23,6 +23,8 @@ dependencies:
   
   # 图片加载
   extended_image: ^8.2.0
+  extended_image_library: ^4.0.0
+  http_client_helper: ^3.0.0
   
   # 本地存储
   shared_preferences: ^2.2.2
