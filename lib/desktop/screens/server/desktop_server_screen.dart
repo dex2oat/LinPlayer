@@ -98,13 +98,13 @@ class _DesktopServerScreenState extends ConsumerState<DesktopServerScreen> {
             )
           else if (_isGridView)
             SliverPadding(
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
               sliver: SliverGrid(
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  childAspectRatio: 1.8,
-                  crossAxisSpacing: 20,
-                  mainAxisSpacing: 20,
+                  crossAxisCount: 5,
+                  childAspectRatio: 2.2,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
                 ),
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
@@ -122,7 +122,7 @@ class _DesktopServerScreenState extends ConsumerState<DesktopServerScreen> {
             )
           else
             SliverPadding(
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
@@ -169,232 +169,210 @@ class _ServerGridCard extends StatefulWidget {
   State<_ServerGridCard> createState() => _ServerGridCardState();
 }
 
-class _ServerGridCardState extends State<_ServerGridCard> {
+class _ServerGridCardState extends State<_ServerGridCard> with SingleTickerProviderStateMixin {
   bool _isHovered = false;
+  late AnimationController _scaleController;
+  late Animation<double> _scaleAnimation;
+  
+  @override
+  void initState() {
+    super.initState();
+    _scaleController = AnimationController(
+      duration: const Duration(milliseconds: 150),
+      vsync: this,
+    );
+    _scaleAnimation = Tween<double>(
+      begin: 1.0,
+      end: 0.96,
+    ).animate(CurvedAnimation(
+      parent: _scaleController,
+      curve: Curves.fastOutSlowIn,
+    ));
+  }
+  
+  @override
+  void dispose() {
+    _scaleController.dispose();
+    super.dispose();
+  }
+  
+  void _onTapDown(TapDownDetails details) {
+    _scaleController.forward();
+  }
+  
+  void _onTapUp(TapUpDetails details) {
+    _scaleController.reverse();
+  }
+  
+  void _onTapCancel() {
+    _scaleController.reverse();
+  }
   
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.fastOutSlowIn,
-          transform: _isHovered 
-              ? (Matrix4.identity()..translateByDouble(0.0, -4.0, 0.0, 0.0))
-              : Matrix4.identity(),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: _isHovered || widget.isCurrent
-                ? [
-                    BoxShadow(
-                      color: widget.isCurrent
-                          ? const Color(0xFF5B8DEF).withValues(alpha: 0.15)
-                          : Colors.black.withValues(alpha: 0.08),
-                      blurRadius: 16,
-                      offset: const Offset(0, 6),
-                    ),
-                  ]
-                : [],
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    // 服务器图标
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(12),
+        onTapDown: _onTapDown,
+        onTapUp: _onTapUp,
+        onTapCancel: _onTapCancel,
+        child: AnimatedBuilder(
+          animation: _scaleController,
+          builder: (context, child) {
+            return Transform.scale(
+              scale: _scaleAnimation.value,
+              child: child,
+            );
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            curve: Curves.fastOutSlowIn,
+            decoration: BoxDecoration(
+              color: widget.isCurrent
+                  ? const Color(0xFF5B8DEF).withValues(alpha: 0.08)
+                  : _isHovered
+                      ? theme.colorScheme.surfaceContainerHighest
+                      : theme.colorScheme.surface,
+              borderRadius: BorderRadius.circular(10),
+              border: widget.isCurrent
+                  ? Border.all(
+                      color: const Color(0xFF5B8DEF).withValues(alpha: 0.5),
+                      width: 2,
+                    )
+                  : _isHovered
+                      ? Border.all(
+                          color: theme.colorScheme.primary.withValues(alpha: 0.2),
+                          width: 1,
+                        )
+                      : null,
+              boxShadow: widget.isCurrent
+                  ? [
+                      BoxShadow(
+                        color: const Color(0xFF5B8DEF).withValues(alpha: 0.15),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
                       ),
-                      child: widget.server.iconUrl != null
-                          ? ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: MediaImage(
-                                imageUrl: widget.server.iconUrl,
-                                width: 48,
-                                height: 48,
-                                fit: BoxFit.cover,
-                              ),
-                            )
-                          : const Icon(
-                              Icons.dns,
-                              size: 24,
-                              color: Color(0xFF5B8DEF),
-                            ),
-                    ),
-                    
-                    const SizedBox(width: 16),
-                    
-                    // 服务器信息
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            widget.server.name,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                    ]
+                  : _isHovered
+                      ? [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.06),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            widget.server.baseUrl,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Theme.of(context).textTheme.bodySmall?.color,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                        ]
+                      : [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
                           ),
                         ],
-                      ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(
+                children: [
+                  // 服务器图标
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: widget.isCurrent
+                          ? const Color(0xFF5B8DEF).withValues(alpha: 0.15)
+                          : const Color(0xFF5B8DEF).withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                    
-                    // 当前选中标记
-                    if (widget.isCurrent)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Text(
-                          '当前',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF5B8DEF),
+                    child: widget.server.iconUrl != null
+                        ? ClipRRect(
+                            borderRadius: BorderRadius.circular(10),
+                            child: MediaImage(
+                              imageUrl: widget.server.iconUrl,
+                              width: 40,
+                              height: 40,
+                              fit: BoxFit.cover,
+                            ),
+                          )
+                        : Icon(
+                            Icons.dns,
+                            size: 20,
+                            color: widget.isCurrent
+                                ? const Color(0xFF5B8DEF)
+                                : const Color(0xFF5B8DEF).withValues(alpha: 0.7),
                           ),
-                        ),
-                      ),
-                  ],
-                ),
-                
-                const Spacer(),
-                
-                // 底部信息
-                Row(
-                  children: [
-                    if (widget.server.remark != null) ...[
-                      Icon(
-                        Icons.notes,
-                        size: 14,
-                        color: Theme.of(context).textTheme.bodySmall?.color,
-                      ),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          widget.server.remark!,
+                  ),
+                  
+                  const SizedBox(width: 12),
+                  
+                  // 服务器信息
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          widget.server.name,
                           style: TextStyle(
-                            fontSize: 12,
-                            color: Theme.of(context).textTheme.bodySmall?.color,
+                            fontSize: 14,
+                            fontWeight: widget.isCurrent ? FontWeight.w700 : FontWeight.w600,
+                            color: widget.isCurrent
+                                ? const Color(0xFF5B8DEF)
+                                : theme.colorScheme.onSurface,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
+                        const SizedBox(height: 2),
+                        Text(
+                          widget.server.baseUrl,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: theme.textTheme.bodySmall?.color,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  
+                  // 当前选中标记
+                  if (widget.isCurrent)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF5B8DEF).withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(4),
                       ),
-                    ],
-                    const Spacer(),
-                    
-                    // 操作按钮
-                    _buildActionButton(
-                      icon: Icons.edit,
-                      tooltip: '编辑',
-                      onTap: () {},
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.check_circle,
+                            size: 12,
+                            color: Color(0xFF5B8DEF),
+                          ),
+                          SizedBox(width: 4),
+                          Text(
+                            '当前',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF5B8DEF),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    const SizedBox(width: 4),
-                    _buildActionButton(
-                      icon: Icons.refresh,
-                      tooltip: '重新登录',
-                      onTap: () {},
-                    ),
-                    const SizedBox(width: 4),
-                    _buildActionButton(
-                      icon: Icons.more_vert,
-                      tooltip: '更多',
-                      onTap: () => _showMoreMenu(context),
-                    ),
-                  ],
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
-      ),
-    );
-  }
-  
-  Widget _buildActionButton({
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback onTap,
-  }) {
-    return Tooltip(
-      message: tooltip,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Icon(icon, size: 16, color: Colors.grey),
-          ),
-        ),
-      ),
-    );
-  }
-  
-  void _showMoreMenu(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.edit),
-              title: const Text('编辑信息'),
-              onTap: () => Navigator.pop(context),
-            ),
-            ListTile(
-              leading: const Icon(Icons.refresh),
-              title: const Text('重新登录'),
-              onTap: () => Navigator.pop(context),
-            ),
-            ListTile(
-              leading: const Icon(Icons.route),
-              title: const Text('服务器线路'),
-              onTap: () => Navigator.pop(context),
-            ),
-            ListTile(
-              leading: const Icon(Icons.image),
-              title: const Text('修改图标'),
-              onTap: () => Navigator.pop(context),
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete, color: Colors.red),
-              title: const Text('删除', style: TextStyle(color: Colors.red)),
-              onTap: () => Navigator.pop(context),
-            ),
-          ],
         ),
       ),
     );
@@ -417,94 +395,175 @@ class _ServerListTile extends StatefulWidget {
   State<_ServerListTile> createState() => _ServerListTileState();
 }
 
-class _ServerListTileState extends State<_ServerListTile> {
+class _ServerListTileState extends State<_ServerListTile> with SingleTickerProviderStateMixin {
   bool _isHovered = false;
+  late AnimationController _scaleController;
+  late Animation<double> _scaleAnimation;
+  
+  @override
+  void initState() {
+    super.initState();
+    _scaleController = AnimationController(
+      duration: const Duration(milliseconds: 150),
+      vsync: this,
+    );
+    _scaleAnimation = Tween<double>(
+      begin: 1.0,
+      end: 0.98,
+    ).animate(CurvedAnimation(
+      parent: _scaleController,
+      curve: Curves.fastOutSlowIn,
+    ));
+  }
+  
+  @override
+  void dispose() {
+    _scaleController.dispose();
+    super.dispose();
+  }
+  
+  void _onTapDown(TapDownDetails details) {
+    _scaleController.forward();
+  }
+  
+  void _onTapUp(TapUpDetails details) {
+    _scaleController.reverse();
+  }
+  
+  void _onTapCancel() {
+    _scaleController.reverse();
+  }
   
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          margin: const EdgeInsets.only(bottom: 8),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: _isHovered
-                ? Theme.of(context).colorScheme.surfaceContainerHighest
-                : Theme.of(context).colorScheme.surface,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(
-            children: [
-              // 图标
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: widget.server.iconUrl != null
-                    ? ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
-                        child: MediaImage(
-                          imageUrl: widget.server.iconUrl,
-                          width: 40,
-                          height: 40,
-                          fit: BoxFit.cover,
-                        ),
-                      )
-                    : const Icon(Icons.dns, size: 20, color: Color(0xFF5B8DEF)),
-              ),
-              
-              const SizedBox(width: 16),
-              
-              // 信息
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.server.name,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      widget.server.baseUrl,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).textTheme.bodySmall?.color,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              
-              // 当前标记
-              if (widget.isCurrent)
+        onTapDown: _onTapDown,
+        onTapUp: _onTapUp,
+        onTapCancel: _onTapCancel,
+        child: AnimatedBuilder(
+          animation: _scaleController,
+          builder: (context, child) {
+            return Transform.scale(
+              scale: _scaleAnimation.value,
+              child: child,
+            );
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            curve: Curves.fastOutSlowIn,
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: widget.isCurrent
+                  ? const Color(0xFF5B8DEF).withValues(alpha: 0.08)
+                  : _isHovered
+                      ? theme.colorScheme.surfaceContainerHighest
+                      : theme.colorScheme.surface,
+              borderRadius: BorderRadius.circular(8),
+              border: widget.isCurrent
+                  ? Border.all(
+                      color: const Color(0xFF5B8DEF).withValues(alpha: 0.4),
+                      width: 1.5,
+                    )
+                  : null,
+            ),
+            child: Row(
+              children: [
+                // 图标
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  width: 36,
+                  height: 36,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(4),
+                    color: widget.isCurrent
+                        ? const Color(0xFF5B8DEF).withValues(alpha: 0.15)
+                        : const Color(0xFF5B8DEF).withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                  child: const Text(
-                    '当前',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF5B8DEF),
-                    ),
+                  child: widget.server.iconUrl != null
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: MediaImage(
+                            imageUrl: widget.server.iconUrl,
+                            width: 36,
+                            height: 36,
+                            fit: BoxFit.cover,
+                          ),
+                        )
+                      : Icon(
+                          Icons.dns,
+                          size: 18,
+                          color: widget.isCurrent
+                              ? const Color(0xFF5B8DEF)
+                              : const Color(0xFF5B8DEF).withValues(alpha: 0.7),
+                        ),
+                ),
+                
+                const SizedBox(width: 12),
+                
+                // 信息
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.server.name,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: widget.isCurrent ? FontWeight.w700 : FontWeight.w600,
+                          color: widget.isCurrent
+                              ? const Color(0xFF5B8DEF)
+                              : theme.colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 1),
+                      Text(
+                        widget.server.baseUrl,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: theme.textTheme.bodySmall?.color,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-            ],
+                
+                // 当前标记
+                if (widget.isCurrent)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.check_circle,
+                          size: 12,
+                          color: Color(0xFF5B8DEF),
+                        ),
+                        SizedBox(width: 4),
+                        Text(
+                          '当前',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF5B8DEF),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),

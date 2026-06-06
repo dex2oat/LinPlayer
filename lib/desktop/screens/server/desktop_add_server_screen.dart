@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/api/emby_api.dart';
 import '../../../core/providers/app_providers.dart';
 
 /// 桌面端添加服务器页
@@ -21,6 +22,7 @@ class _DesktopAddServerScreenState extends ConsumerState<DesktopAddServerScreen>
   
   bool _isLoading = false;
   bool _obscurePassword = true;
+  String? _errorMessage;
   
   @override
   void dispose() {
@@ -50,36 +52,17 @@ class _DesktopAddServerScreenState extends ConsumerState<DesktopAddServerScreen>
             child: Form(
               key: _formKey,
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // 标题
-                  const Text(
-                    '连接到 Emby 服务器',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '输入服务器信息以连接到您的媒体库',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Theme.of(context).textTheme.bodySmall?.color,
-                    ),
-                  ),
-                  
-                  const SizedBox(height: 32),
-                  
                   // 服务器地址
                   _buildTextField(
                     controller: _urlController,
                     label: '服务器地址',
-                    hint: 'https://example.com',
+                    hint: 'https://example.com 或 IP:端口',
                     prefixIcon: Icons.link,
                     validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return '请输入服务器地址';
+                      if (value == null || value.trim().isEmpty) {
+                        return '服务器地址不能为空';
                       }
                       return null;
                     },
@@ -90,7 +73,7 @@ class _DesktopAddServerScreenState extends ConsumerState<DesktopAddServerScreen>
                   // 路径
                   _buildTextField(
                     controller: _pathController,
-                    label: '路径',
+                    label: '路径（可选）',
                     hint: '/emby',
                     prefixIcon: Icons.folder,
                   ),
@@ -138,6 +121,21 @@ class _DesktopAddServerScreenState extends ConsumerState<DesktopAddServerScreen>
                     ),
                   ),
                   
+                  if (_errorMessage != null) ...[
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.errorContainer,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        _errorMessage!,
+                        style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer),
+                      ),
+                    ),
+                  ],
+                  
                   const SizedBox(height: 32),
                   
                   // 连接按钮
@@ -156,25 +154,12 @@ class _DesktopAddServerScreenState extends ConsumerState<DesktopAddServerScreen>
                               ),
                             )
                           : const Text(
-                              '连接',
+                              '连接并保存',
                               style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
-                    ),
-                  ),
-                  
-                  const SizedBox(height: 16),
-                  
-                  // 批量解析按钮
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: OutlinedButton.icon(
-                      onPressed: () {},
-                      icon: const Icon(Icons.paste),
-                      label: const Text('批量解析分享文本'),
                     ),
                   ),
                 ],
@@ -226,46 +211,141 @@ class _DesktopAddServerScreenState extends ConsumerState<DesktopAddServerScreen>
   Future<void> _connectServer() async {
     if (!_formKey.currentState!.validate()) return;
     
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
     
     try {
-      // 这里实现连接逻辑
       final url = _urlController.text.trim();
       final path = _pathController.text.trim();
       final username = _usernameController.text.trim();
       final password = _passwordController.text;
-      // TODO: 实现实际的认证逻辑，当前仅保存服务器配置
-      debugPrint('Password length: ${password.length}'); // 避免未使用警告
-      final name = _nameController.text.trim().isNotEmpty
-          ? _nameController.text.trim()
-          : '服务器';
       
-      // 创建服务器配置
-      final server = ServerConfig(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        name: name,
-        baseUrl: '$url$path',
-        username: username,
-      );
+      if (url.isEmpty) {
+        throw Exception('服务器地址不能为空');
+      }
       
-      ref.read(serverListProvider.notifier).addServer(server);
+      var fullUrl = _normalizeUrl(url);
+
+      if (path.isNotEmpty && path != '/') {
+        final cleanPath = path.startsWith('/') ? path : '/$path';
+        final urlWithoutSlash = fullUrl.endsWith('/') ? fullUrl.substring(0, fullUrl.length - 1) : fullUrl;
+        if (!urlWithoutSlash.endsWith(cleanPath)) {
+          fullUrl = '$urlWithoutSlash$cleanPath';
+        }
+      }
+
+      final client = EmbyApiClient(baseUrl: fullUrl);
       
-      if (mounted) {
-        context.pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('服务器添加成功')),
+      final serverInfo = await client.server.getPublicInfo(fullUrl);
+      
+      if (username.isNotEmpty) {
+        final authResult = await client.auth.login(username: username, password: password);
+        
+        final name = _nameController.text.trim().isNotEmpty
+            ? _nameController.text.trim()
+            : serverInfo.serverName;
+        
+        final server = ServerConfig(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          name: name,
+          baseUrl: fullUrl,
+          lines: [ServerLine(
+            id: 'default',
+            name: '默认线路',
+            url: fullUrl,
+          )],
+          username: username,
+          authToken: authResult.accessToken,
+          userId: authResult.userId,
         );
+        
+        ref.read(serverListProvider.notifier).addServer(server);
+        ref.read(currentServerProvider.notifier).state = server;
+        ref.read(authStateProvider.notifier).state = AuthState.authenticated;
+        
+        if (!mounted) return;
+        context.go('/');
+      } else {
+        final name = _nameController.text.trim().isNotEmpty
+            ? _nameController.text.trim()
+            : serverInfo.serverName;
+        
+        final server = ServerConfig(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          name: name,
+          baseUrl: fullUrl,
+          lines: [ServerLine(
+            id: 'default',
+            name: '默认线路',
+            url: fullUrl,
+          )],
+        );
+        
+        ref.read(serverListProvider.notifier).addServer(server);
+        
+        if (!mounted) return;
+        context.pop();
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('连接失败: $e')),
-        );
+        setState(() {
+          _errorMessage = _formatError(e);
+        });
       }
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
       }
     }
+  }
+  
+  /// 规范化服务器URL
+  String _normalizeUrl(String url) {
+    var normalized = url.trim();
+
+    if (!normalized.startsWith(RegExp(r'https?://', caseSensitive: false))) {
+      normalized = 'https://$normalized';
+    }
+
+    final portInUrl = RegExp(r':(\d+)(?:/|$)').firstMatch(normalized);
+    if (portInUrl == null) {
+      final scheme = normalized.startsWith('https://') ? 'https' : 'http';
+      final hostMatch = RegExp(r'https?://([^/:]+)').firstMatch(normalized);
+      if (hostMatch != null) {
+        final host = hostMatch.group(1)!;
+        final defaultPort = scheme == 'https' ? '443' : '80';
+        final pathStart = normalized.indexOf('/', scheme.length + 3);
+        final path = pathStart != -1 ? normalized.substring(pathStart) : '';
+        normalized = '$scheme://$host:$defaultPort$path';
+      }
+    }
+
+    return normalized;
+  }
+
+  String _formatError(dynamic e) {
+    final msg = e.toString().toLowerCase();
+
+    if (msg.contains('failed host lookup') ||
+        msg.contains('no address associated with hostname') ||
+        msg.contains('name or service not known') ||
+        msg.contains('errno = 7')) {
+      return '无法解析服务器地址，请检查域名或网络连接';
+    }
+
+    if (msg.contains('400')) {
+      return '服务器返回 400 错误，请检查 URL 路径是否正确';
+    }
+    if (msg.contains('401')) return '认证失败：用户名或密码错误';
+    if (msg.contains('403')) return '访问被拒绝';
+    if (msg.contains('404')) return '服务器接口不存在，请检查 URL 和路径';
+    if (msg.contains('502')) return '服务器网关错误';
+    if (msg.contains('connection') || msg.contains('timeout') || msg.contains('refused')) {
+      return '网络连接失败，请检查服务器地址和端口';
+    }
+
+    return e.toString().replaceAll('Exception: ', '');
   }
 }
