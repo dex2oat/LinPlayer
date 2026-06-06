@@ -58,9 +58,17 @@ class _DetailContentState extends State<_DetailContent> {
 
   @override
   Widget build(BuildContext context) {
+    final foregroundColor = readableTextColorForBackground(_backgroundColor);
     return Scaffold(
       backgroundColor: _backgroundColor,
-      body: CustomScrollView(
+      body: Theme(
+        data: Theme.of(context).copyWith(
+          textTheme: Theme.of(context).textTheme.apply(
+                bodyColor: foregroundColor,
+                displayColor: foregroundColor,
+              ),
+        ),
+        child: CustomScrollView(
         slivers: [
           // 封面区域
           SliverToBoxAdapter(
@@ -73,7 +81,10 @@ class _DetailContentState extends State<_DetailContent> {
           // 简介
           if (widget.item.overview != null && widget.item.overview!.isNotEmpty)
             SliverToBoxAdapter(
-              child: _OverviewSection(overview: widget.item.overview!),
+              child: _OverviewSection(
+                overview: widget.item.overview!,
+                textColor: foregroundColor,
+              ),
             ),
 
           // 剧集相关区块
@@ -96,6 +107,7 @@ class _DetailContentState extends State<_DetailContent> {
 
           const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
         ],
+        ),
       ),
     );
   }
@@ -391,8 +403,12 @@ class _DetailHeaderState extends ConsumerState<_DetailHeader> {
 /// 简介区块
 class _OverviewSection extends StatefulWidget {
   final String overview;
+  final Color? textColor;
   
-  const _OverviewSection({required this.overview});
+  const _OverviewSection({
+    required this.overview,
+    this.textColor,
+  });
   
   @override
   State<_OverviewSection> createState() => _OverviewSectionState();
@@ -415,7 +431,7 @@ class _OverviewSectionState extends State<_OverviewSection> {
             style: TextStyle(
               fontSize: 14,
               height: 1.5,
-              color: Theme.of(context).textTheme.bodyMedium?.color,
+              color: widget.textColor ?? Theme.of(context).textTheme.bodyMedium?.color,
             ),
           ),
           if (widget.overview.length > 100)
@@ -512,18 +528,18 @@ class _SeasonCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final api = ref.read(apiClientProvider);
-    final imageUrls = resolveSeasonLandscapeImageUrls(api, season, maxWidth: 480);
+    final imageUrls = resolveSeasonImageUrls(api, season, maxWidth: 480);
 
     if (imageUrls.isNotEmpty) {
       return AspectRatio(
-        aspectRatio: 16 / 9,
+        aspectRatio: 2 / 3,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: MediaImage(
             imageUrl: imageUrls.first,
             imageUrls: imageUrls.length > 1 ? imageUrls.sublist(1) : null,
             width: 196,
-            height: 110,
+            height: 294,
             fit: BoxFit.cover,
             borderRadius: BorderRadius.circular(8),
           ),
@@ -532,7 +548,7 @@ class _SeasonCard extends ConsumerWidget {
     }
 
     return AspectRatio(
-      aspectRatio: 16 / 9,
+      aspectRatio: 2 / 3,
       child: Container(
         decoration: BoxDecoration(
           color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),

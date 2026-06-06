@@ -1,3 +1,5 @@
+import 'package:flutter/material.dart';
+
 import '../../core/api/api_interfaces.dart';
 
 String mediaRouteForItem(MediaItem item) {
@@ -9,6 +11,16 @@ String mediaRouteForItem(MediaItem item) {
     default:
       return '/detail/${item.id}';
   }
+}
+
+Color readableTextColorForBackground(Color background) {
+  return background.computeLuminance() < 0.32 ? Colors.white : Colors.black87;
+}
+
+Color readableSecondaryTextColorForBackground(Color background) {
+  return background.computeLuminance() < 0.32
+      ? Colors.white70
+      : Colors.black54;
 }
 
 List<String> resolveLibraryImageUrls(

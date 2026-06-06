@@ -48,9 +48,10 @@ class _DesktopMediaCardState extends ConsumerState<DesktopMediaCard> {
           duration: const Duration(milliseconds: 160),
           curve: Curves.fastOutSlowIn,
           width: widget.width,
-          transform: _isHovered 
-              ? (Matrix4.identity()..translateByDouble(0.0, -4.0, 0.0, 0.0))
+          transform: _isHovered
+              ? (Matrix4.identity()..translateByDouble(0.0, -4.0, 0.0, 1.0))
               : Matrix4.identity(),
+          transformAlignment: Alignment.center,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

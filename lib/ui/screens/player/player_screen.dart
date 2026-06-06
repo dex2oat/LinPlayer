@@ -2677,13 +2677,21 @@ class _SubtitleSettingsContentState extends ConsumerState<_SubtitleSettingsConte
 
     return subtitleAsync.when(
       data: (info) {
+        final fallbackMediaSource = info.mediaSources.firstOrNull;
+        if (fallbackMediaSource == null) {
+          return const _SettingsSection(
+            children: [
+              Center(child: Text('无可用字幕轨道', style: TextStyle(color: Colors.white70))),
+            ],
+          );
+        }
         final mediaSource = selectedMediaSourceId != null
             ? info.mediaSources.firstWhere(
                 (source) => source.id == selectedMediaSourceId,
-                orElse: () => info.mediaSources.firstOrNull!,
+                orElse: () => fallbackMediaSource,
               )
-            : info.mediaSources.firstOrNull;
-        final subtitles = mediaSource?.mediaStreams.where((s) => s.isSubtitle).toList() ?? [];
+            : fallbackMediaSource;
+        final subtitles = mediaSource.mediaStreams.where((s) => s.isSubtitle).toList();
         final playerService = _PlayerScreenState.activePlayerService;
         final nameMap = _buildSubtitleNameMap(subtitles, playerService);
 
@@ -2992,13 +3000,21 @@ class _AudioSettingsContentState extends ConsumerState<_AudioSettingsContent> {
 
     return audioAsync.when(
       data: (info) {
+        final fallbackMediaSource = info.mediaSources.firstOrNull;
+        if (fallbackMediaSource == null) {
+          return const _SettingsSection(
+            children: [
+              Center(child: Text('无可用音轨', style: TextStyle(color: Colors.white70))),
+            ],
+          );
+        }
         final mediaSource = selectedMediaSourceId != null
             ? info.mediaSources.firstWhere(
                 (source) => source.id == selectedMediaSourceId,
-                orElse: () => info.mediaSources.firstOrNull!,
+                orElse: () => fallbackMediaSource,
               )
-            : info.mediaSources.firstOrNull;
-        final audios = mediaSource?.mediaStreams.where((s) => s.isAudio).toList() ?? [];
+            : fallbackMediaSource;
+        final audios = mediaSource.mediaStreams.where((s) => s.isAudio).toList();
 
         return _SettingsSection(
           children: [

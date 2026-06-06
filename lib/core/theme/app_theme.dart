@@ -32,6 +32,114 @@ class AppTheme {
   static const double textSize5XL = 40;
   static const double textSize6XL = 48;
 
+  static const TextTheme _lightTextTheme = TextTheme(
+    displayLarge: TextStyle(
+      fontSize: textSize6XL,
+      fontWeight: FontWeight.bold,
+      color: AppColors.lightText,
+    ),
+    displayMedium: TextStyle(
+      fontSize: textSize5XL,
+      fontWeight: FontWeight.bold,
+      color: AppColors.lightText,
+    ),
+    displaySmall: TextStyle(
+      fontSize: textSize4XL,
+      fontWeight: FontWeight.bold,
+      color: AppColors.lightText,
+    ),
+    headlineLarge: TextStyle(
+      fontSize: textSize3XL,
+      fontWeight: FontWeight.w600,
+      color: AppColors.lightText,
+    ),
+    headlineMedium: TextStyle(
+      fontSize: textSize2XL,
+      fontWeight: FontWeight.w600,
+      color: AppColors.lightText,
+    ),
+    headlineSmall: TextStyle(
+      fontSize: textSizeXL,
+      fontWeight: FontWeight.w600,
+      color: AppColors.lightText,
+    ),
+    titleLarge: TextStyle(
+      fontSize: textSizeLG,
+      fontWeight: FontWeight.w600,
+      color: AppColors.lightText,
+    ),
+    titleMedium: TextStyle(
+      fontSize: textSizeBase,
+      fontWeight: FontWeight.w600,
+      color: AppColors.lightText,
+    ),
+    titleSmall: TextStyle(
+      fontSize: textSizeSM,
+      fontWeight: FontWeight.w500,
+      color: AppColors.lightText,
+    ),
+    bodyLarge: TextStyle(fontSize: textSizeBase, color: AppColors.lightText),
+    bodyMedium: TextStyle(fontSize: textSizeSM, color: AppColors.lightText),
+    bodySmall: TextStyle(
+      fontSize: textSizeXS,
+      color: AppColors.lightTextSecondary,
+    ),
+  );
+
+  static const TextTheme _darkTextTheme = TextTheme(
+    displayLarge: TextStyle(
+      fontSize: textSize6XL,
+      fontWeight: FontWeight.bold,
+      color: AppColors.darkText,
+    ),
+    displayMedium: TextStyle(
+      fontSize: textSize5XL,
+      fontWeight: FontWeight.bold,
+      color: AppColors.darkText,
+    ),
+    displaySmall: TextStyle(
+      fontSize: textSize4XL,
+      fontWeight: FontWeight.bold,
+      color: AppColors.darkText,
+    ),
+    headlineLarge: TextStyle(
+      fontSize: textSize3XL,
+      fontWeight: FontWeight.w600,
+      color: AppColors.darkText,
+    ),
+    headlineMedium: TextStyle(
+      fontSize: textSize2XL,
+      fontWeight: FontWeight.w600,
+      color: AppColors.darkText,
+    ),
+    headlineSmall: TextStyle(
+      fontSize: textSizeXL,
+      fontWeight: FontWeight.w600,
+      color: AppColors.darkText,
+    ),
+    titleLarge: TextStyle(
+      fontSize: textSizeLG,
+      fontWeight: FontWeight.w600,
+      color: AppColors.darkText,
+    ),
+    titleMedium: TextStyle(
+      fontSize: textSizeBase,
+      fontWeight: FontWeight.w600,
+      color: AppColors.darkText,
+    ),
+    titleSmall: TextStyle(
+      fontSize: textSizeSM,
+      fontWeight: FontWeight.w500,
+      color: AppColors.darkText,
+    ),
+    bodyLarge: TextStyle(fontSize: textSizeBase, color: AppColors.darkText),
+    bodyMedium: TextStyle(fontSize: textSizeSM, color: AppColors.darkText),
+    bodySmall: TextStyle(
+      fontSize: textSizeXS,
+      color: AppColors.darkTextSecondary,
+    ),
+  );
+
   static ThemeData get lightTheme {
     return ThemeData(
       useMaterial3: true,
@@ -76,20 +184,7 @@ class AppTheme {
         color: AppColors.lightDivider,
         thickness: 1,
       ),
-      textTheme: const TextTheme(
-        displayLarge: TextStyle(fontSize: textSize6XL, fontWeight: FontWeight.bold),
-        displayMedium: TextStyle(fontSize: textSize5XL, fontWeight: FontWeight.bold),
-        displaySmall: TextStyle(fontSize: textSize4XL, fontWeight: FontWeight.bold),
-        headlineLarge: TextStyle(fontSize: textSize3XL, fontWeight: FontWeight.w600),
-        headlineMedium: TextStyle(fontSize: textSize2XL, fontWeight: FontWeight.w600),
-        headlineSmall: TextStyle(fontSize: textSizeXL, fontWeight: FontWeight.w600),
-        titleLarge: TextStyle(fontSize: textSizeLG, fontWeight: FontWeight.w600),
-        titleMedium: TextStyle(fontSize: textSizeBase, fontWeight: FontWeight.w600),
-        titleSmall: TextStyle(fontSize: textSizeSM, fontWeight: FontWeight.w500),
-        bodyLarge: TextStyle(fontSize: textSizeBase),
-        bodyMedium: TextStyle(fontSize: textSizeSM),
-        bodySmall: TextStyle(fontSize: textSizeXS),
-      ),
+      textTheme: _lightTextTheme,
       scrollbarTheme: ScrollbarThemeData(
         thickness: WidgetStateProperty.all(8),
         radius: const Radius.circular(4),
@@ -143,20 +238,7 @@ class AppTheme {
         color: AppColors.darkDivider,
         thickness: 1,
       ),
-      textTheme: const TextTheme(
-        displayLarge: TextStyle(fontSize: textSize6XL, fontWeight: FontWeight.bold),
-        displayMedium: TextStyle(fontSize: textSize5XL, fontWeight: FontWeight.bold),
-        displaySmall: TextStyle(fontSize: textSize4XL, fontWeight: FontWeight.bold),
-        headlineLarge: TextStyle(fontSize: textSize3XL, fontWeight: FontWeight.w600),
-        headlineMedium: TextStyle(fontSize: textSize2XL, fontWeight: FontWeight.w600),
-        headlineSmall: TextStyle(fontSize: textSizeXL, fontWeight: FontWeight.w600),
-        titleLarge: TextStyle(fontSize: textSizeLG, fontWeight: FontWeight.w600),
-        titleMedium: TextStyle(fontSize: textSizeBase, fontWeight: FontWeight.w600),
-        titleSmall: TextStyle(fontSize: textSizeSM, fontWeight: FontWeight.w500),
-        bodyLarge: TextStyle(fontSize: textSizeBase),
-        bodyMedium: TextStyle(fontSize: textSizeSM),
-        bodySmall: TextStyle(fontSize: textSizeXS),
-      ),
+      textTheme: _darkTextTheme,
       scrollbarTheme: ScrollbarThemeData(
         thickness: WidgetStateProperty.all(8),
         radius: const Radius.circular(4),

@@ -175,11 +175,19 @@ class _EpisodeDetailScreenState extends ConsumerState<EpisodeDetailScreen> {
   Widget build(BuildContext context) {
     final itemAsync = ref.watch(mediaItemProvider(widget.episodeId));
     final playbackAsync = ref.watch(playbackInfoProvider(widget.episodeId));
+    final foregroundColor = readableTextColorForBackground(_backgroundColor);
 
     return Scaffold(
       backgroundColor: _backgroundColor,
       body: itemAsync.when(
-        data: (item) => CustomScrollView(
+        data: (item) => Theme(
+          data: Theme.of(context).copyWith(
+            textTheme: Theme.of(context).textTheme.apply(
+                  bodyColor: foregroundColor,
+                  displayColor: foregroundColor,
+                ),
+          ),
+          child: CustomScrollView(
           slivers: [
             // 封面区域
             SliverToBoxAdapter(
@@ -192,7 +200,10 @@ class _EpisodeDetailScreenState extends ConsumerState<EpisodeDetailScreen> {
             // 简介
             if (item.overview != null && item.overview!.isNotEmpty)
               SliverToBoxAdapter(
-                child: _OverviewSection(overview: item.overview!),
+                child: _OverviewSection(
+                  overview: item.overview!,
+                  textColor: foregroundColor,
+                ),
               ),
 
             // 播放选项
@@ -234,6 +245,7 @@ class _EpisodeDetailScreenState extends ConsumerState<EpisodeDetailScreen> {
 
             const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
           ],
+          ),
         ),
         loading: () => const Scaffold(
           body: Center(child: CircularProgressIndicator()),
@@ -465,8 +477,12 @@ class _EpisodePlaybackOptions extends ConsumerWidget {
 /// 简介区块
 class _OverviewSection extends StatefulWidget {
   final String overview;
+  final Color? textColor;
 
-  const _OverviewSection({required this.overview});
+  const _OverviewSection({
+    required this.overview,
+    this.textColor,
+  });
 
   @override
   State<_OverviewSection> createState() => _OverviewSectionState();
@@ -489,7 +505,7 @@ class _OverviewSectionState extends State<_OverviewSection> {
             style: TextStyle(
               fontSize: 14,
               height: 1.5,
-              color: Theme.of(context).textTheme.bodyMedium?.color,
+              color: widget.textColor ?? Theme.of(context).textTheme.bodyMedium?.color,
             ),
           ),
           if (widget.overview.length > 100)

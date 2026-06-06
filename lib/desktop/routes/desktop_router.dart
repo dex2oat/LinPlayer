@@ -102,6 +102,15 @@ final desktopRouterProvider = Provider<GoRouter>((ref) {
         ),
       ),
       GoRoute(
+        path: '/episode/:id',
+        pageBuilder: (context, state) => _buildSlidePage(
+          child: EpisodeDetailScreen(
+            episodeId: state.pathParameters['id']!,
+          ),
+          state: state,
+        ),
+      ),
+      GoRoute(
         path: '/player/:id',
         pageBuilder: (context, state) => _buildFadePage(
           child: DesktopPlayerScreen(

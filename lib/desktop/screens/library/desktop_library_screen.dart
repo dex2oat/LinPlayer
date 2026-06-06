@@ -124,9 +124,10 @@ class _DesktopLibraryGridCardState extends ConsumerState<_DesktopLibraryGridCard
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           curve: Curves.fastOutSlowIn,
-          transform: _isHovered 
-              ? (Matrix4.identity()..translateByDouble(0.0, -6.0, 0.0, 0.0))
+          transform: _isHovered
+              ? (Matrix4.identity()..translateByDouble(0.0, -6.0, 0.0, 1.0))
               : Matrix4.identity(),
+          transformAlignment: Alignment.center,
           decoration: BoxDecoration(
             color: Theme.of(context).colorScheme.surface,
             borderRadius: BorderRadius.circular(16),
