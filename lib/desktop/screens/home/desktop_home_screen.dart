@@ -435,7 +435,10 @@ class _DesktopCarouselState extends State<_DesktopCarousel> {
         aspectRatio: 16 / 9,
         child: Center(child: CircularProgressIndicator()),
       ),
-      error: (_, __) => const SizedBox.shrink(),
+      error: (error, _) {
+        debugPrint('[_DesktopCarousel] Error: $error');
+        return const SizedBox.shrink();
+      },
     );
   }
   
@@ -546,8 +549,18 @@ class _DesktopContinueWatching extends ConsumerWidget {
                 );
               },
               loading: () => const Center(child: CircularProgressIndicator()),
-              error: (_, __) => const Center(
-                child: Text('加载失败', style: TextStyle(color: Colors.grey)),
+              error: (error, _) => Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    '加载失败: $error',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
               ),
             ),
           ),
@@ -637,7 +650,14 @@ class _LibrariesSection extends ConsumerWidget {
     
     return librariesAsync.when(
       data: (libraries) {
-        if (libraries.isEmpty) return const SizedBox.shrink();
+        if (libraries.isEmpty) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text('暂无媒体库', style: TextStyle(color: Colors.grey)),
+            ),
+          );
+        }
         
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -664,8 +684,47 @@ class _LibrariesSection extends ConsumerWidget {
           ],
         );
       },
-      loading: () => const SizedBox.shrink(),
-      error: (_, __) => const SizedBox.shrink(),
+      loading: () => const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: CircularProgressIndicator(),
+        ),
+      ),
+      error: (error, _) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, size: 48, color: Colors.red),
+              const SizedBox(height: 16),
+              Text(
+                '加载媒体库失败',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                error.toString(),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).textTheme.bodySmall?.color,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: () => ref.invalidate(librariesProvider),
+                icon: const Icon(Icons.refresh),
+                label: const Text('重试'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -736,8 +795,21 @@ class _LatestItemsSection extends ConsumerWidget {
           }).toList(),
         );
       },
-      loading: () => const SizedBox.shrink(),
-      error: (_, __) => const SizedBox.shrink(),
+      loading: () => const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: CircularProgressIndicator(),
+        ),
+      ),
+      error: (error, _) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            '加载失败: $error',
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -785,7 +857,10 @@ class _LibraryLatestItems extends ConsumerWidget {
         );
       },
       loading: () => const SizedBox.shrink(),
-      error: (_, __) => const SizedBox.shrink(),
+      error: (error, _) {
+        debugPrint('[_LibraryLatestItems] Error loading ${library.name}: $error');
+        return const SizedBox.shrink();
+      },
     );
   }
 }
