@@ -160,9 +160,19 @@ class EmbyAuthApi implements AuthApi {
       });
       debugPrint('[EmbyAPI] login success: ${resp.statusCode}');
       final d = resp.data as Map<String, dynamic>;
-      final user = _parseUser(d['User'] as Map<String, dynamic>);
+      final userData = d['User'] as Map<String, dynamic>?;
+      if (userData == null) {
+        throw Exception('Invalid response: User data missing');
+      }
+      final user = _parseUser(userData);
+      if (user.id.isEmpty) {
+        throw Exception('Invalid response: User ID missing');
+      }
       _client._userId = user.id;
-      final token = d['AccessToken'] as String;
+      final token = d['AccessToken'] as String?;
+      if (token == null || token.isEmpty) {
+        throw Exception('Invalid response: AccessToken missing');
+      }
       _client.setAuthToken(token);
       return AuthResult(
         accessToken: token,
@@ -749,7 +759,7 @@ class EmbyImageApi implements ImageApi {
 
 String _requireUserId(EmbyApiClient c) {
   final uid = c._userId;
-  if (uid == null) throw Exception('Not authenticated: userId missing');
+  if (uid == null || uid.isEmpty) throw Exception('Not authenticated: userId missing');
   return uid;
 }
 
