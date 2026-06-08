@@ -18,6 +18,8 @@ class MediaImage extends StatelessWidget {
   final String? heroTag;
   final int? cacheWidth;
   final int? cacheHeight;
+  final bool gaplessPlayback;
+  final Alignment alignment;
 
   const MediaImage({
     super.key,
@@ -32,6 +34,8 @@ class MediaImage extends StatelessWidget {
     this.heroTag,
     this.cacheWidth,
     this.cacheHeight,
+    this.gaplessPlayback = true,
+    this.alignment = Alignment.center,
   });
 
   @override
@@ -48,8 +52,10 @@ class MediaImage extends StatelessWidget {
             width: width,
             height: height,
             fit: fit,
+            alignment: alignment,
             cacheWidth: cacheWidth,
             cacheHeight: cacheHeight,
+            gaplessPlayback: gaplessPlayback,
             placeholderBuilder: () => placeholder ?? _buildPlaceholder(context),
             errorBuilder: () => errorWidget ?? _buildError(context),
           );
@@ -99,8 +105,10 @@ class _FallbackNetworkImage extends StatefulWidget {
   final double? width;
   final double? height;
   final BoxFit fit;
+  final Alignment alignment;
   final int? cacheWidth;
   final int? cacheHeight;
+  final bool gaplessPlayback;
   final Widget Function() placeholderBuilder;
   final Widget Function() errorBuilder;
 
@@ -109,8 +117,10 @@ class _FallbackNetworkImage extends StatefulWidget {
     required this.width,
     required this.height,
     required this.fit,
+    required this.alignment,
     required this.cacheWidth,
     required this.cacheHeight,
+    required this.gaplessPlayback,
     required this.placeholderBuilder,
     required this.errorBuilder,
   });
@@ -120,14 +130,20 @@ class _FallbackNetworkImage extends StatefulWidget {
 }
 
 class _FallbackNetworkImageState extends State<_FallbackNetworkImage> {
+  static const int _maxRetryRounds = 2;
+  static const Duration _retryDelay = Duration(milliseconds: 900);
+
   int _currentIndex = 0;
+  int _retryRound = 0;
+  int _requestEpoch = 0;
+  bool _retryScheduled = false;
 
   @override
   void didUpdateWidget(covariant _FallbackNetworkImage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!_sameUrls(oldWidget.imageUrls, widget.imageUrls) ||
         _currentIndex >= widget.imageUrls.length) {
-      _currentIndex = 0;
+      _resetFallbackState();
     }
   }
 
@@ -138,11 +154,15 @@ class _FallbackNetworkImageState extends State<_FallbackNetworkImage> {
         widget.imageUrls[_currentIndex],
         cache: true,
         cacheMaxAge: const Duration(days: 30),
+        retries: 5,
+        timeRetry: const Duration(milliseconds: 350),
+        requestKey: '$_requestEpoch:$_retryRound:$_currentIndex',
       ),
       width: widget.width,
       height: widget.height,
       fit: widget.fit,
-      gaplessPlayback: true,
+      alignment: widget.alignment,
+      gaplessPlayback: widget.gaplessPlayback,
       enableMemoryCache: true,
       clearMemoryCacheIfFailed: false,
       enableLoadState: true,
@@ -156,13 +176,7 @@ class _FallbackNetworkImageState extends State<_FallbackNetworkImage> {
           case LoadState.completed:
             return state.completedWidget;
           case LoadState.failed:
-            if (_currentIndex < widget.imageUrls.length - 1) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (!mounted) return;
-                setState(() {
-                  _currentIndex += 1;
-                });
-              });
+            if (_scheduleRetryIfPossible()) {
               return state.extendedImageInfo != null
                   ? state.completedWidget
                   : widget.placeholderBuilder();
@@ -173,6 +187,47 @@ class _FallbackNetworkImageState extends State<_FallbackNetworkImage> {
     );
   }
 
+  void _resetFallbackState() {
+    _currentIndex = 0;
+    _retryRound = 0;
+    _requestEpoch = 0;
+    _retryScheduled = false;
+  }
+
+  bool _scheduleRetryIfPossible() {
+    if (_retryScheduled || !mounted) {
+      return _retryScheduled;
+    }
+
+    if (_currentIndex < widget.imageUrls.length - 1) {
+      _retryScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          _currentIndex += 1;
+          _retryScheduled = false;
+        });
+      });
+      return true;
+    }
+
+    if (_retryRound >= _maxRetryRounds) {
+      return false;
+    }
+
+    _retryScheduled = true;
+    Future<void>.delayed(_retryDelay, () {
+      if (!mounted) return;
+      setState(() {
+        _retryRound += 1;
+        _currentIndex = 0;
+        _requestEpoch += 1;
+        _retryScheduled = false;
+      });
+    });
+    return true;
+  }
+
   bool _sameUrls(List<String> previous, List<String> next) {
     if (identical(previous, next)) return true;
     if (previous.length != next.length) return false;
@@ -180,6 +235,31 @@ class _FallbackNetworkImageState extends State<_FallbackNetworkImage> {
       if (previous[i] != next[i]) return false;
     }
     return true;
+  }
+}
+
+Future<void> warmPersistentImageCache(
+  BuildContext context,
+  Iterable<String> imageUrls, {
+  Duration cacheMaxAge = const Duration(days: 30),
+}) async {
+  final deduped = <String>{};
+  for (final imageUrl in imageUrls) {
+    if (imageUrl.isEmpty || !deduped.add(imageUrl)) {
+      continue;
+    }
+    try {
+      await precacheImage(
+        PersistentNetworkImageProvider(
+          imageUrl,
+          cache: true,
+          cacheMaxAge: cacheMaxAge,
+        ),
+        context,
+      );
+    } catch (_) {
+      // Ignore cache warmup errors and continue with other candidates.
+    }
   }
 }
 

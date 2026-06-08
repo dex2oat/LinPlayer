@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "linplayer_mobile" "\0"
+            VALUE "CompanyName", "Linplayer" "\0"
+            VALUE "FileDescription", "Linplayer" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "linplayer_mobile" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "linplayer_mobile.exe" "\0"
-            VALUE "ProductName", "linplayer_mobile" "\0"
+            VALUE "InternalName", "Linplayer" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Linplayer. All rights reserved." "\0"
+            VALUE "OriginalFilename", "Linplayer.exe" "\0"
+            VALUE "ProductName", "Linplayer" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

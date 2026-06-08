@@ -6,7 +6,6 @@ import '../../core/providers/app_providers.dart';
 /// 桌面端侧边栏宽度
 const double _kSidebarWidth = 220;
 const double _kSidebarCollapsedWidth = 72;
-
 /// 桌面端导航项
 class _NavItem {
   final String path;
@@ -78,10 +77,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
               ),
               child: Column(
                 children: [
-                  // 应用标题/Logo
-                  _buildLogo(isDark),
-                  
-                  const SizedBox(height: 16),
+                  SizedBox(height: _isSidebarCollapsed ? 12 : 20),
                   
                   // 导航项
                   Expanded(
@@ -122,41 +118,8 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     );
   }
   
-  Widget _buildLogo(bool isDark) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: const Color(0xFF5B8DEF).withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(
-              Icons.play_circle_filled,
-              color: Color(0xFF5B8DEF),
-              size: 22,
-            ),
-          ),
-          if (!_isSidebarCollapsed) ...[
-            const SizedBox(width: 12),
-            const Text(
-              'LinPlayer',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.5,
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-  
   Widget _buildNavItem(_NavItem item, bool isSelected, bool isDark, String currentPath) {
+    final theme = Theme.of(context);
     final bgColor = isSelected
         ? const Color(0xFF5B8DEF).withValues(alpha: 0.15)
         : Colors.transparent;
@@ -201,9 +164,8 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
                       const SizedBox(width: 12),
                       Text(
                         item.label,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: isSelected ? FontWeight.w700 : FontWeight.w400,
                           color: textColor,
                         ),
                       ),
@@ -229,6 +191,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
   Widget _buildServerStatus(bool isDark) {
     final currentServer = ref.watch(currentServerProvider);
     final authState = ref.watch(authStateProvider);
+    final theme = Theme.of(context);
     
     if (currentServer == null) return const SizedBox.shrink();
     
@@ -272,9 +235,8 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
                     currentServer.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w400,
                     ),
                   ),
                 ),

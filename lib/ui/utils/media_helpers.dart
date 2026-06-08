@@ -170,6 +170,65 @@ List<String> resolveMediaItemLandscapeImageUrls(
   ]);
 }
 
+List<String> resolveMediaItemBannerImageUrls(
+  ApiClientFactory api,
+  MediaItem item, {
+  int? maxWidth,
+  bool allowPosterFallback = false,
+}) {
+  return _dedupeUrls([
+    if (item.backdropImageTag != null)
+      api.image.getBackdropImageUrl(
+        item.id,
+        tag: item.backdropImageTag,
+        maxWidth: maxWidth,
+      ),
+    if (item.thumbImageTag != null)
+      api.image.getThumbImageUrl(
+        item.id,
+        tag: item.thumbImageTag,
+        maxWidth: maxWidth,
+      ),
+    if (item.parentThumbItemId != null && item.parentThumbImageTag != null)
+      api.image.getThumbImageUrl(
+        item.parentThumbItemId!,
+        tag: item.parentThumbImageTag,
+        maxWidth: maxWidth,
+      ),
+    if (item.seriesId != null &&
+        item.seriesId!.isNotEmpty &&
+        item.seriesThumbImageTag != null)
+      api.image.getThumbImageUrl(
+        item.seriesId!,
+        tag: item.seriesThumbImageTag,
+        maxWidth: maxWidth,
+      ),
+    if (allowPosterFallback && item.primaryImageTag != null)
+      api.image.getPrimaryImageUrl(
+        item.id,
+        tag: item.primaryImageTag,
+        maxWidth: maxWidth,
+      ),
+    if (allowPosterFallback &&
+        item.parentPrimaryImageItemId != null &&
+        item.parentPrimaryImageTag != null)
+      api.image.getPrimaryImageUrl(
+        item.parentPrimaryImageItemId!,
+        tag: item.parentPrimaryImageTag,
+        maxWidth: maxWidth,
+      ),
+    if (allowPosterFallback &&
+        item.seriesId != null &&
+        item.seriesId!.isNotEmpty &&
+        item.seriesPrimaryImageTag != null)
+      api.image.getPrimaryImageUrl(
+        item.seriesId!,
+        tag: item.seriesPrimaryImageTag,
+        maxWidth: maxWidth,
+      ),
+  ]);
+}
+
 List<String> resolveSeasonImageUrls(
   ApiClientFactory api,
   Season season, {

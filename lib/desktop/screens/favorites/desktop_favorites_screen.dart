@@ -8,94 +8,133 @@ import '../../widgets/desktop_media_card.dart';
 /// 桌面端收藏页
 class DesktopFavoritesScreen extends ConsumerWidget {
   const DesktopFavoritesScreen({super.key});
-  
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final favoritesAsync = ref.watch(favoriteItemsProvider);
     final servers = ref.watch(serverListProvider);
-    
+    final theme = Theme.of(context);
+
     return Scaffold(
       body: CustomScrollView(
         slivers: [
-          // 顶部栏
           SliverToBoxAdapter(
             child: Container(
-              padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
-              child: const Row(
+              padding: const EdgeInsets.fromLTRB(24, 18, 24, 10),
+              child: Row(
                 children: [
                   Text(
                     '我的收藏',
-                    style: TextStyle(
-                      fontSize: 24,
+                    style: theme.textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest
+                          .withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      '桌面视图',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
           ),
-          
           if (servers.isEmpty)
             const SliverFillRemaining(
               child: _EmptyServerGuide(),
             )
           else
-            // 收藏内容
             favoritesAsync.when(
-            data: (items) {
-              if (items.isEmpty) {
-                return const SliverFillRemaining(
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.favorite_border, size: 64, color: Colors.grey),
-                        SizedBox(height: 16),
-                        Text(
-                          '暂无收藏',
-                          style: TextStyle(fontSize: 16, color: Colors.grey),
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          '在详情页点击收藏按钮添加',
-                          style: TextStyle(fontSize: 13, color: Colors.grey),
-                        ),
-                      ],
+              data: (items) {
+                if (items.isEmpty) {
+                  return SliverFillRemaining(
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.favorite_border,
+                            size: 64,
+                            color: Colors.grey,
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            '还没有收藏内容',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              color: Colors.grey,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '在详情页点击收藏后，这里会自动同步',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                );
-              }
-              
-              return SliverPadding(
-                padding: const EdgeInsets.all(24),
-                sliver: SliverGrid(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 6,
-                    childAspectRatio: 0.65,
-                    crossAxisSpacing: 20,
-                    mainAxisSpacing: 24,
-                  ),
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      return DesktopMediaCard(
-                        item: items[index],
-                        width: double.infinity,
+                  );
+                }
+
+                return SliverPadding(
+                  padding: const EdgeInsets.all(24),
+                  sliver: SliverLayoutBuilder(
+                    builder: (context, constraints) {
+                      const cardWidth = 156.0;
+                      const crossAxisSpacing = 20.0;
+                      const mainAxisSpacing = 24.0;
+                      final crossAxisCount = ((constraints.crossAxisExtent +
+                                  crossAxisSpacing) /
+                              (cardWidth + crossAxisSpacing))
+                          .floor()
+                          .clamp(2, 8);
+
+                      return SliverGrid(
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: crossAxisCount,
+                          childAspectRatio: 0.66,
+                          crossAxisSpacing: crossAxisSpacing,
+                          mainAxisSpacing: mainAxisSpacing,
+                        ),
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            return DesktopMediaCard(
+                              item: items[index],
+                              width: cardWidth,
+                            );
+                          },
+                          childCount: items.length,
+                        ),
                       );
                     },
-                    childCount: items.length,
+                  ),
+                );
+              },
+              loading: () => const SliverFillRemaining(
+                child: Center(child: CircularProgressIndicator()),
+              ),
+              error: (_, __) => SliverFillRemaining(
+                child: Center(
+                  child: Text(
+                    '加载收藏失败',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: Colors.grey,
+                    ),
                   ),
                 ),
-              );
-            },
-            loading: () => const SliverFillRemaining(
-              child: Center(child: CircularProgressIndicator()),
-            ),
-            error: (_, __) => const SliverFillRemaining(
-              child: Center(
-                child: Text('加载失败', style: TextStyle(color: Colors.grey)),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -105,7 +144,7 @@ class DesktopFavoritesScreen extends ConsumerWidget {
 /// 无服务器引导组件
 class _EmptyServerGuide extends StatelessWidget {
   const _EmptyServerGuide();
-  
+
   @override
   Widget build(BuildContext context) {
     return Center(
@@ -140,7 +179,8 @@ class _EmptyServerGuide extends StatelessWidget {
             child: GestureDetector(
               onTap: () => context.go('/servers'),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 decoration: BoxDecoration(
                   color: const Color(0xFF5B8DEF),
                   borderRadius: BorderRadius.circular(8),
