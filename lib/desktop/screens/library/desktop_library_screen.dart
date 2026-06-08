@@ -8,12 +8,22 @@ import '../../../ui/utils/media_helpers.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
 import '../../widgets/desktop_cover_radii.dart';
 
+enum _DesktopLibraryViewMode { grid, list }
+
 /// 桌面端媒体库列表页
-class DesktopLibraryScreen extends ConsumerWidget {
+class DesktopLibraryScreen extends ConsumerStatefulWidget {
   const DesktopLibraryScreen({super.key});
-  
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DesktopLibraryScreen> createState() =>
+      _DesktopLibraryScreenState();
+}
+
+class _DesktopLibraryScreenState extends ConsumerState<DesktopLibraryScreen> {
+  _DesktopLibraryViewMode _viewMode = _DesktopLibraryViewMode.grid;
+
+  @override
+  Widget build(BuildContext context) {
     final librariesAsync = ref.watch(librariesProvider);
     final servers = ref.watch(serverListProvider);
     final theme = Theme.of(context);
@@ -35,14 +45,24 @@ class DesktopLibraryScreen extends ConsumerWidget {
                   ),
                   const Spacer(),
                   IconButton(
-                    icon: const Icon(Icons.view_list),
-                    onPressed: () {},
+                    icon: const Icon(Icons.view_list_rounded),
+                    onPressed: () => setState(
+                      () => _viewMode = _DesktopLibraryViewMode.list,
+                    ),
                     tooltip: '列表视图',
+                    color: _viewMode == _DesktopLibraryViewMode.list
+                        ? theme.colorScheme.primary
+                        : null,
                   ),
                   IconButton(
-                    icon: const Icon(Icons.grid_view),
-                    onPressed: () {},
+                    icon: const Icon(Icons.grid_view_rounded),
+                    onPressed: () => setState(
+                      () => _viewMode = _DesktopLibraryViewMode.grid,
+                    ),
                     tooltip: '网格视图',
+                    color: _viewMode == _DesktopLibraryViewMode.grid
+                        ? theme.colorScheme.primary
+                        : null,
                   ),
                 ],
               ),
@@ -65,22 +85,35 @@ class DesktopLibraryScreen extends ConsumerWidget {
                 );
               }
               
+              if (_viewMode == _DesktopLibraryViewMode.grid) {
+                return SliverPadding(
+                  padding: const EdgeInsets.all(24),
+                  sliver: SliverGrid(
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 4,
+                      childAspectRatio: 1.4,
+                      crossAxisSpacing: 20,
+                      mainAxisSpacing: 20,
+                    ),
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final library = libraries[index];
+                        return _DesktopLibraryGridCard(library: library);
+                      },
+                      childCount: libraries.length,
+                    ),
+                  ),
+                );
+              }
+
               return SliverPadding(
-                padding: const EdgeInsets.all(24),
-                sliver: SliverGrid(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 4,
-                    childAspectRatio: 1.4,
-                    crossAxisSpacing: 20,
-                    mainAxisSpacing: 20,
+                padding: const EdgeInsets.fromLTRB(24, 12, 24, 28),
+                sliver: SliverList.separated(
+                  itemCount: libraries.length,
+                  itemBuilder: (context, index) => _DesktopLibraryListTile(
+                    library: libraries[index],
                   ),
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      final library = libraries[index];
-                      return _DesktopLibraryGridCard(library: library);
-                    },
-                    childCount: libraries.length,
-                  ),
+                  separatorBuilder: (_, __) => const SizedBox(height: 14),
                 ),
               );
             },
@@ -94,6 +127,96 @@ class DesktopLibraryScreen extends ConsumerWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _DesktopLibraryListTile extends ConsumerStatefulWidget {
+  final Library library;
+
+  const _DesktopLibraryListTile({required this.library});
+
+  @override
+  ConsumerState<_DesktopLibraryListTile> createState() =>
+      _DesktopLibraryListTileState();
+}
+
+class _DesktopLibraryListTileState
+    extends ConsumerState<_DesktopLibraryListTile> {
+  bool _isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final api = ref.read(apiClientProvider);
+    final imageUrls = resolveLibraryImageUrls(api, widget.library, maxWidth: 320);
+    final theme = Theme.of(context);
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () => context.push('/library/${widget.library.id}'),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: _isHovered
+                ? theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.6)
+                : theme.colorScheme.surface,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: _isHovered
+                  ? theme.colorScheme.primary.withValues(alpha: 0.22)
+                  : theme.dividerColor.withValues(alpha: 0.08),
+            ),
+          ),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: SizedBox(
+                  width: 104,
+                  height: 74,
+                  child: MediaImage(
+                    imageUrl: imageUrls.isNotEmpty ? imageUrls.first : null,
+                    fit: BoxFit.cover,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.library.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      widget.library.collectionType,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.textTheme.bodySmall?.color
+                            ?.withValues(alpha: 0.8),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.42),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

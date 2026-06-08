@@ -133,6 +133,14 @@ abstract class PlayerAdapter {
   /// 应用超分辨率（Anime4K）
   Future<void> applySuperResolution(bool enable) async {}
 
+  /// 应用超分辨率档位（Anime4K）
+  /// level: 'off', 'modeA', 'modeB', 'modeC'
+  Future<void> applySuperResolutionLevel(String level) async {}
+
+  /// 获取播放统计信息（MPV原生属性）
+  /// 返回属性名到属性值的映射
+  Future<Map<String, String>> getPlaybackStats() async => {};
+
   /// 释放资源
   Future<void> dispose();
 }

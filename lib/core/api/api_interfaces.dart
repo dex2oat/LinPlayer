@@ -208,6 +208,7 @@ class MediaItem {
   final String? parentId; // 父级ID（可能是媒体库或文件夹）
   final int? childCount; // 子项数量（剧集的总集数）
   final int? recursiveItemCount; // 递归子项数量（剧集总集数）
+  final List<Person>? people;
   final bool? canDownload;
 
   MediaItem({
@@ -241,6 +242,7 @@ class MediaItem {
     this.parentId,
     this.childCount,
     this.recursiveItemCount,
+    this.people,
     this.canDownload,
   });
   
@@ -464,6 +466,7 @@ class MediaStream {
   final int? width;
   final int? height;
   final int? channels;
+  final int? bitRate;
   
   MediaStream({
     required this.index,
@@ -478,6 +481,7 @@ class MediaStream {
     this.width,
     this.height,
     this.channels,
+    this.bitRate,
   });
   
   bool get isVideo => type == 'Video';

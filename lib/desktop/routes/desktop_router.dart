@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/providers/app_providers.dart';
-import '../../ui/screens/detail/media_detail_screen.dart';
-import '../../ui/screens/detail/season_detail_screen.dart';
+import '../screens/detail/desktop_media_detail_screen.dart';
 import '../screens/player/desktop_player_screen.dart';
 import '../screens/search/desktop_search_screen.dart';
 import '../../ui/screens/settings/settings_screen.dart';
+import '../../ui/screens/server/edit_server_screen.dart';
+import '../../ui/screens/server/icon_select_screen.dart';
+import '../../ui/screens/server/server_lines_screen.dart';
 import '../screens/favorites/desktop_favorites_screen.dart';
 import '../screens/home/desktop_home_screen.dart';
 import '../screens/library/desktop_library_screen.dart';
@@ -86,7 +88,7 @@ final desktopRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/detail/:id',
         pageBuilder: (context, state) => _buildSlidePage(
-          child: MediaDetailScreen(
+          child: DesktopMediaDetailScreen(
             itemId: state.pathParameters['id']!,
           ),
           state: state,
@@ -95,8 +97,8 @@ final desktopRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/season/:id',
         pageBuilder: (context, state) => _buildSlidePage(
-          child: SeasonDetailScreen(
-            seasonId: state.pathParameters['id']!,
+          child: DesktopMediaDetailScreen(
+            itemId: state.pathParameters['id']!,
           ),
           state: state,
         ),
@@ -104,8 +106,8 @@ final desktopRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/episode/:id',
         pageBuilder: (context, state) => _buildSlidePage(
-          child: EpisodeDetailScreen(
-            episodeId: state.pathParameters['id']!,
+          child: DesktopMediaDetailScreen(
+            itemId: state.pathParameters['id']!,
           ),
           state: state,
         ),
@@ -132,6 +134,36 @@ final desktopRouterProvider = Provider<GoRouter>((ref) {
         path: '/add-server',
         pageBuilder: (context, state) => _buildSlidePage(
           child: const DesktopAddServerScreen(),
+          state: state,
+          fromRight: true,
+        ),
+      ),
+      GoRoute(
+        path: '/edit-server/:serverId',
+        pageBuilder: (context, state) => _buildSlidePage(
+          child: EditServerScreen(
+            serverId: state.pathParameters['serverId']!,
+          ),
+          state: state,
+          fromRight: true,
+        ),
+      ),
+      GoRoute(
+        path: '/server-lines/:serverId',
+        pageBuilder: (context, state) => _buildSlidePage(
+          child: ServerLinesScreen(
+            serverId: state.pathParameters['serverId']!,
+          ),
+          state: state,
+          fromRight: true,
+        ),
+      ),
+      GoRoute(
+        path: '/server-icons/:serverId',
+        pageBuilder: (context, state) => _buildSlidePage(
+          child: IconSelectScreen(
+            serverId: state.pathParameters['serverId']!,
+          ),
           state: state,
           fromRight: true,
         ),

@@ -760,20 +760,92 @@ class MpvPlayerAdapter implements PlayerAdapter {
     await _configManager.updateConfigValue('video-aspect-override', value);
   }
 
-  @override
-  Future<void> applySuperResolution(bool enable) async {
-    _glslShaders = enable ? [
+  static final Map<String, List<String>> _anime4KShaderPresets = {
+    'modeA': [
+      '~~/shaders/Anime4K_Clamp_Highlights.glsl',
+      '~~/shaders/Anime4K_Restore_CNN_S.glsl',
+      '~~/shaders/Anime4K_Upscale_CNN_x2_S.glsl',
+    ],
+    'modeB': [
       '~~/shaders/Anime4K_Clamp_Highlights.glsl',
       '~~/shaders/Anime4K_Restore_CNN_M.glsl',
       '~~/shaders/Anime4K_Upscale_CNN_x2_M.glsl',
       '~~/shaders/Anime4K_AutoDownscalePre_x2.glsl',
       '~~/shaders/Anime4K_AutoDownscalePre_x4.glsl',
       '~~/shaders/Anime4K_Upscale_CNN_x2_S.glsl',
-    ] : null;
+    ],
+    'modeC': [
+      '~~/shaders/Anime4K_Clamp_Highlights.glsl',
+      '~~/shaders/Anime4K_Restore_CNN_VL.glsl',
+      '~~/shaders/Anime4K_Upscale_CNN_x2_VL.glsl',
+      '~~/shaders/Anime4K_AutoDownscalePre_x2.glsl',
+      '~~/shaders/Anime4K_AutoDownscalePre_x4.glsl',
+      '~~/shaders/Anime4K_Upscale_CNN_x2_M.glsl',
+    ],
+  };
+
+  @override
+  Future<void> applySuperResolution(bool enable) async {
+    _glslShaders = enable ? _anime4KShaderPresets['modeB'] : null;
     final np = _nativePlayer;
     if (np != null) {
       await np.setProperty('glsl-shaders', _glslShaders?.join(':') ?? '');
     }
+  }
+
+  @override
+  Future<void> applySuperResolutionLevel(String level) async {
+    _glslShaders = level == 'off' ? null : (_anime4KShaderPresets[level] ?? _anime4KShaderPresets['modeB']);
+    final np = _nativePlayer;
+    if (np != null) {
+      await np.setProperty('glsl-shaders', _glslShaders?.join(':') ?? '');
+    }
+  }
+
+  @override
+  Future<Map<String, String>> getPlaybackStats() async {
+    final np = _nativePlayer;
+    if (np == null) return {};
+
+    final props = [
+      'width',
+      'height',
+      'fps',
+      'container-fps',
+      'video-bitrate',
+      'audio-bitrate',
+      'video-codec',
+      'audio-codec',
+      'audio-params/channel-count',
+      'audio-params/sample-rate',
+      'file-size',
+      'path',
+      'demuxer-cache-duration',
+      'decoder-frame-drop-count',
+      'frame-drop-count',
+      'hwdec-current',
+      'video-params/pixelformat',
+      'estimated-vf-fps',
+      'vo-drop-frame-count',
+      'vo-delayed-frame-count',
+      'current-tracks/video/codec',
+      'current-tracks/audio/codec',
+      'current-tracks/video/default-bitrate',
+      'current-tracks/audio/default-bitrate',
+    ];
+
+    final stats = <String, String>{};
+    for (final prop in props) {
+      try {
+        final value = await np.getProperty(prop);
+        if (value.isNotEmpty && value != 'null') {
+          stats[prop] = value;
+        }
+      } catch (_) {
+        // 某些属性可能不存在，忽略错误
+      }
+    }
+    return stats;
   }
 
   @override

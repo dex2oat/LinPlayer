@@ -6,6 +6,8 @@ import '../../../core/providers/media_providers.dart';
 import '../../../core/api/emby_api.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
 
+enum _ServerContextAction { rename, lines, icon, login }
+
 /// 桌面端服务器管理页
 class DesktopServerScreen extends ConsumerStatefulWidget {
   const DesktopServerScreen({super.key});
@@ -103,9 +105,9 @@ class _DesktopServerScreenState extends ConsumerState<DesktopServerScreen> {
               sliver: SliverGrid(
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 5,
-                  childAspectRatio: 2.2,
+                  childAspectRatio: 2.95,
                   crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
+                  mainAxisSpacing: 10,
                 ),
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
@@ -115,6 +117,8 @@ class _DesktopServerScreenState extends ConsumerState<DesktopServerScreen> {
                       server: server,
                       isCurrent: isCurrent,
                       onTap: () => _selectServer(server),
+                      onSecondaryTapDown: (details) =>
+                          _showContextMenu(server, details.globalPosition),
                     );
                   },
                   childCount: servers.length,
@@ -133,6 +137,8 @@ class _DesktopServerScreenState extends ConsumerState<DesktopServerScreen> {
                       server: server,
                       isCurrent: isCurrent,
                       onTap: () => _selectServer(server),
+                      onSecondaryTapDown: (details) =>
+                          _showContextMenu(server, details.globalPosition),
                     );
                   },
                   childCount: servers.length,
@@ -175,6 +181,70 @@ class _DesktopServerScreenState extends ConsumerState<DesktopServerScreen> {
       builder: (context) => _ReauthDialog(server: server),
     );
   }
+
+  Future<void> _showContextMenu(ServerConfig server, Offset position) async {
+    final result = await showMenu<_ServerContextAction>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        position.dx,
+        position.dy,
+      ),
+      items: [
+        const PopupMenuItem(
+          value: _ServerContextAction.rename,
+          child: ListTile(
+            dense: true,
+            leading: Icon(Icons.edit_outlined),
+            title: Text('编辑服务器名称'),
+          ),
+        ),
+        const PopupMenuItem(
+          value: _ServerContextAction.lines,
+          child: ListTile(
+            dense: true,
+            leading: Icon(Icons.route_outlined),
+            title: Text('管理线路'),
+          ),
+        ),
+        const PopupMenuItem(
+          value: _ServerContextAction.icon,
+          child: ListTile(
+            dense: true,
+            leading: Icon(Icons.image_outlined),
+            title: Text('更换图标'),
+          ),
+        ),
+        if (!serverHasUsableAuth(server))
+          const PopupMenuItem(
+            value: _ServerContextAction.login,
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.login_outlined),
+              title: Text('重新登录'),
+            ),
+          ),
+      ],
+    );
+
+    if (!mounted || result == null) return;
+
+    switch (result) {
+      case _ServerContextAction.rename:
+        context.push('/edit-server/${server.id}');
+        break;
+      case _ServerContextAction.lines:
+        context.push('/server-lines/${server.id}');
+        break;
+      case _ServerContextAction.icon:
+        context.push('/server-icons/${server.id}');
+        break;
+      case _ServerContextAction.login:
+        _showReauthDialog(server);
+        break;
+    }
+  }
 }
 
 /// 服务器网格卡片
@@ -182,11 +252,13 @@ class _ServerGridCard extends StatefulWidget {
   final ServerConfig server;
   final bool isCurrent;
   final VoidCallback onTap;
+  final ValueChanged<TapDownDetails>? onSecondaryTapDown;
   
   const _ServerGridCard({
     required this.server,
     required this.isCurrent,
     required this.onTap,
+    this.onSecondaryTapDown,
   });
   
   @override
@@ -245,6 +317,7 @@ class _ServerGridCardState extends State<_ServerGridCard> with SingleTickerProvi
         onTapDown: _onTapDown,
         onTapUp: _onTapUp,
         onTapCancel: _onTapCancel,
+        onSecondaryTapDown: widget.onSecondaryTapDown,
         child: AnimatedBuilder(
           animation: _scaleController,
           builder: (context, child) {
@@ -299,32 +372,32 @@ class _ServerGridCardState extends State<_ServerGridCard> with SingleTickerProvi
                         ],
             ),
             child: Padding(
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               child: Row(
                 children: [
                   // 服务器图标
                   Container(
-                    width: 40,
-                    height: 40,
+                    width: 34,
+                    height: 34,
                     decoration: BoxDecoration(
                       color: widget.isCurrent
                           ? const Color(0xFF5B8DEF).withValues(alpha: 0.15)
                           : const Color(0xFF5B8DEF).withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(8),
                     ),
                     child: widget.server.iconUrl != null
                         ? ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(8),
                             child: MediaImage(
                               imageUrl: widget.server.iconUrl,
-                              width: 40,
-                              height: 40,
+                              width: 34,
+                              height: 34,
                               fit: BoxFit.cover,
                             ),
                           )
                         : Icon(
                             Icons.dns,
-                            size: 20,
+                            size: 18,
                             color: widget.isCurrent
                                 ? const Color(0xFF5B8DEF)
                                 : const Color(0xFF5B8DEF).withValues(alpha: 0.7),
@@ -342,7 +415,7 @@ class _ServerGridCardState extends State<_ServerGridCard> with SingleTickerProvi
                         Text(
                           widget.server.name,
                           style: TextStyle(
-                            fontSize: 14,
+                            fontSize: 13,
                             fontWeight: widget.isCurrent ? FontWeight.w700 : FontWeight.w600,
                             color: widget.isCurrent
                                 ? const Color(0xFF5B8DEF)
@@ -353,9 +426,9 @@ class _ServerGridCardState extends State<_ServerGridCard> with SingleTickerProvi
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          widget.server.baseUrl,
+                          _serverPrivacySummary(widget.server),
                           style: TextStyle(
-                            fontSize: 11,
+                            fontSize: 10,
                             color: theme.textTheme.bodySmall?.color,
                           ),
                           maxLines: 1,
@@ -368,7 +441,7 @@ class _ServerGridCardState extends State<_ServerGridCard> with SingleTickerProvi
                   // 当前选中标记 / 未认证标记
                   if (widget.isCurrent)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                       decoration: BoxDecoration(
                         color: const Color(0xFF5B8DEF).withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(4),
@@ -385,7 +458,7 @@ class _ServerGridCardState extends State<_ServerGridCard> with SingleTickerProvi
                           Text(
                             '当前',
                             style: TextStyle(
-                              fontSize: 10,
+                              fontSize: 9,
                               fontWeight: FontWeight.w600,
                               color: Color(0xFF5B8DEF),
                             ),
@@ -395,7 +468,7 @@ class _ServerGridCardState extends State<_ServerGridCard> with SingleTickerProvi
                     )
                   else if (!serverHasUsableAuth(widget.server))
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                       decoration: BoxDecoration(
                         color: Colors.orange.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(4),
@@ -412,7 +485,7 @@ class _ServerGridCardState extends State<_ServerGridCard> with SingleTickerProvi
                           Text(
                             '未认证',
                             style: TextStyle(
-                              fontSize: 10,
+                              fontSize: 9,
                               fontWeight: FontWeight.w600,
                               color: Colors.orange.shade700,
                             ),
@@ -435,11 +508,13 @@ class _ServerListTile extends StatefulWidget {
   final ServerConfig server;
   final bool isCurrent;
   final VoidCallback onTap;
+  final ValueChanged<TapDownDetails>? onSecondaryTapDown;
   
   const _ServerListTile({
     required this.server,
     required this.isCurrent,
     required this.onTap,
+    this.onSecondaryTapDown,
   });
   
   @override
@@ -498,6 +573,7 @@ class _ServerListTileState extends State<_ServerListTile> with SingleTickerProvi
         onTapDown: _onTapDown,
         onTapUp: _onTapUp,
         onTapCancel: _onTapCancel,
+        onSecondaryTapDown: widget.onSecondaryTapDown,
         child: AnimatedBuilder(
           animation: _scaleController,
           builder: (context, child) {
@@ -575,7 +651,7 @@ class _ServerListTileState extends State<_ServerListTile> with SingleTickerProvi
                       ),
                       const SizedBox(height: 1),
                       Text(
-                        widget.server.baseUrl,
+                        _serverPrivacySummary(widget.server),
                         style: TextStyle(
                           fontSize: 11,
                           color: theme.textTheme.bodySmall?.color,
@@ -647,6 +723,21 @@ class _ServerListTileState extends State<_ServerListTile> with SingleTickerProvi
       ),
     );
   }
+}
+
+String _serverPrivacySummary(ServerConfig server) {
+  final lineCount = server.lines.length;
+  final remark = server.remark?.trim();
+  final summary = <String>[
+    if (lineCount > 0) '$lineCount 条线路',
+    if (remark != null && remark.isNotEmpty) remark,
+  ];
+
+  if (summary.isEmpty) {
+    return serverHasUsableAuth(server) ? '已配置服务器' : '需要重新登录';
+  }
+
+  return summary.join(' · ');
 }
 
 /// 重新认证对话框

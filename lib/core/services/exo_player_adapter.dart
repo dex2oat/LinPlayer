@@ -728,6 +728,12 @@ class ExoPlayerAdapter implements PlayerAdapter {
   Future<void> applySuperResolution(bool enable) async {}
 
   @override
+  Future<void> applySuperResolutionLevel(String level) async {}
+
+  @override
+  Future<Map<String, String>> getPlaybackStats() async => {};
+
+  @override
   Future<void> dispose() async {
     _positionTimer?.cancel();
     _positionTimer = null;

@@ -80,7 +80,8 @@ final episodesProvider = FutureProvider.family<List<Episode>, ({String seriesId,
 final personsProvider = FutureProvider.family<List<Person>, String>((ref, itemId) async {
   ref.keepAlive();
   final api = ref.watch(apiClientProvider);
-  return await api.media.getPersonItems(itemId);
+  final item = await api.media.getItemDetails(itemId);
+  return item.people ?? const <Person>[];
 });
 
 /// ==========================================

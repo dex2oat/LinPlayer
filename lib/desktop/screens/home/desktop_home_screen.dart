@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -39,9 +37,7 @@ class _DesktopHomeScreenState extends ConsumerState<DesktopHomeScreen> {
     return Scaffold(
       body: CustomScrollView(
         controller: _scrollController,
-        physics: const BouncingScrollPhysics(
-          parent: AlwaysScrollableScrollPhysics(),
-        ),
+        physics: const ClampingScrollPhysics(),
         slivers: [
           const SliverToBoxAdapter(child: _DesktopTopBar()),
           if (servers.isEmpty)
@@ -51,12 +47,20 @@ class _DesktopHomeScreenState extends ConsumerState<DesktopHomeScreen> {
           else ...[
             if (isUnauthenticated)
               SliverToBoxAdapter(
-                child: _UnauthenticatedBanner(server: currentServer),
+                child: RepaintBoundary(
+                  child: _UnauthenticatedBanner(server: currentServer),
+                ),
               ),
             if (!hideDailyRecommendations)
-              const SliverToBoxAdapter(child: _HeroSection()),
-            const SliverToBoxAdapter(child: _LibrariesSection()),
-            const SliverToBoxAdapter(child: _LatestItemsSection()),
+              const SliverToBoxAdapter(
+                child: RepaintBoundary(child: _HeroSection()),
+              ),
+            const SliverToBoxAdapter(
+              child: RepaintBoundary(child: _LibrariesSection()),
+            ),
+            const SliverToBoxAdapter(
+              child: RepaintBoundary(child: _LatestItemsSection()),
+            ),
             const SliverPadding(padding: EdgeInsets.only(bottom: 48)),
           ],
         ],
@@ -121,11 +125,8 @@ class _DesktopTopBarState extends ConsumerState<_DesktopTopBar> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
+            color: Colors.transparent,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: Theme.of(context).dividerColor.withValues(alpha: 0.5),
-            ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -269,7 +270,6 @@ class _DesktopServerMenuOverlayState extends State<_DesktopServerMenuOverlay>
   late final AnimationController _animationController;
   late final Animation<double> _fadeAnimation;
   late final Animation<Offset> _slideAnimation;
-  String? _hoveredServerId;
 
   @override
   void initState() {
@@ -316,9 +316,7 @@ class _DesktopServerMenuOverlayState extends State<_DesktopServerMenuOverlay>
     final top = widget.buttonPosition.dy + widget.buttonSize.height + 8;
     final maxHeight = (widget.screenSize.height - top - screenPadding).clamp(120.0, 360.0);
     final theme = Theme.of(context);
-    final surfaceTint = theme.brightness == Brightness.dark
-        ? Colors.black.withValues(alpha: 0.18)
-        : Colors.white.withValues(alpha: 0.2);
+    const surfaceTint = Colors.transparent;
 
     return Material(
       type: MaterialType.transparency,
@@ -337,107 +335,84 @@ class _DesktopServerMenuOverlayState extends State<_DesktopServerMenuOverlay>
                   opacity: _fadeAnimation,
                   child: GestureDetector(
                     onTap: () {},
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(18),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: surfaceTint,
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.14),
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.18),
-                                blurRadius: 24,
-                                offset: const Offset(0, 16),
-                              ),
-                            ],
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                            child: ConstrainedBox(
-                              constraints: BoxConstraints(maxHeight: maxHeight),
-                              child: SingleChildScrollView(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: widget.servers.map((server) {
-                                    final isCurrent = server.id == widget.currentServerId;
-                                    final isHovered = _hoveredServerId == server.id;
-                                    return MouseRegion(
-                                      onEnter: (_) => setState(() => _hoveredServerId = server.id),
-                                      onExit: (_) => setState(() => _hoveredServerId = null),
-                                      cursor: SystemMouseCursors.click,
-                                      child: GestureDetector(
-                                        behavior: HitTestBehavior.opaque,
-                                        onTap: () async {
-                                          await _dismiss();
-                                          widget.onSelect(server);
-                                        },
-                                        child: AnimatedContainer(
-                                          duration: const Duration(milliseconds: 140),
-                                          curve: Curves.easeOut,
-                                          margin: const EdgeInsets.symmetric(vertical: 2),
-                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                          decoration: BoxDecoration(
-                                            color: isCurrent
-                                                ? const Color(0xFF5B8DEF).withValues(alpha: 0.22)
-                                                : isHovered
-                                                    ? Colors.white.withValues(alpha: 0.12)
-                                                    : Colors.transparent,
-                                            borderRadius: BorderRadius.circular(12),
-                                          ),
-                                          child: Row(
-                                            children: [
-                                              Container(
-                                                width: 32,
-                                                height: 32,
-                                                decoration: BoxDecoration(
-                                                  color: const Color(0xFF5B8DEF).withValues(alpha: 0.16),
-                                                  borderRadius: BorderRadius.circular(8),
-                                                ),
-                                                child: server.iconUrl != null
-                                                    ? ClipRRect(
-                                                        borderRadius: BorderRadius.circular(8),
-                                                        child: MediaImage(
-                                                          imageUrl: server.iconUrl,
-                                                          width: 32,
-                                                          height: 32,
-                                                          fit: BoxFit.cover,
-                                                        ),
-                                                      )
-                                                    : Icon(
-                                                        Icons.dns_rounded,
-                                                        size: 16,
-                                                        color: isCurrent
-                                                            ? const Color(0xFFB7D0FF)
-                                                            : const Color(0xFF5B8DEF),
-                                                      ),
-                                              ),
-                                              const SizedBox(width: 12),
-                                              Expanded(
-                                                child: Text(
-                                                  server.name,
-                                                  maxLines: 1,
-                                                  overflow: TextOverflow.ellipsis,
-                                                  style: theme.textTheme.bodyMedium?.copyWith(
-                                                    fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w600,
-                                                    color: isCurrent
-                                                        ? theme.colorScheme.onSurface
-                                                        : theme.colorScheme.onSurface.withValues(alpha: 0.92),
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: surfaceTint,
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(maxHeight: maxHeight),
+                          child: SingleChildScrollView(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: widget.servers.map((server) {
+                                final isCurrent = server.id == widget.currentServerId;
+                                return MouseRegion(
+                                  cursor: SystemMouseCursors.click,
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: () async {
+                                      await _dismiss();
+                                      widget.onSelect(server);
+                                    },
+                                    child: AnimatedContainer(
+                                      duration: const Duration(milliseconds: 140),
+                                      curve: Curves.easeOut,
+                                      margin: const EdgeInsets.symmetric(vertical: 2),
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                      decoration: BoxDecoration(
+                                        color: isCurrent
+                                            ? const Color(0xFF5B8DEF).withValues(alpha: 0.14)
+                                            : Colors.transparent,
+                                        borderRadius: BorderRadius.circular(12),
                                       ),
-                                    );
-                                  }).toList(growable: false),
-                                ),
-                              ),
+                                      child: Row(
+                                        children: [
+                                          Container(
+                                            width: 32,
+                                            height: 32,
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF5B8DEF).withValues(alpha: 0.16),
+                                              borderRadius: BorderRadius.circular(8),
+                                            ),
+                                            child: server.iconUrl != null
+                                                ? ClipRRect(
+                                                    borderRadius: BorderRadius.circular(8),
+                                                    child: MediaImage(
+                                                      imageUrl: server.iconUrl,
+                                                      width: 32,
+                                                      height: 32,
+                                                      fit: BoxFit.cover,
+                                                    ),
+                                                  )
+                                                : Icon(
+                                                    Icons.dns_rounded,
+                                                    size: 16,
+                                                    color: isCurrent
+                                                        ? const Color(0xFFB7D0FF)
+                                                        : const Color(0xFF5B8DEF),
+                                                  ),
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Text(
+                                              server.name,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: theme.textTheme.bodyMedium?.copyWith(
+                                                fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w600,
+                                                color: theme.colorScheme.onSurface.withValues(alpha: 0.92),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }).toList(growable: false),
                             ),
                           ),
                         ),
@@ -589,11 +564,11 @@ class _DesktopCarouselState extends ConsumerState<_DesktopCarousel> {
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: [
-                          Colors.black.withValues(alpha: 0.08),
+                          Colors.black.withValues(alpha: 0.14),
                           Colors.transparent,
-                          Colors.black.withValues(alpha: 0.46),
+                          Colors.black.withValues(alpha: 0.62),
                         ],
-                        stops: const [0.0, 0.42, 1.0],
+                        stops: const [0.0, 0.38, 1.0],
                       ),
                     ),
                   ),
@@ -708,11 +683,9 @@ class _DesktopCarouselState extends ConsumerState<_DesktopCarousel> {
       return;
     }
 
-    if (mounted && generation == _preloadGeneration) {
-      setState(() {
-        _readyImageByItemId[item.id] = candidates.first;
-        _currentItemId ??= item.id;
-      });
+    if (generation == _preloadGeneration) {
+      _readyImageByItemId[item.id] = candidates.first;
+      _currentItemId ??= item.id;
     }
 
     await warmPersistentImageCache(context, candidates);
@@ -799,6 +772,19 @@ class _DesktopCarouselState extends ConsumerState<_DesktopCarousel> {
 class _CarouselInfo extends StatelessWidget {
   final MediaItem item;
 
+  static const List<Shadow> _titleShadows = [
+    Shadow(
+      color: Color(0xB3000000),
+      blurRadius: 20,
+      offset: Offset(0, 8),
+    ),
+    Shadow(
+      color: Color(0x80000000),
+      blurRadius: 4,
+      offset: Offset(0, 2),
+    ),
+  ];
+
   const _CarouselInfo({required this.item});
 
   @override
@@ -814,7 +800,10 @@ class _CarouselInfo extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: theme.textTheme.displaySmall?.copyWith(
             fontWeight: FontWeight.w800,
-            color: Colors.black,
+            color: Colors.white,
+            height: 0.96,
+            letterSpacing: -0.9,
+            shadows: _titleShadows,
           ),
         ),
         const SizedBox(height: 8),
@@ -1159,6 +1148,9 @@ class _LibrariesSection extends ConsumerWidget {
               child: ListView.builder(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 scrollDirection: Axis.horizontal,
+                primary: false,
+                physics: const ClampingScrollPhysics(),
+                cacheExtent: 640,
                 itemCount: libraries.length,
                 itemBuilder: (context, index) {
                   final library = libraries[index];
@@ -1333,6 +1325,9 @@ class _LibraryLatestItems extends ConsumerWidget {
               height: 240,
               child: ListView.builder(
                 scrollDirection: Axis.horizontal,
+                primary: false,
+                physics: const ClampingScrollPhysics(),
+                cacheExtent: 720,
                 itemCount: items.length,
                 itemBuilder: (context, index) {
                   return Padding(

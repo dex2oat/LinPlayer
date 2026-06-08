@@ -193,7 +193,7 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
               subtitle: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(line.url),
+                  Text(isActive ? '当前已启用线路' : '已配置线路'),
                   if (line.remark != null)
                     Text('备注：${line.remark}', style: const TextStyle(fontSize: 12)),
                 ],

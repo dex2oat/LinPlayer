@@ -338,6 +338,17 @@ class VideoPlayerService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 应用超分辨率档位
+  Future<void> applySuperResolutionLevel(String level) async {
+    await _adapter?.applySuperResolutionLevel(level);
+    notifyListeners();
+  }
+
+  /// 获取播放统计信息
+  Future<Map<String, String>> getPlaybackStats() async {
+    return await _adapter?.getPlaybackStats() ?? {};
+  }
+
   /// 设置亮度
   void setBrightness(double brightness) {
     _currentBrightness = brightness.clamp(0.1, 1.0);

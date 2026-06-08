@@ -463,6 +463,9 @@ final subtitlePositionProvider = StateProvider<double>((ref) => 0.5);
 /// 字幕黑色背景Provider
 final subtitleBackgroundProvider = StateProvider<bool>((ref) => false);
 
+/// Anime4K 档位Provider ('off', 'modeA', 'modeB', 'modeC')
+final anime4KLevelProvider = StateProvider<String>((ref) => 'off');
+
 /// ==========================================
 /// 外观设置Providers
 /// ==========================================

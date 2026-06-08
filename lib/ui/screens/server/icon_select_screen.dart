@@ -89,6 +89,8 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> with Single
         .where((icon) => icon.name.toLowerCase().contains(query))
         .toList();
   }
+
+  bool get _isDesktopLayout => MediaQuery.sizeOf(context).width >= 900;
   
   @override
   Widget build(BuildContext context) {
@@ -260,13 +262,25 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> with Single
                 ],
               ),
               const SizedBox(height: 12),
-              ..._libraries.map((lib) => Card(
-                child: ListTile(
-                  title: Text(lib.name),
-                  subtitle: Text(lib.url, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  trailing: Text('${lib.icons.length} 个图标'),
-                ),
-              )),
+              if (_isDesktopLayout)
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: _libraries.map((lib) {
+                    return SizedBox(
+                      width: 240,
+                      child: _LibraryCard(lib: lib),
+                    );
+                  }).toList(),
+                )
+              else
+                ..._libraries.map((lib) => Card(
+                  child: ListTile(
+                    title: Text(lib.name),
+                    subtitle: Text(lib.url, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    trailing: Text('${lib.icons.length} 个图标'),
+                  ),
+                )),
               const SizedBox(height: 8),
               OutlinedButton.icon(
                 onPressed: () => _showAddLibraryDialog(),
@@ -317,11 +331,11 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> with Single
         Expanded(
           child: GridView.builder(
             padding: const EdgeInsets.all(16),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
-              childAspectRatio: 1,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 150,
+              childAspectRatio: 0.86,
+              crossAxisSpacing: 14,
+              mainAxisSpacing: 14,
             ),
             itemCount: filteredIcons.length,
             itemBuilder: (context, index) {
@@ -432,23 +446,40 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> with Single
   }
   
   List<IconItem> _parseIconJson(String jsonText) {
-    final icons = <IconItem>[];
-    
-    // 简单正则解析，提取name和url
-    final nameRegex = RegExp(r'["]name["]\s*:\s*["]([^"]+)["]');
-    final urlRegex = RegExp(r'["]url["]\s*:\s*["](https?://[^"]+)["]');
-    
-    final names = nameRegex.allMatches(jsonText).map((m) => m.group(1)!).toList();
-    final urls = urlRegex.allMatches(jsonText).map((m) => m.group(1)!).toList();
-    
-    for (var i = 0; i < urls.length; i++) {
-      icons.add(IconItem(
-        name: i < names.length ? names[i] : '图标 ${i + 1}',
-        url: urls[i],
-      ));
+    final decoded = jsonDecode(jsonText);
+    final items = <Map<String, dynamic>>[];
+
+    void collect(dynamic value) {
+      if (value is List) {
+        for (final item in value) {
+          collect(item);
+        }
+        return;
+      }
+      if (value is Map) {
+        final map = value.map((key, val) => MapEntry(key.toString(), val));
+        if (map['url'] is String) {
+          items.add(map);
+        }
+        for (final nested in map.values) {
+          collect(nested);
+        }
+      }
     }
-    
-    return icons;
+
+    collect(decoded);
+
+    return items.asMap().entries.map((entry) {
+      final item = entry.value;
+      final iconName = (item['name'] ?? item['title'] ?? item['label'])?.toString().trim();
+      final iconSourceName =
+          (item['sourceName'] ?? item['libraryName'] ?? item['source'])?.toString().trim();
+      return IconItem(
+        name: (iconName != null && iconName.isNotEmpty) ? iconName : '图标 ${entry.key + 1}',
+        url: item['url'].toString(),
+        sourceName: (iconSourceName != null && iconSourceName.isNotEmpty) ? iconSourceName : null,
+      );
+    }).toList();
   }
   
   void _selectIcon(IconItem icon) {
@@ -479,8 +510,9 @@ class IconLibrary {
 class IconItem {
   final String name;
   final String url;
+  final String? sourceName;
   
-  IconItem({required this.name, required this.url});
+  IconItem({required this.name, required this.url, this.sourceName});
 }
 
 class _IconGridItem extends StatelessWidget {
@@ -498,11 +530,11 @@ class _IconGridItem extends StatelessWidget {
           Expanded(
             child: Container(
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: Theme.of(context).dividerColor),
               ),
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(12),
                 child: MediaImage(
                   imageUrl: icon.url,
                   width: 64,
@@ -513,12 +545,71 @@ class _IconGridItem extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 8),
           Text(
             icon.name,
-            maxLines: 1,
+            maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 11),
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+          if (icon.sourceName != null) ...[
+            const SizedBox(height: 2),
+            Text(
+              icon.sourceName!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 10,
+                color: Theme.of(context).textTheme.bodySmall?.color,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _LibraryCard extends StatelessWidget {
+  final IconLibrary lib;
+
+  const _LibraryCard({required this.lib});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: theme.dividerColor.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            lib.name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            lib.url,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall,
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '${lib.icons.length} 个图标',
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.primary,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ],
       ),

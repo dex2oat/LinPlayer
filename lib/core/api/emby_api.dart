@@ -799,6 +799,9 @@ MediaItem _parseMediaItem(Map<String, dynamic> d) {
   final ud = d['UserData'] as Map<String, dynamic>?;
   final int? childCount = d['ChildCount'] as int?;
   final int? recursiveItemCount = d['RecursiveItemCount'] as int?;
+  final people = (d['People'] as List<dynamic>?)
+      ?.map((e) => _parsePersonFromItem(e as Map<String, dynamic>))
+      .toList();
   return MediaItem(
     id: d['Id']?.toString() ?? '',
     name: d['Name'] ?? '',
@@ -837,6 +840,7 @@ MediaItem _parseMediaItem(Map<String, dynamic> d) {
     parentId: d['ParentId']?.toString(),
     childCount: recursiveItemCount ?? childCount,
     recursiveItemCount: recursiveItemCount,
+    people: people,
     canDownload: d['CanDownload'] as bool? ?? d['SupportsSync'] as bool?,
   );
 }
@@ -917,7 +921,8 @@ Person _parsePersonFromItem(Map<String, dynamic> d) {
   return Person(
     id: d['Id']?.toString() ?? '',
     name: d['Name'] ?? '',
-    primaryImageTag: _extractImageTag(d, 'Primary'),
+    primaryImageTag:
+        _extractImageTag(d, 'Primary') ?? d['PrimaryImageTag']?.toString(),
     role: d['Role']?.toString(),
     type: d['Type']?.toString(),
   );
@@ -978,5 +983,6 @@ MediaStream _parseMediaStream(Map<String, dynamic> d) {
     width: d['Width'] as int?,
     height: d['Height'] as int?,
     channels: d['Channels'] as int?,
+    bitRate: d['BitRate'] as int?,
   );
 }
