@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../utils/desktop_smooth_scroll.dart';
 import '../../widgets/desktop_media_card.dart';
 
 /// 桌面端搜索页
@@ -16,6 +17,8 @@ class DesktopSearchScreen extends ConsumerStatefulWidget {
 class _DesktopSearchScreenState extends ConsumerState<DesktopSearchScreen> {
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
+  final ScrollController _resultsScrollController =
+      DesktopSmoothScrollController();
   bool _isAggregateSearch = false;
 
   @override
@@ -28,6 +31,7 @@ class _DesktopSearchScreenState extends ConsumerState<DesktopSearchScreen> {
   void dispose() {
     _searchController.dispose();
     _searchFocusNode.dispose();
+    _resultsScrollController.dispose();
     super.dispose();
   }
 
@@ -203,6 +207,7 @@ class _DesktopSearchScreenState extends ConsumerState<DesktopSearchScreen> {
                         .clamp(2, 8);
 
                     return GridView.builder(
+                      controller: _resultsScrollController,
                       padding: const EdgeInsets.all(24),
                       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                         crossAxisCount: crossAxisCount,

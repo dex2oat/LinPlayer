@@ -4,6 +4,7 @@ import '../core/providers/app_providers.dart';
 import '../core/theme/app_theme.dart';
 import 'routes/desktop_router.dart';
 import 'utils/desktop_shortcuts.dart';
+import 'utils/desktop_smooth_scroll.dart';
 
 const _desktopFontFamily = 'Microsoft YaHei UI';
 const _desktopFontFallback = <String>[
@@ -27,6 +28,7 @@ class LinPlayerDesktopApp extends ConsumerWidget {
       debugShowCheckedModeBanner: false,
       theme: _desktopTheme(AppTheme.lightTheme),
       darkTheme: _desktopTheme(AppTheme.darkTheme),
+      scrollBehavior: const _DesktopAppScrollBehavior(),
       themeMode: switch (themeMode) {
         ThemeModeOption.light => ThemeMode.light,
         ThemeModeOption.dark => ThemeMode.dark,
@@ -141,4 +143,31 @@ TextStyle? _desktopTextStyle(
     fontWeight: fontWeight,
     letterSpacing: letterSpacing,
   );
+}
+
+class _DesktopAppScrollBehavior extends MaterialScrollBehavior {
+  const _DesktopAppScrollBehavior();
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) {
+    return const ClampingScrollPhysics();
+  }
+
+  @override
+  Widget buildScrollbar(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    final controller = details.controller;
+    if (controller is DesktopSmoothScrollController) {
+      return Scrollbar(
+        controller: controller,
+        thumbVisibility: true,
+        interactive: true,
+        child: child,
+      );
+    }
+    return super.buildScrollbar(context, child, details);
+  }
 }

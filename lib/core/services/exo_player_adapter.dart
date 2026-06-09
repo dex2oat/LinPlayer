@@ -99,6 +99,7 @@ class ExoPlayerAdapter implements PlayerAdapter {
     Duration? startPosition,
     bool dolbyVisionFix = false,
     bool useLibass = false,
+    bool hardwareDecoding = true,
     String? preferredSubtitleLanguage,
   }) async {
     _logger.i('ExoPlayer', '开始初始化 - videoUrl=$videoUrl');
@@ -119,6 +120,7 @@ class ExoPlayerAdapter implements PlayerAdapter {
         'dolbyVisionFix': dolbyVisionFix,
         'preferredSubtitleLanguage': preferredSubtitleLanguage,
         'enableAssSupport': useLibass,
+        'hardwareDecoding': hardwareDecoding,
       });
 
       if (result == null) {

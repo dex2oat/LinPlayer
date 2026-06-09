@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../utils/desktop_smooth_scroll.dart';
 import '../../widgets/desktop_media_card.dart';
 
 /// 桌面端收藏页
@@ -16,8 +17,10 @@ class DesktopFavoritesScreen extends ConsumerWidget {
     final theme = Theme.of(context);
 
     return Scaffold(
-      body: CustomScrollView(
-        slivers: [
+      body: DesktopSmoothScrollBuilder(
+        builder: (context, controller) => CustomScrollView(
+          controller: controller,
+          slivers: [
           SliverToBoxAdapter(
             child: Container(
               padding: const EdgeInsets.fromLTRB(24, 18, 24, 10),
@@ -135,7 +138,8 @@ class DesktopFavoritesScreen extends ConsumerWidget {
                 ),
               ),
             ),
-        ],
+          ],
+        ),
       ),
     );
   }

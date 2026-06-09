@@ -110,6 +110,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
     Duration? startPosition,
     bool dolbyVisionFix = false,
     bool useLibass = false,
+    bool hardwareDecoding = true,
     String? preferredSubtitleLanguage,
   }) async {
     _logger.i('MpvAdapter', '开始初始化 media_kit 内核');
@@ -165,6 +166,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
         // 这样字幕会正确显示在视频上，而不是作为单独层
         await np.setProperty('blend-subtitles', 'video');
         await np.setProperty('sub-visibility', 'yes');
+        await np.setProperty('hwdec', hardwareDecoding ? 'auto-safe' : 'no');
         if (_isHttpUrl(videoUrl)) {
           await np.setProperty('cache', 'yes');
           await np.setProperty('cache-pause', 'no');

@@ -235,6 +235,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     final useLibass = coreType == PlayerCoreType.exoPlayer
         ? ref.read(exoLibassProvider)
         : false;
+    final hardwareDecoding = ref.read(hardwareDecodingProvider);
 
     final preferredSubtitleLanguage = ref.read(preferredSubtitleLanguageProvider);
 
@@ -246,6 +247,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       coreType: coreType,
       dolbyVisionFix: dolbyVisionFix,
       useLibass: useLibass,
+      hardwareDecoding: hardwareDecoding,
       preferredSubtitleLanguage: preferredSubtitleLanguage,
       onStart: (info) async {
         try {

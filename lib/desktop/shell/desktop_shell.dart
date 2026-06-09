@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/providers/app_providers.dart';
+import '../utils/desktop_smooth_scroll.dart';
 
 /// 桌面端侧边栏宽度
 const double _kSidebarWidth = 220;
@@ -40,6 +41,13 @@ class DesktopShell extends ConsumerStatefulWidget {
 class _DesktopShellState extends ConsumerState<DesktopShell> {
   bool _isSidebarCollapsed = false;
   bool _hasAttemptedRestore = false;
+  final ScrollController _navScrollController = DesktopSmoothScrollController();
+
+  @override
+  void dispose() {
+    _navScrollController.dispose();
+    super.dispose();
+  }
   
   @override
   Widget build(BuildContext context) {
@@ -82,6 +90,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
                   // 导航项
                   Expanded(
                     child: ListView.builder(
+                      controller: _navScrollController,
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       itemCount: _navItems.length,
                       itemBuilder: (context, index) {

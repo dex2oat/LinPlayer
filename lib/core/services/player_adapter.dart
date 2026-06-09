@@ -58,6 +58,7 @@ abstract class PlayerAdapter {
     Duration? startPosition,
     bool dolbyVisionFix = false,
     bool useLibass = false,
+    bool hardwareDecoding = true,
     String? preferredSubtitleLanguage,
   });
 

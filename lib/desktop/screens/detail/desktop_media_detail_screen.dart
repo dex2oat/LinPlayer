@@ -15,6 +15,7 @@ import '../../../core/utils/color_extractor.dart';
 
 import '../../../ui/utils/media_helpers.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
+import '../../utils/desktop_smooth_scroll.dart';
 import '../../widgets/desktop_media_card.dart';
 
 /// 桌面端媒体详情页（剧/电影通用）
@@ -61,7 +62,7 @@ class _DetailContentState extends ConsumerState<_DetailContent> {
   Color? _extractedBackgroundColor;
   Brightness? _lastBrightness;
 
-  final ScrollController _scrollController = ScrollController();
+  final ScrollController _scrollController = DesktopSmoothScrollController();
 
   @override
   void initState() {
@@ -225,7 +226,6 @@ class _DetailContentState extends ConsumerState<_DetailContent> {
             autofocus: true,
             child: CustomScrollView(
               controller: _scrollController,
-              physics: const BouncingScrollPhysics(),
               slivers: [
                 // Hero 区域
                 SliverToBoxAdapter(
@@ -2035,17 +2035,20 @@ class _MenuSurface extends StatelessWidget {
             ),
             child: ConstrainedBox(
               constraints: BoxConstraints(maxHeight: maxHeight),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: items.map((item) {
-                    return _FocusableMenuItem(
-                      icon: item.icon,
-                      label: item.label,
-                      onTap: item.onTap,
-                      primaryColor: primaryColor,
-                    );
-                  }).toList(),
+              child: DesktopSmoothScrollBuilder(
+                builder: (context, controller) => SingleChildScrollView(
+                  controller: controller,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: items.map((item) {
+                      return _FocusableMenuItem(
+                        icon: item.icon,
+                        label: item.label,
+                        onTap: item.onTap,
+                        primaryColor: primaryColor,
+                      );
+                    }).toList(),
+                  ),
                 ),
               ),
             ),

@@ -5,6 +5,7 @@ import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
 import '../../../core/api/emby_api.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
+import '../../utils/desktop_smooth_scroll.dart';
 
 enum _ServerContextAction { rename, lines, icon, login }
 
@@ -25,8 +26,10 @@ class _DesktopServerScreenState extends ConsumerState<DesktopServerScreen> {
     final currentServer = ref.watch(currentServerProvider);
     
     return Scaffold(
-      body: CustomScrollView(
-        slivers: [
+      body: DesktopSmoothScrollBuilder(
+        builder: (context, controller) => CustomScrollView(
+          controller: controller,
+          slivers: [
           // 顶部栏
           SliverToBoxAdapter(
             child: Container(
@@ -145,7 +148,8 @@ class _DesktopServerScreenState extends ConsumerState<DesktopServerScreen> {
                 ),
               ),
             ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -130,6 +130,7 @@ class VideoPlayerService extends ChangeNotifier {
     Function(PlaybackStopInfo)? onStop,
     bool? dolbyVisionFix,
     bool? useLibass,
+    bool? hardwareDecoding,
     String? preferredSubtitleLanguage,
   }) async {
     _currentItemId = itemId;
@@ -179,6 +180,7 @@ class VideoPlayerService extends ChangeNotifier {
       startPosition: startPosition,
       dolbyVisionFix: dolbyVisionFix ?? false,
       useLibass: useLibass ?? false,
+      hardwareDecoding: hardwareDecoding ?? true,
       preferredSubtitleLanguage: preferredSubtitleLanguage,
     );
 

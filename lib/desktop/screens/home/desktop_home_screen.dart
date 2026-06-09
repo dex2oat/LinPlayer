@@ -9,6 +9,7 @@ import '../../../ui/widgets/common/media_widgets.dart';
 import '../../widgets/desktop_cover_radii.dart';
 import '../../widgets/desktop_media_card.dart';
 import '../../widgets/desktop_section_header.dart';
+import '../../utils/desktop_smooth_scroll.dart';
 
 /// 桌面端首页 - 宽屏布局
 class DesktopHomeScreen extends ConsumerStatefulWidget {
@@ -19,7 +20,7 @@ class DesktopHomeScreen extends ConsumerStatefulWidget {
 }
 
 class _DesktopHomeScreenState extends ConsumerState<DesktopHomeScreen> {
-  final ScrollController _scrollController = ScrollController();
+  final ScrollController _scrollController = DesktopSmoothScrollController();
 
   @override
   void dispose() {

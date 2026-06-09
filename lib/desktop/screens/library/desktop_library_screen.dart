@@ -7,6 +7,7 @@ import '../../../core/providers/media_providers.dart';
 import '../../../ui/utils/media_helpers.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
 import '../../widgets/desktop_cover_radii.dart';
+import '../../utils/desktop_smooth_scroll.dart';
 
 enum _DesktopLibraryViewMode { grid, list }
 
@@ -29,8 +30,10 @@ class _DesktopLibraryScreenState extends ConsumerState<DesktopLibraryScreen> {
     final theme = Theme.of(context);
     
     return Scaffold(
-      body: CustomScrollView(
-        slivers: [
+      body: DesktopSmoothScrollBuilder(
+        builder: (context, controller) => CustomScrollView(
+          controller: controller,
+          slivers: [
           // 顶部栏
           SliverToBoxAdapter(
             child: Container(
@@ -126,7 +129,8 @@ class _DesktopLibraryScreenState extends ConsumerState<DesktopLibraryScreen> {
               ),
             ),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }

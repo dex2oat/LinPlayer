@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../utils/desktop_smooth_scroll.dart';
 import '../../widgets/desktop_media_card.dart';
 
 /// Desktop library detail page.
@@ -20,7 +21,7 @@ class _DesktopLibraryDetailScreenState
     extends ConsumerState<DesktopLibraryDetailScreen> {
   String _sortBy = '加入日期';
   final String _sortOrder = '降序';
-  final ScrollController _scrollController = ScrollController();
+  final ScrollController _scrollController = DesktopSmoothScrollController();
   bool _isGridMode = true;
 
   @override

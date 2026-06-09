@@ -1,13 +1,17 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
 import '../../../core/services/video_player_service.dart';
+import '../../utils/desktop_smooth_scroll.dart';
 
 /// 桌面端播放器 - 全新设计
 ///
@@ -31,6 +35,8 @@ class DesktopPlayerScreen extends ConsumerStatefulWidget {
 }
 
 class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
+  static const MethodChannel _windowChannel = MethodChannel('com.linplayer/window');
+
   late VideoPlayerService _playerService;
   final FocusNode _focusNode = FocusNode();
   bool _initializingPlayer = false;
@@ -45,6 +51,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
 
   // 倍速按钮长按状态
   bool _isSpeedLongPressing = false;
+  bool _didTriggerSpeedLongPress = false;
   Timer? _speedLongPressTimer;
 
   // 跳过片头按钮
@@ -70,6 +77,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     _playerService.addListener(_onPlayerUpdate);
     _initializePlayer();
     _focusNode.requestFocus();
+    unawaited(_syncFullscreenState());
   }
 
   void _onPlayerUpdate() {
@@ -142,6 +150,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
 
       final dolbyVisionFix = coreType == PlayerCoreType.mpv ? ref.read(mpvDolbyVisionFixProvider) : false;
       final useLibass = coreType == PlayerCoreType.exoPlayer ? ref.read(exoLibassProvider) : false;
+      final hardwareDecoding = ref.read(hardwareDecodingProvider);
       final preferredSubtitleLanguage = ref.read(preferredSubtitleLanguageProvider);
 
       await _playerService.initialize(
@@ -152,6 +161,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
         coreType: coreType,
         dolbyVisionFix: dolbyVisionFix,
         useLibass: useLibass,
+        hardwareDecoding: hardwareDecoding,
         preferredSubtitleLanguage: preferredSubtitleLanguage,
         onStart: (info) async {
           try { await api.playback.reportPlaybackStart(info); } catch (_) {}
@@ -252,6 +262,13 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   void _handleKeyEvent(KeyEvent event) {
     if (event is! KeyDownEvent) return;
     switch (event.logicalKey) {
+      case LogicalKeyboardKey.escape:
+        if (_isFullscreen) {
+          _toggleFullscreen();
+        } else if (context.canPop()) {
+          context.pop();
+        }
+        break;
       case LogicalKeyboardKey.space:
       case LogicalKeyboardKey.keyK:
         _playerService.togglePlay();
@@ -333,9 +350,47 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     }
   }
 
-  void _toggleFullscreen() {
-    setState(() => _isFullscreen = !_isFullscreen);
-    // TODO: 使用 window_manager 实现真正的窗口全屏
+  Future<void> _syncFullscreenState() async {
+    if (!Platform.isWindows) return;
+    try {
+      final isFullscreen = await _windowChannel.invokeMethod<bool>('isFullscreen');
+      if (mounted && isFullscreen != null) {
+        setState(() => _isFullscreen = isFullscreen);
+      }
+    } on MissingPluginException {
+      // Ignore on platforms without desktop window integration.
+    } on PlatformException {
+      // Ignore and keep the local fallback state.
+    }
+  }
+
+  void _toggleFullscreen() async {
+    final target = !_isFullscreen;
+    var fullscreen = target;
+
+    try {
+      if (Platform.isWindows) {
+        fullscreen = await _windowChannel.invokeMethod<bool>(
+              'setFullscreen',
+              {'fullscreen': target},
+            ) ??
+            target;
+      } else {
+        await SystemChrome.setEnabledSystemUIMode(
+          target ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge,
+        );
+      }
+    } on MissingPluginException {
+      fullscreen = target;
+    } on PlatformException {
+      fullscreen = target;
+    }
+
+    if (!mounted) return;
+    setState(() => _isFullscreen = fullscreen);
+    if (_showControls && _playerService.isPlaying) {
+      _startHideControlsTimer();
+    }
   }
 
   void _toggleControlsVisibility() {
@@ -374,13 +429,52 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
 
   // ========== 截图 ==========
 
+  String _sanitizeFileName(String value) {
+    return value
+        .replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  String _buildScreenshotFileName(String itemName, DateTime timestamp) {
+    final sanitizedName = _sanitizeFileName(itemName);
+    final padded = [
+      timestamp.year.toString().padLeft(4, '0'),
+      timestamp.month.toString().padLeft(2, '0'),
+      timestamp.day.toString().padLeft(2, '0'),
+      timestamp.hour.toString().padLeft(2, '0'),
+      timestamp.minute.toString().padLeft(2, '0'),
+      timestamp.second.toString().padLeft(2, '0'),
+    ].join('');
+    return '${sanitizedName.isEmpty ? widget.itemId : sanitizedName}_$padded.png';
+  }
+
   Future<void> _takeScreenshot() async {
     try {
       final data = await _playerService.screenshot();
       if (!mounted) return;
-      if (data != null) {
+
+      if (data != null && data.isNotEmpty) {
+        final baseDirectory =
+            await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+        final screenshotsDirectory =
+            Directory(p.join(baseDirectory.path, 'LinPlayer', 'Screenshots'));
+        if (!await screenshotsDirectory.exists()) {
+          await screenshotsDirectory.create(recursive: true);
+        }
+
+        final itemName = ref.read(currentPlayingItemProvider)?.name ?? widget.itemId;
+        final file = File(
+          p.join(
+            screenshotsDirectory.path,
+            _buildScreenshotFileName(itemName, DateTime.now()),
+          ),
+        );
+        await file.writeAsBytes(data, flush: true);
+
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('截图已保存')),
+          SnackBar(content: Text('截图已保存到 ${file.path}')),
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -414,12 +508,18 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   // ========== 倍速长按 ==========
 
   void _onSpeedButtonDown(bool increase) {
-    _adjustSpeed(increase ? 0.25 : -0.25);
     _isSpeedLongPressing = true;
-    _speedLongPressTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
-      if (_isSpeedLongPressing) {
-        _adjustSpeed(increase ? 0.05 : -0.05);
-      }
+    _didTriggerSpeedLongPress = false;
+    _speedLongPressTimer?.cancel();
+    _speedLongPressTimer = Timer(const Duration(milliseconds: 320), () {
+      if (!_isSpeedLongPressing) return;
+      _didTriggerSpeedLongPress = true;
+      _adjustSpeed(increase ? 0.05 : -0.05);
+      _speedLongPressTimer = Timer.periodic(const Duration(milliseconds: 120), (_) {
+        if (_isSpeedLongPressing) {
+          _adjustSpeed(increase ? 0.05 : -0.05);
+        }
+      });
     });
   }
 
@@ -429,19 +529,39 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     _speedLongPressTimer = null;
   }
 
+  void _onSpeedButtonCancel() {
+    _onSpeedButtonUp();
+    _didTriggerSpeedLongPress = false;
+  }
+
+  void _handleSpeedButtonTap(bool increase) {
+    if (_didTriggerSpeedLongPress) {
+      _didTriggerSpeedLongPress = false;
+      return;
+    }
+    _adjustSpeed(increase ? 0.25 : -0.25);
+  }
+
   // ========== 上一集/下一集 ==========
 
   Future<void> _playPrevious() async {
     final currentItem = ref.read(currentPlayingItemProvider);
     if (currentItem?.seriesId == null) return;
     try {
+      final currentMediaSourceId = ref.read(selectedMediaSourceProvider);
       final episodes = await ref.read(apiClientProvider).media.getEpisodes(
         currentItem!.seriesId!,
         seasonId: currentItem.seasonId,
       );
       final currentIndex = episodes.indexWhere((e) => e.id == currentItem.id);
       if (currentIndex > 0) {
-        if (mounted) context.replace('/player/${episodes[currentIndex - 1].id}');
+        if (mounted) {
+          final previousEpisode = episodes[currentIndex - 1];
+          context.replace(
+            '/player/${previousEpisode.id}'
+            '${currentMediaSourceId != null ? '?mediaSourceId=$currentMediaSourceId' : ''}',
+          );
+        }
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -462,13 +582,20 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     final currentItem = ref.read(currentPlayingItemProvider);
     if (currentItem?.seriesId == null) return;
     try {
+      final currentMediaSourceId = ref.read(selectedMediaSourceProvider);
       final episodes = await ref.read(apiClientProvider).media.getEpisodes(
         currentItem!.seriesId!,
         seasonId: currentItem.seasonId,
       );
       final currentIndex = episodes.indexWhere((e) => e.id == currentItem.id);
       if (currentIndex >= 0 && currentIndex < episodes.length - 1) {
-        if (mounted) context.replace('/player/${episodes[currentIndex + 1].id}');
+        if (mounted) {
+          final nextEpisode = episodes[currentIndex + 1];
+          context.replace(
+            '/player/${nextEpisode.id}'
+            '${currentMediaSourceId != null ? '?mediaSourceId=$currentMediaSourceId' : ''}',
+          );
+        }
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -516,6 +643,11 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   // ========== 更多菜单 ==========
 
   void _showMoreMenu() {
+    final item = ref.read(currentPlayingItemProvider);
+    final isMpv = normalizePlayerCore(ref.read(playerCoreProvider)) == 'mpv';
+    final anime4KLevel = ref.read(anime4KLevelProvider);
+    final hardwareDecoding = ref.read(hardwareDecodingProvider);
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.black87,
@@ -525,7 +657,18 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
       ),
       builder: (context) => _MoreMenuSheet(
         onShowAspectRatio: _showAspectRatioDialog,
+        onTakeScreenshot: _takeScreenshot,
+        onShowSubtitleSelector: _showSubtitleSelector,
+        onShowAudioSelector: _showAudioSelector,
+        onShowEpisodeSelector: item?.seriesId != null ? _showEpisodeSelector : null,
+        onToggleHardwareDecoding: _toggleHardwareDecoding,
         onToggleStats: _toggleStatsOverlay,
+        onToggleFullscreen: _toggleFullscreen,
+        onShowAnime4K: isMpv ? _showAnime4KMenu : null,
+        isStatsVisible: _showStatsOverlay,
+        isFullscreen: _isFullscreen,
+        hardwareDecodingEnabled: hardwareDecoding,
+        anime4KLabel: isMpv ? anime4KLevel : null,
       ),
     );
   }
@@ -593,6 +736,12 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   void _showSubtitleSelector() {
     final tracks = _playerService.tracksInfo;
     final subtitleTracks = tracks.where((t) => t['type'] == 'subtitle').toList();
+    if (subtitleTracks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前没有可切换的字幕轨道')),
+      );
+      return;
+    }
     _showTrackSelectorDialog('字幕选择', subtitleTracks, (trackId) {
       _playerService.selectSubtitleTrack(trackId);
     }, canDisable: true);
@@ -601,6 +750,12 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   void _showAudioSelector() {
     final tracks = _playerService.tracksInfo;
     final audioTracks = tracks.where((t) => t['type'] == 'audio').toList();
+    if (audioTracks.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前没有可切换的音轨')),
+      );
+      return;
+    }
     _showTrackSelectorDialog('音轨选择', audioTracks, (trackId) {
       _playerService.selectAudioTrack(trackId);
     });
@@ -638,35 +793,44 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
               ),
               const Divider(color: Colors.white12, height: 1),
               Flexible(
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: canDisable ? tracks.length + 1 : tracks.length,
-                  itemBuilder: (context, index) {
-                    if (canDisable && index == 0) {
-                      final isSelected = tracks.every((t) => t['selected'] != true);
+                child: DesktopSmoothScrollBuilder(
+                  builder: (context, controller) => ListView.builder(
+                    controller: controller,
+                    shrinkWrap: true,
+                    itemCount: canDisable ? tracks.length + 1 : tracks.length,
+                    itemBuilder: (context, index) {
+                      if (canDisable && index == 0) {
+                        final isSelected = tracks.every((t) => t['selected'] != true);
+                        return ListTile(
+                          title: const Text('关闭字幕', style: TextStyle(color: Colors.white)),
+                          trailing: isSelected
+                              ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
+                              : null,
+                          onTap: () {
+                            _playerService.deselectSubtitleTrack();
+                            Navigator.pop(context);
+                          },
+                        );
+                      }
+                      final trackIndex = canDisable ? index - 1 : index;
+                      final track = tracks[trackIndex];
+                      final isSelected = track['selected'] == true;
+                      final label = track['title']?.toString() ??
+                          track['language']?.toString() ??
+                          '轨道 ${trackIndex + 1}';
                       return ListTile(
-                        title: const Text('关闭字幕', style: TextStyle(color: Colors.white)),
-                        trailing: isSelected ? const Icon(Icons.check, color: Color(0xFF5B8DEF)) : null,
+                        title: Text(label, style: const TextStyle(color: Colors.white)),
+                        trailing: isSelected
+                            ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
+                            : null,
                         onTap: () {
-                          _playerService.deselectSubtitleTrack();
+                          final trackId = track['id']?.toString();
+                          if (trackId != null) onSelect(trackId);
                           Navigator.pop(context);
                         },
                       );
-                    }
-                    final trackIndex = canDisable ? index - 1 : index;
-                    final track = tracks[trackIndex];
-                    final isSelected = track['selected'] == true;
-                    final label = track['title']?.toString() ?? track['language']?.toString() ?? '轨道 ${trackIndex + 1}';
-                    return ListTile(
-                      title: Text(label, style: const TextStyle(color: Colors.white)),
-                      trailing: isSelected ? const Icon(Icons.check, color: Color(0xFF5B8DEF)) : null,
-                      onTap: () {
-                        final trackId = track['id']?.toString();
-                        if (trackId != null) onSelect(trackId);
-                        Navigator.pop(context);
-                      },
-                    );
-                  },
+                    },
+                  ),
                 ),
               ),
             ],
@@ -1079,15 +1243,13 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  GestureDetector(
+                  _buildIconButton(
+                    icon: Icons.add,
+                    tooltip: '加速',
+                    onPressed: () => _handleSpeedButtonTap(true),
                     onTapDown: (_) => _onSpeedButtonDown(true),
                     onTapUp: (_) => _onSpeedButtonUp(),
-                    onTapCancel: _onSpeedButtonUp,
-                    child: _buildIconButton(
-                      icon: Icons.add,
-                      tooltip: '加速',
-                      onPressed: () {},
-                    ),
+                    onTapCancel: _onSpeedButtonCancel,
                   ),
                   const SizedBox(height: 8),
                   Text(
@@ -1099,15 +1261,13 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  GestureDetector(
+                  _buildIconButton(
+                    icon: Icons.remove,
+                    tooltip: '减速',
+                    onPressed: () => _handleSpeedButtonTap(false),
                     onTapDown: (_) => _onSpeedButtonDown(false),
                     onTapUp: (_) => _onSpeedButtonUp(),
-                    onTapCancel: _onSpeedButtonUp,
-                    child: _buildIconButton(
-                      icon: Icons.remove,
-                      tooltip: '减速',
-                      onPressed: () {},
-                    ),
+                    onTapCancel: _onSpeedButtonCancel,
                   ),
                 ],
               ),
@@ -1382,15 +1542,27 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
           onPressed: _showAudioSelector,
         ),
         _buildIconButton(
+          icon: Icons.camera_alt_outlined,
+          tooltip: '截图',
+          onPressed: _takeScreenshot,
+        ),
+        _buildIconButton(
+          icon: Icons.analytics_outlined,
+          tooltip: _showStatsOverlay ? '关闭统计信息' : '显示统计信息',
+          color: _showStatsOverlay ? const Color(0xFF5B8DEF) : Colors.white,
+          onPressed: _toggleStatsOverlay,
+        ),
+        _buildIconButton(
           icon: _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
           tooltip: '全屏 (F)',
           onPressed: _toggleFullscreen,
         ),
-        _buildIconButton(
-          icon: Icons.playlist_play,
-          tooltip: '选集',
-          onPressed: _showEpisodeSelector,
-        ),
+        if (item?.seriesId != null)
+          _buildIconButton(
+            icon: Icons.playlist_play,
+            tooltip: '选集',
+            onPressed: _showEpisodeSelector,
+          ),
       ],
     );
   }
@@ -1402,6 +1574,9 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     required String tooltip,
     required VoidCallback onPressed,
     Color? color,
+    GestureTapDownCallback? onTapDown,
+    GestureTapUpCallback? onTapUp,
+    GestureTapCancelCallback? onTapCancel,
   }) {
     return Tooltip(
       message: tooltip,
@@ -1409,6 +1584,9 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
         color: Colors.transparent,
         child: InkWell(
           onTap: onPressed,
+          onTapDown: onTapDown,
+          onTapUp: onTapUp,
+          onTapCancel: onTapCancel,
           borderRadius: BorderRadius.circular(20),
           child: Container(
             padding: const EdgeInsets.all(8),
@@ -1476,14 +1654,20 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
 
   void _toggleHardwareDecoding() async {
     final current = ref.read(hardwareDecodingProvider);
-    ref.read(hardwareDecodingProvider.notifier).state = !current;
     final savedPosition = _playerService.position;
+    final wasPlaying = _playerService.isPlaying;
+
+    ref.read(hardwareDecodingProvider.notifier).state = !current;
+    _playerService.removeListener(_onPlayerUpdate);
     await _playerService.dispose();
     _playerService = VideoPlayerService();
     _playerService.addListener(_onPlayerUpdate);
     await _initializePlayer();
     if (savedPosition > Duration.zero) {
       await _playerService.seekTo(savedPosition);
+    }
+    if (!wasPlaying) {
+      await _playerService.pause();
     }
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1621,34 +1805,117 @@ class _Anime4KLevelDialog extends StatelessWidget {
 
 class _MoreMenuSheet extends StatelessWidget {
   final VoidCallback onShowAspectRatio;
+  final VoidCallback onTakeScreenshot;
+  final VoidCallback onShowSubtitleSelector;
+  final VoidCallback onShowAudioSelector;
+  final VoidCallback? onShowEpisodeSelector;
+  final VoidCallback onToggleHardwareDecoding;
   final VoidCallback onToggleStats;
+  final VoidCallback onToggleFullscreen;
+  final VoidCallback? onShowAnime4K;
+  final bool isStatsVisible;
+  final bool isFullscreen;
+  final bool hardwareDecodingEnabled;
+  final String? anime4KLabel;
 
   const _MoreMenuSheet({
     required this.onShowAspectRatio,
+    required this.onTakeScreenshot,
+    required this.onShowSubtitleSelector,
+    required this.onShowAudioSelector,
+    required this.onShowEpisodeSelector,
+    required this.onToggleHardwareDecoding,
     required this.onToggleStats,
+    required this.onToggleFullscreen,
+    required this.onShowAnime4K,
+    required this.isStatsVisible,
+    required this.isFullscreen,
+    required this.hardwareDecodingEnabled,
+    required this.anime4KLabel,
   });
 
   @override
   Widget build(BuildContext context) {
+    void handleAction(VoidCallback action) {
+      Navigator.pop(context);
+      action();
+    }
+
     return SafeArea(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           ListTile(
+            leading: const Icon(Icons.camera_alt_outlined, color: Colors.white),
+            title: const Text('截图', style: TextStyle(color: Colors.white)),
+            onTap: () => handleAction(onTakeScreenshot),
+          ),
+          ListTile(
+            leading: const Icon(Icons.subtitles, color: Colors.white),
+            title: const Text('字幕选择', style: TextStyle(color: Colors.white)),
+            onTap: () => handleAction(onShowSubtitleSelector),
+          ),
+          ListTile(
+            leading: const Icon(Icons.audiotrack, color: Colors.white),
+            title: const Text('音轨选择', style: TextStyle(color: Colors.white)),
+            onTap: () => handleAction(onShowAudioSelector),
+          ),
+          if (onShowEpisodeSelector != null)
+            ListTile(
+              leading: const Icon(Icons.playlist_play, color: Colors.white),
+              title: const Text('选集', style: TextStyle(color: Colors.white)),
+              onTap: () => handleAction(onShowEpisodeSelector!),
+            ),
+          ListTile(
             leading: const Icon(Icons.aspect_ratio, color: Colors.white),
             title: const Text('画面比例', style: TextStyle(color: Colors.white)),
             onTap: () {
-              Navigator.pop(context);
-              onShowAspectRatio();
+              handleAction(onShowAspectRatio);
             },
           ),
           ListTile(
+            leading: Icon(
+              hardwareDecodingEnabled ? Icons.memory : Icons.slow_motion_video,
+              color: Colors.white,
+            ),
+            title: const Text('硬件解码', style: TextStyle(color: Colors.white)),
+            subtitle: Text(
+              hardwareDecodingEnabled ? '当前已开启' : '当前已关闭',
+              style: const TextStyle(color: Colors.white54),
+            ),
+            onTap: () => handleAction(onToggleHardwareDecoding),
+          ),
+          if (onShowAnime4K != null)
+            ListTile(
+              leading: const Icon(Icons.hd, color: Colors.white),
+              title: const Text('Anime4K 超分', style: TextStyle(color: Colors.white)),
+              subtitle: Text(
+                anime4KLabel == null || anime4KLabel == 'off'
+                    ? '当前已关闭'
+                    : '当前模式: $anime4KLabel',
+                style: const TextStyle(color: Colors.white54),
+              ),
+              onTap: () => handleAction(onShowAnime4K!),
+            ),
+          ListTile(
             leading: const Icon(Icons.analytics, color: Colors.white),
             title: const Text('统计信息', style: TextStyle(color: Colors.white)),
-            onTap: () {
-              Navigator.pop(context);
-              onToggleStats();
-            },
+            subtitle: Text(
+              isStatsVisible ? '当前显示中' : '当前已隐藏',
+              style: const TextStyle(color: Colors.white54),
+            ),
+            onTap: () => handleAction(onToggleStats),
+          ),
+          ListTile(
+            leading: Icon(
+              isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+              color: Colors.white,
+            ),
+            title: Text(
+              isFullscreen ? '退出全屏' : '进入全屏',
+              style: const TextStyle(color: Colors.white),
+            ),
+            onTap: () => handleAction(onToggleFullscreen),
           ),
         ],
       ),
@@ -1693,33 +1960,41 @@ class _EpisodeSelectorDialog extends ConsumerWidget {
             ),
             const Divider(color: Colors.white12, height: 1),
             Flexible(
-              child: episodesAsync.when(
-                data: (episodes) => ListView.builder(
-                  itemCount: episodes.length,
-                  itemBuilder: (context, index) {
-                    final episode = episodes[index];
-                    final isCurrent = episode.id == currentEpisodeId;
-                    return ListTile(
-                      title: Text(
-                        '第 ${episode.indexNumber ?? index + 1} 集: ${episode.name}',
-                        style: TextStyle(
-                          color: isCurrent ? const Color(0xFF5B8DEF) : Colors.white,
-                          fontWeight: isCurrent ? FontWeight.w600 : FontWeight.normal,
+              child: DesktopSmoothScrollBuilder(
+                builder: (context, controller) => episodesAsync.when(
+                  data: (episodes) => ListView.builder(
+                    controller: controller,
+                    itemCount: episodes.length,
+                    itemBuilder: (context, index) {
+                      final episode = episodes[index];
+                      final isCurrent = episode.id == currentEpisodeId;
+                      return ListTile(
+                        title: Text(
+                          '第 ${episode.indexNumber ?? index + 1} 集: ${episode.name}',
+                          style: TextStyle(
+                            color: isCurrent ? const Color(0xFF5B8DEF) : Colors.white,
+                            fontWeight: isCurrent ? FontWeight.w600 : FontWeight.normal,
+                          ),
                         ),
-                      ),
-                      trailing: isCurrent ? const Icon(Icons.play_arrow, color: Color(0xFF5B8DEF)) : null,
-                      onTap: () {
-                        if (!isCurrent) {
-                          context.replace('/player/${episode.id}${currentMediaSourceId != null ? '?mediaSourceId=$currentMediaSourceId' : ''}');
-                        }
-                        Navigator.pop(context);
-                      },
-                    );
-                  },
-                ),
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (error, _) => Center(
-                  child: Text('加载失败: $error', style: const TextStyle(color: Colors.white)),
+                        trailing: isCurrent
+                            ? const Icon(Icons.play_arrow, color: Color(0xFF5B8DEF))
+                            : null,
+                        onTap: () {
+                          if (!isCurrent) {
+                            context.replace(
+                              '/player/${episode.id}'
+                              '${currentMediaSourceId != null ? '?mediaSourceId=$currentMediaSourceId' : ''}',
+                            );
+                          }
+                          Navigator.pop(context);
+                        },
+                      );
+                    },
+                  ),
+                  loading: () => const Center(child: CircularProgressIndicator()),
+                  error: (error, _) => Center(
+                    child: Text('加载失败: $error', style: const TextStyle(color: Colors.white)),
+                  ),
                 ),
               ),
             ),
