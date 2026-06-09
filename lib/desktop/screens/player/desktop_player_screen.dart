@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:dio/dio.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -70,6 +71,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   bool _showStatsOverlay = false;
   Map<String, String> _playbackStats = {};
   Timer? _statsRefreshTimer;
+  MediaSource? _currentMediaSource;
+  String? _displayTitle;
 
   @override
   void initState() {
@@ -79,6 +82,54 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     _initializePlayer();
     _focusNode.requestFocus();
     unawaited(_syncFullscreenState());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.listenManual(audioTrackProvider, (prev, next) {
+        if (_initializingPlayer || prev == next || next == null) {
+          return;
+        }
+        final audioStreams = _audioStreamsFromCurrentSource();
+        if (audioStreams.isEmpty) {
+          return;
+        }
+        unawaited(_applyAudioStreamSelection(audioStreams, next));
+      });
+      ref.listenManual(subtitleTrackProvider, (prev, next) {
+        if (_initializingPlayer || prev == next) {
+          return;
+        }
+        unawaited(_onSubtitleSelectionChanged(prev, next));
+      });
+      ref.listenManual(subtitleDelayProvider, (prev, next) {
+        if (prev != next) {
+          unawaited(_playerService.setSubtitleDelay(next));
+        }
+      });
+      ref.listenManual(audioDelayProvider, (prev, next) {
+        if (prev != next) {
+          unawaited(_playerService.setAudioDelay(next));
+        }
+      });
+      ref.listenManual(subtitleSizeProvider, (prev, next) {
+        if (prev != next) {
+          unawaited(_playerService.setSubtitleSize(next));
+        }
+      });
+      ref.listenManual(subtitlePositionProvider, (prev, next) {
+        if (prev != next) {
+          unawaited(_playerService.setSubtitlePosition(next));
+        }
+      });
+      ref.listenManual(subtitleFontProvider, (prev, next) {
+        if (prev != next) {
+          unawaited(_playerService.setSubtitleFont(next));
+        }
+      });
+      ref.listenManual(subtitleBackgroundProvider, (prev, next) {
+        if (prev != next) {
+          unawaited(_playerService.setSubtitleBackground(next));
+        }
+      });
+    });
   }
 
   void _onPlayerUpdate() {
@@ -123,7 +174,10 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     _autoPlayAttempted = false;
     final api = ref.read(apiClientProvider);
     try {
-      final item = await api.media.getItemDetails(widget.itemId);
+      final cachedItem = ref.read(currentPlayingItemProvider);
+      final item = cachedItem != null && cachedItem.id == widget.itemId
+          ? cachedItem
+          : await api.media.getItemDetails(widget.itemId);
 
       final playbackInfo = await api.playback.getPlaybackInfo(widget.itemId);
       final selection = buildPlaybackSelection(
@@ -178,6 +232,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
 
       ref.read(currentPlayingItemProvider.notifier).state = item;
       ref.read(selectedMediaSourceProvider.notifier).state = mediaSource?.id;
+      _currentMediaSource = mediaSource;
+      _displayTitle = item.name;
 
       final coreString = normalizePlayerCore(ref.read(playerCoreProvider));
       final coreType = coreString == 'mpv' ? PlayerCoreType.mpv : PlayerCoreType.exoPlayer;
@@ -220,14 +276,30 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
       _playerService.setAspectRatio(ref.read(aspectRatioProvider));
 
       final audioStreams = mediaSource?.mediaStreams.where((s) => s.isAudio).toList() ?? [];
+      final subtitleStreams = mediaSource?.mediaStreams.where((s) => s.isSubtitle).toList() ?? [];
+      await _waitForTracksReady(
+        requireAudio: audioStreams.isNotEmpty,
+        requireSubtitle: subtitleStreams.isNotEmpty,
+      );
+
       final selectedAudioIndex = ref.read(audioTrackProvider);
-      if (selectedAudioIndex != null) {
-        await _applyInitialAudioTrack(audioStreams, selectedAudioIndex);
+      if (audioStreams.isNotEmpty) {
+        final initialAudio = selectedAudioIndex ?? _resolveInitialAudioIndex(audioStreams);
+        if (initialAudio != null) {
+          ref.read(audioTrackProvider.notifier).state = initialAudio;
+          await _applyAudioStreamSelection(audioStreams, initialAudio);
+        }
       }
 
-      final selectedSubtitleIndex = ref.read(subtitleTrackProvider);
-      if (selectedSubtitleIndex != null) {
-        await _applyInitialSubtitleTrack(selectedSubtitleIndex);
+      if (subtitleStreams.isNotEmpty) {
+        final selectedSubtitleIndex = ref.read(subtitleTrackProvider);
+        if (selectedSubtitleIndex != null) {
+          await _applyInitialSubtitleTrack(subtitleStreams, selectedSubtitleIndex);
+        } else {
+          await _applyPreferredSubtitleTrack(subtitleStreams);
+        }
+      } else {
+        ref.read(subtitleTrackProvider.notifier).state = null;
       }
 
       await _playerService.play();
@@ -239,24 +311,386 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   }
 
   Future<void> _applyInitialAudioTrack(List<MediaStream> audioStreams, int selectedIndex) async {
-    final tracks = _playerService.tracksInfo;
-    final audioTracks = tracks.where((t) => t['type'] == 'audio').toList();
-    final position = audioStreams.indexWhere((s) => s.index == selectedIndex);
-    if (position < 0 || position >= audioTracks.length) return;
-    final trackId = audioTracks[position]['id']?.toString();
+    final trackId = _matchAudioTrackId(audioStreams, selectedIndex);
     if (trackId != null && trackId.isNotEmpty) {
       await _playerService.selectAudioTrack(trackId);
     }
   }
 
-  Future<void> _applyInitialSubtitleTrack(int selectedIndex) async {
-    final tracks = _playerService.tracksInfo;
-    final subtitleTracks = tracks.where((t) => t['type'] == 'subtitle').toList();
-    if (selectedIndex < 0 || selectedIndex >= subtitleTracks.length) return;
-    final trackId = subtitleTracks[selectedIndex]['id']?.toString();
-    if (trackId != null && trackId.isNotEmpty) {
-      await _playerService.selectSubtitleTrack(trackId);
+  List<Map<String, dynamic>> _subtitleTracksFrom([List<Map<String, dynamic>>? tracks]) {
+    final source = tracks ?? _playerService.tracksInfo;
+    return source.where((track) {
+      final type = track['type']?.toString();
+      return type == 'subtitle' || type == 'text' || type == 'bitmap';
+    }).toList();
+  }
+
+  Future<void> _waitForTracksReady({
+    bool requireAudio = false,
+    bool requireSubtitle = false,
+  }) async {
+    if (!requireAudio && !requireSubtitle) {
+      return;
     }
+    for (var i = 0; i < 30; i++) {
+      final tracks = _playerService.tracksInfo;
+      final audioReady = !requireAudio || tracks.any((track) => track['type'] == 'audio');
+      final subtitleReady = !requireSubtitle || _subtitleTracksFrom(tracks).isNotEmpty;
+      if (audioReady && subtitleReady) {
+        return;
+      }
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+  }
+
+  Future<void> _applyInitialSubtitleTrack(
+    List<MediaStream> subtitleStreams,
+    int selectedIndex,
+  ) async {
+    await _onSubtitleSelectionChanged(null, selectedIndex);
+  }
+
+  Future<void> _applyPreferredSubtitleTrack(List<MediaStream> subtitleStreams) async {
+    if (subtitleStreams.isEmpty) {
+      return;
+    }
+    final preferredLanguage = ref.read(preferredSubtitleLanguageProvider).trim().toLowerCase();
+    final preferredTrack = subtitleStreams.firstWhere(
+      (stream) => (stream.language ?? '').trim().toLowerCase() == preferredLanguage,
+      orElse: () => subtitleStreams.first,
+    );
+    ref.read(subtitleTrackProvider.notifier).state = preferredTrack.index;
+    await _onSubtitleSelectionChanged(null, preferredTrack.index);
+  }
+
+  List<MediaStream> _audioStreamsFromCurrentSource() {
+    return _currentMediaSource?.mediaStreams.where((stream) => stream.isAudio).toList() ??
+        const <MediaStream>[];
+  }
+
+  List<MediaStream> _subtitleStreamsFromCurrentSource() {
+    return _currentMediaSource?.mediaStreams.where((stream) => stream.isSubtitle).toList() ??
+        const <MediaStream>[];
+  }
+
+  int? _resolveInitialAudioIndex(List<MediaStream> audioStreams) {
+    if (audioStreams.isEmpty) {
+      return null;
+    }
+    final selected = audioStreams.firstWhere(
+      (stream) => stream.isDefault == true,
+      orElse: () => audioStreams.first,
+    );
+    return selected.index;
+  }
+
+  Future<void> _applyAudioStreamSelection(
+    List<MediaStream> audioStreams,
+    int selectedIndex,
+  ) async {
+    await _applyInitialAudioTrack(audioStreams, selectedIndex);
+  }
+
+  Future<void> _onSubtitleSelectionChanged(int? prev, int? next) async {
+    if (prev == next || _currentMediaSource == null) {
+      return;
+    }
+    if (next == null) {
+      await _playerService.deselectSubtitleTrack();
+      return;
+    }
+
+    final subtitleStreams = _subtitleStreamsFromCurrentSource();
+    final target = subtitleStreams.where((stream) => stream.index == next).firstOrNull;
+    if (target == null) {
+      return;
+    }
+
+    final codec = (target.codec ?? '').toLowerCase();
+    final isExternal = target.isExternal == true;
+
+    if (!isExternal) {
+      final trackId = _matchSubtitleTrackId(
+        subtitleStreams,
+        target.language,
+        target.displayTitle ?? target.title,
+        target.codec,
+        target.index,
+      );
+      if (trackId != null && trackId.isNotEmpty) {
+        await _playerService.selectSubtitleTrack(trackId);
+      }
+      return;
+    }
+
+    await _playerService.deselectSubtitleTrack();
+    final subtitleFile = await _prepareExternalSubtitleFile(target, codec);
+    await _playerService.loadLibassSubtitle(subtitleFile.path);
+  }
+
+  String? _matchAudioTrackId(List<MediaStream> audioStreams, int selectedIndex) {
+    final tracks = _playerService.tracksInfo;
+    final audioTracks = tracks.where((track) => track['type'] == 'audio').toList();
+    if (audioTracks.isEmpty) {
+      return null;
+    }
+
+    final position = audioStreams.indexWhere((stream) => stream.index == selectedIndex);
+    if (position >= 0 && position < audioTracks.length) {
+      final trackId = audioTracks[position]['id']?.toString();
+      if (trackId != null && trackId.isNotEmpty) {
+        return trackId;
+      }
+    }
+
+    final target = audioStreams.where((stream) => stream.index == selectedIndex).firstOrNull;
+    final targetTitle = target?.displayTitle ?? target?.title ?? '';
+    final targetLang = (target?.language ?? '').toLowerCase();
+    if (targetTitle.isNotEmpty) {
+      for (final track in audioTracks) {
+        final title = (track['title'] ?? '').toString();
+        if (_titlesMatch(targetTitle, title)) {
+          return track['id']?.toString();
+        }
+      }
+    }
+    if (targetLang.isNotEmpty) {
+      final candidates = audioTracks.where((track) {
+        final language = (track['language'] ?? '').toString().toLowerCase();
+        return language == targetLang;
+      }).toList();
+      if (candidates.length == 1) {
+        return candidates.first['id']?.toString();
+      }
+      if (position >= 0 && position < candidates.length) {
+        return candidates[position]['id']?.toString();
+      }
+    }
+
+    return audioTracks.first['id']?.toString();
+  }
+
+  String? _matchSubtitleTrackId(
+    List<MediaStream> subtitleStreams,
+    String? targetLang,
+    String? targetTitle,
+    String? targetCodec,
+    int targetStreamIndex,
+  ) {
+    final subtitleTracks = _subtitleTracksFrom()
+        .where((track) => track['id'] != 'auto' && track['id'] != 'no')
+        .toList();
+    if (subtitleTracks.isEmpty) {
+      return null;
+    }
+
+    final codec = (targetCodec ?? '').toLowerCase();
+    final isGraphical = _isGraphicalSubtitleCodec(codec);
+    final isAss = _isAssSubtitleCodec(codec);
+
+    final candidates = isGraphical
+        ? subtitleTracks.where((track) => track['type'] == 'bitmap' || track['isBitmap'] == true).toList()
+        : isAss
+            ? subtitleTracks.where((track) => track['isAss'] == true || track['type'] == 'text').toList()
+            : subtitleTracks;
+
+    if (candidates.isEmpty) {
+      return subtitleTracks.first['id']?.toString();
+    }
+
+    if (targetTitle != null && targetTitle.isNotEmpty) {
+      for (final track in candidates) {
+        final title = (track['title'] ?? '').toString();
+        if (title.isNotEmpty && _titlesMatch(targetTitle, title)) {
+          return track['id']?.toString();
+        }
+      }
+    }
+
+    if (targetLang != null && targetLang.isNotEmpty) {
+      final langMatches = candidates.where((track) {
+        final language = (track['language'] ?? '').toString().toLowerCase();
+        return language == targetLang.toLowerCase() ||
+            language == 'chi' ||
+            language == 'zh';
+      }).toList();
+      if (langMatches.length == 1) {
+        return langMatches.first['id']?.toString();
+      }
+      if (langMatches.length > 1 && targetTitle != null && targetTitle.isNotEmpty) {
+        for (final track in langMatches) {
+          final title = (track['title'] ?? '').toString();
+          if (title.isNotEmpty && _titlesMatch(targetTitle, title)) {
+            return track['id']?.toString();
+          }
+        }
+      }
+    }
+
+    final embyIndex = _computeEmbySubtitleIndex(targetStreamIndex, subtitleTracks);
+    if (embyIndex >= 0 && embyIndex < candidates.length) {
+      return candidates[embyIndex]['id']?.toString();
+    }
+
+    final position = subtitleStreams.indexWhere((stream) => stream.index == targetStreamIndex);
+    if (position >= 0 && position < candidates.length) {
+      return candidates[position]['id']?.toString();
+    }
+
+    return candidates.first['id']?.toString();
+  }
+
+  int _computeEmbySubtitleIndex(
+    int embyStreamIndex,
+    List<Map<String, dynamic>> subtitleTracks,
+  ) {
+    if (subtitleTracks.isEmpty) {
+      return -1;
+    }
+    final ids = subtitleTracks.map((track) => track['id']?.toString() ?? '').toList();
+    for (int i = 0; i < ids.length; i++) {
+      final parts = ids[i].split('_');
+      if (parts.length == 2 && int.tryParse(parts[0]) == embyStreamIndex) {
+        return i;
+      }
+    }
+    final sorted = List<Map<String, dynamic>>.from(subtitleTracks);
+    sorted.sort((a, b) {
+      final aId = (a['id'] ?? '0').toString();
+      final bId = (b['id'] ?? '0').toString();
+      final aGroup = int.tryParse(aId.split('_').first) ?? 0;
+      final bGroup = int.tryParse(bId.split('_').first) ?? 0;
+      if (aGroup != bGroup) {
+        return aGroup.compareTo(bGroup);
+      }
+      final aTrack = int.tryParse(aId.split('_').last) ?? 0;
+      final bTrack = int.tryParse(bId.split('_').last) ?? 0;
+      return aTrack.compareTo(bTrack);
+    });
+    for (int i = 0; i < sorted.length; i++) {
+      final group = int.tryParse(sorted[i]['id'].toString().split('_').first) ?? -1;
+      if (group == embyStreamIndex) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  bool _titlesMatch(String expected, String actual) {
+    final e = expected.toLowerCase();
+    final a = actual.toLowerCase();
+    if (e.isEmpty || a.isEmpty) {
+      return false;
+    }
+    if (e == a || e.contains(a) || a.contains(e)) {
+      return true;
+    }
+    final simpKeywords = ['简', 'chs', '简体', '简日', 'gb', '简中'];
+    final tradKeywords = ['繁', 'cht', '繁体', '繁日', 'big5', '繁中'];
+    final eIsSimp = simpKeywords.any(e.contains);
+    final eIsTrad = tradKeywords.any(e.contains);
+    final aIsSimp = simpKeywords.any(a.contains);
+    final aIsTrad = tradKeywords.any(a.contains);
+    if (eIsSimp && aIsSimp) {
+      return true;
+    }
+    if (eIsTrad && aIsTrad) {
+      return true;
+    }
+    return false;
+  }
+
+  bool _isAssSubtitleCodec(String codec) {
+    final lower = codec.toLowerCase();
+    return lower == 'ass' || lower == 'ssa';
+  }
+
+  bool _isGraphicalSubtitleCodec(String codec) {
+    final lower = codec.toLowerCase();
+    return lower == 'pgssub' ||
+        lower == 'sup' ||
+        lower == 'pgs' ||
+        lower == 'dvdsub' ||
+        lower == 'vobsub' ||
+        lower.contains('hdmv') ||
+        lower.contains('pgs');
+  }
+
+  String _embySubtitleCodec(String codec) {
+    final lower = codec.toLowerCase();
+    if (lower == 'srt' || lower == 'subrip') {
+      return 'srt';
+    }
+    if (lower == 'vtt' || lower == 'webvtt') {
+      return 'vtt';
+    }
+    if (_isGraphicalSubtitleCodec(lower)) {
+      return 'pgs';
+    }
+    return 'ass';
+  }
+
+  String _subtitleFileExtension(String codec) {
+    final lower = codec.toLowerCase();
+    if (lower == 'srt' || lower == 'subrip') {
+      return 'srt';
+    }
+    if (lower == 'vtt' || lower == 'webvtt') {
+      return 'vtt';
+    }
+    if (_isAssSubtitleCodec(lower)) {
+      return 'ass';
+    }
+    if (_isGraphicalSubtitleCodec(lower)) {
+      return 'sup';
+    }
+    return 'srt';
+  }
+
+  Future<File> _prepareExternalSubtitleFile(MediaStream target, String codec) async {
+    final currentSource = _currentMediaSource;
+    if (currentSource == null) {
+      throw StateError('当前媒体源为空，无法加载外挂字幕');
+    }
+    final api = ref.read(apiClientProvider);
+    final subtitleUrl = api.playback.getSubtitleStreamUrl(
+      widget.itemId,
+      currentSource.id,
+      target.index,
+      _embySubtitleCodec(codec),
+    );
+
+    final tempDir = await getTemporaryDirectory();
+    final file = File(
+      p.join(
+        tempDir.path,
+        'desktop_subtitle_${widget.itemId}_${target.index}.${_subtitleFileExtension(codec)}',
+      ),
+    );
+
+    if (!file.existsSync() || await file.length() == 0) {
+      final server = ref.read(currentServerProvider);
+      final dio = Dio(BaseOptions(
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 60),
+      ));
+      if (server?.authToken != null) {
+        dio.options.headers['X-Emby-Token'] = server!.authToken;
+        dio.options.headers['X-MediaBrowser-Token'] = server.authToken;
+      }
+      await dio.download(subtitleUrl, file.path);
+    }
+
+    if (_isAssSubtitleCodec(codec) ||
+        _isGraphicalSubtitleCodec(codec) ||
+        codec == 'srt' ||
+        codec == 'subrip' ||
+        codec == 'vtt' ||
+        codec == 'webvtt') {
+      return file;
+    }
+
+    return file;
   }
 
   // ========== 控制栏显隐 ==========
@@ -428,8 +862,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   }
 
   void _cycleSubtitleTrack() {
-    final tracks = _playerService.tracksInfo;
-    final subtitleTracks = tracks.where((t) => t['type'] == 'subtitle').toList();
+    final subtitleTracks = _subtitleTracksFrom();
     if (subtitleTracks.isEmpty) return;
 
     final currentIndex = subtitleTracks.indexWhere((t) => t['selected'] == true);
@@ -760,38 +1193,69 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
 
   // ========== 字幕/音轨弹窗 ==========
 
-  void _showSubtitleSelector() {
-    final tracks = _playerService.tracksInfo;
-    final subtitleTracks = tracks.where((t) => t['type'] == 'subtitle').toList();
-    if (subtitleTracks.isEmpty) {
+  Future<void> _waitForTrackSelectorItems({
+    required bool subtitle,
+  }) async {
+    for (var i = 0; i < 10; i++) {
+      final streams = subtitle
+          ? _subtitleStreamsFromCurrentSource()
+          : _audioStreamsFromCurrentSource();
+      if (streams.isNotEmpty) {
+        return;
+      }
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+  }
+
+  Future<void> _showSubtitleSelector() async {
+    await _waitForTrackSelectorItems(subtitle: true);
+    final subtitleStreams = _subtitleStreamsFromCurrentSource();
+    if (subtitleStreams.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('当前没有可切换的字幕轨道')),
       );
       return;
     }
-    _showTrackSelectorDialog('字幕选择', subtitleTracks, (trackId) {
-      _playerService.selectSubtitleTrack(trackId);
-    }, canDisable: true);
+    _showTrackSelectorDialog(
+      title: '字幕选择',
+      streams: subtitleStreams,
+      selectedIndex: ref.read(subtitleTrackProvider),
+      onSelect: (streamIndex) {
+        ref.read(subtitleTrackProvider.notifier).state = streamIndex;
+      },
+      canDisable: true,
+      subtitle: true,
+    );
   }
 
-  void _showAudioSelector() {
-    final tracks = _playerService.tracksInfo;
-    final audioTracks = tracks.where((t) => t['type'] == 'audio').toList();
-    if (audioTracks.isEmpty) {
+  Future<void> _showAudioSelector() async {
+    await _waitForTrackSelectorItems(subtitle: false);
+    final audioStreams = _audioStreamsFromCurrentSource();
+    if (audioStreams.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('当前没有可切换的音轨')),
       );
       return;
     }
-    _showTrackSelectorDialog('音轨选择', audioTracks, (trackId) {
-      _playerService.selectAudioTrack(trackId);
-    });
+    _showTrackSelectorDialog(
+      title: '音轨选择',
+      streams: audioStreams,
+      selectedIndex: ref.read(audioTrackProvider),
+      onSelect: (streamIndex) {
+        ref.read(audioTrackProvider.notifier).state = streamIndex;
+      },
+      subtitle: false,
+    );
   }
 
-  void _showTrackSelectorDialog(
-    String title,
-    List<Map<String, dynamic>> tracks,
-    void Function(String trackId) onSelect, {
+  void _showTrackSelectorDialog({
+    required String title,
+    required List<MediaStream> streams,
+    required int? selectedIndex,
+    required ValueChanged<int> onSelect,
+    required bool subtitle,
     bool canDisable = false,
   }) {
     showDialog(
@@ -824,10 +1288,10 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
                   builder: (context, controller) => ListView.builder(
                     controller: controller,
                     shrinkWrap: true,
-                    itemCount: canDisable ? tracks.length + 1 : tracks.length,
+                    itemCount: canDisable ? streams.length + 1 : streams.length,
                     itemBuilder: (context, index) {
                       if (canDisable && index == 0) {
-                        final isSelected = tracks.every((t) => t['selected'] != true);
+                        final isSelected = selectedIndex == null;
                         return ListTile(
                           title: const Text('关闭字幕', style: TextStyle(color: Colors.white)),
                           trailing: isSelected
@@ -840,19 +1304,22 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
                         );
                       }
                       final trackIndex = canDisable ? index - 1 : index;
-                      final track = tracks[trackIndex];
-                      final isSelected = track['selected'] == true;
-                      final label = track['title']?.toString() ??
-                          track['language']?.toString() ??
-                          '轨道 ${trackIndex + 1}';
+                      final stream = streams[trackIndex];
+                      final isSelected = selectedIndex == stream.index;
+                      final label = stream.readableLabel(siblings: streams);
                       return ListTile(
                         title: Text(label, style: const TextStyle(color: Colors.white)),
+                        subtitle: stream.codec != null
+                            ? Text(
+                                '编码: ${stream.codec}${subtitle ? (stream.isExternal == true ? ' (外挂)' : ' (内封)') : ''}',
+                                style: const TextStyle(color: Colors.white54),
+                              )
+                            : null,
                         trailing: isSelected
                             ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
                             : null,
                         onTap: () {
-                          final trackId = track['id']?.toString();
-                          if (trackId != null) onSelect(trackId);
+                          onSelect(stream.index);
                           Navigator.pop(context);
                         },
                       );
@@ -892,9 +1359,9 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     final rows = <Widget>[];
 
     // 文件信息
-    final path = _playbackStats['path'] ?? '';
-    if (path.isNotEmpty) {
-      rows.add(_buildStatRow('文件', path.split('/').last.split('\\').last));
+    final versionName = _currentMediaSource?.name?.trim();
+    if (versionName != null && versionName.isNotEmpty) {
+      rows.add(_buildStatRow('文件', versionName));
     }
 
     final fileSize = _playbackStats['file-size'];
@@ -1127,27 +1594,29 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
                   Positioned(
                     top: 80,
                     left: 16,
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.85),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: DefaultTextStyle(
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontFamily: 'monospace',
-                          height: 1.5,
+                    child: IgnorePointer(
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.85),
+                          borderRadius: BorderRadius.circular(8),
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (_playbackStats.isEmpty)
-                              const Text('正在获取统计信息...')
-                            else
-                              ..._buildStatsRows(),
-                          ],
+                        child: DefaultTextStyle(
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontFamily: 'monospace',
+                            height: 1.5,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (_playbackStats.isEmpty)
+                                const Text('正在获取统计信息...')
+                              else
+                                ..._buildStatsRows(),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -1230,8 +1699,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
         // 左侧浮动按钮
         Positioned(
           left: 0,
-          top: 0,
-          bottom: 0,
+          top: 120,
+          bottom: 132,
           width: 60,
           child: MouseRegion(
             onEnter: (_) => setState(() => _mouseInControlsArea = true),
@@ -1260,8 +1729,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
         // 右侧浮动按钮（倍速）
         Positioned(
           right: 0,
-          top: 0,
-          bottom: 0,
+          top: 120,
+          bottom: 132,
           width: 60,
           child: MouseRegion(
             onEnter: (_) => setState(() => _mouseInControlsArea = true),
@@ -1341,6 +1810,9 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   // ========== 顶栏 ==========
 
   Widget _buildTopBar(MediaItem? item, bool isMpv) {
+    final title = _displayTitle?.trim().isNotEmpty == true
+        ? _displayTitle!
+        : item?.name ?? widget.itemId;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
@@ -1355,7 +1827,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
           // 标题
           Expanded(
             child: _MarqueeText(
-              text: item?.name ?? widget.itemId,
+              text: title,
               style: const TextStyle(color: Colors.white, fontSize: 16),
             ),
           ),
@@ -1572,12 +2044,6 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
           icon: Icons.camera_alt_outlined,
           tooltip: '截图',
           onPressed: _takeScreenshot,
-        ),
-        _buildIconButton(
-          icon: Icons.analytics_outlined,
-          tooltip: _showStatsOverlay ? '关闭统计信息' : '显示统计信息',
-          color: _showStatsOverlay ? const Color(0xFF5B8DEF) : Colors.white,
-          onPressed: _toggleStatsOverlay,
         ),
         _buildIconButton(
           icon: _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,

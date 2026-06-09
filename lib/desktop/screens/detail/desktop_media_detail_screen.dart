@@ -809,6 +809,7 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
           label: '从头开始播放',
           onTap: () {
             _hideAllOverlays();
+            ref.read(currentPlayingItemProvider.notifier).state = widget.item;
             context.push('/player/${widget.itemId}');
           },
         ),
@@ -1011,6 +1012,7 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
             scaleFactor: scale,
             onTap: () {
               // 继续观看或从头播放
+              ref.read(currentPlayingItemProvider.notifier).state = widget.item;
               context.push('/player/${widget.itemId}');
             },
             onDropdownTapDown: _rememberMenuAnchor,
