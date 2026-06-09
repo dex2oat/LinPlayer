@@ -33,9 +33,11 @@ class VideoPlayerService extends ChangeNotifier {
   bool _showControls = true;
   bool _isLocked = false;
   bool _isDragging = false;
+  bool _isScrubbingPosition = false;
   double _dragStartX = 0;
   double _dragStartY = 0;
   Duration _dragStartPosition = Duration.zero;
+  Duration _dragPreviewPosition = Duration.zero;
   double _dragStartVolume = 1.0;
   double _currentBrightness = 1.0;
   double _dragStartBrightness = 1.0;
@@ -60,11 +62,13 @@ class VideoPlayerService extends ChangeNotifier {
   bool get showControls => _showControls;
   bool get isLocked => _isLocked;
   bool get isDragging => _isDragging;
+  bool get isScrubbingPosition => _isScrubbingPosition;
   bool get isCompleted => _adapter?.isCompleted ?? false;
   double get progress => _adapter?.progress ?? 0.0;
   PlayerCoreType get coreType => _coreType;
   bool get lastInitializationUsedFallback => _lastInitializationUsedFallback;
   String? get lastFallbackReason => _lastFallbackReason;
+  Duration get dragPreviewPosition => _dragPreviewPosition;
 
   /// 当前播放器适配器（用于内核特定操作）
   PlayerAdapter? get adapter => _adapter;
@@ -77,8 +81,7 @@ class VideoPlayerService extends ChangeNotifier {
   /// 拖动方向：1=向前, -1=向后, 0=无
   int get dragDirection {
     if (!_isDragging) return 0;
-    final currentPos = _adapter?.position.inMilliseconds ?? 0;
-    final dx = _dragStartPosition.inMilliseconds - currentPos;
+    final dx = _dragPreviewPosition.inMilliseconds - _dragStartPosition.inMilliseconds;
     if (dx < -500) return 1; // 向后拖 = 快进
     if (dx > 500) return -1; // 向前拖 = 快退
     return 0;
@@ -306,6 +309,8 @@ class VideoPlayerService extends ChangeNotifier {
   /// 跳转到指定位置
   Future<void> seekTo(Duration position) async {
     await _adapter?.seekTo(position);
+    _dragPreviewPosition = Duration.zero;
+    _isScrubbingPosition = false;
     notifyListeners();
   }
 
@@ -439,9 +444,11 @@ class VideoPlayerService extends ChangeNotifier {
   void onDragStart(DragStartDetails details, BoxConstraints constraints) {
     if (_isLocked || !isInitialized) return;
     _isDragging = true;
+    _isScrubbingPosition = false;
     _dragStartX = details.globalPosition.dx;
     _dragStartY = details.globalPosition.dy;
     _dragStartPosition = position;
+    _dragPreviewPosition = position;
     _dragStartVolume = volume;
     _dragStartBrightness = _currentBrightness;
     _cancelHideControlsTimer();
@@ -462,14 +469,16 @@ class VideoPlayerService extends ChangeNotifier {
 
     if (dx.abs() > dy.abs() * 1.5) {
       // 水平滑动（进度调节）：需要水平移动明显大于垂直移动
+      _isScrubbingPosition = true;
       final progressDelta = dx / width * duration.inMilliseconds * 0.5; // 降低灵敏度系数
       final newPositionMs = max(0, min(
         _dragStartPosition.inMilliseconds + progressDelta.round(),
         duration.inMilliseconds,
       ));
-      _dragStartPosition = Duration(milliseconds: newPositionMs);
+      _dragPreviewPosition = Duration(milliseconds: newPositionMs);
       notifyListeners();
     } else if (dy.abs() > dx.abs() * 1.5) {
+      _isScrubbingPosition = false;
       // 垂直滑动（亮度/音量）：需要垂直移动明显大于水平移动
       if (_dragStartX < width / 2) {
         // 左侧：亮度
@@ -489,7 +498,9 @@ class VideoPlayerService extends ChangeNotifier {
   void onDragEnd(DragEndDetails details) {
     if (!_isDragging) return;
     _isDragging = false;
-    seekTo(_dragStartPosition);
+    final targetPosition = _isScrubbingPosition ? _dragPreviewPosition : _dragStartPosition;
+    _isScrubbingPosition = false;
+    seekTo(targetPosition);
     _startHideControlsTimer();
     notifyListeners();
   }

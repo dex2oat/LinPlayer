@@ -109,64 +109,11 @@ PlaybackSelection buildPlaybackSelection({
     playSessionId: playSessionId,
   );
 
-  final audioStreams = mediaSource?.mediaStreams.where((s) => s.isAudio).toList() ??
-      const <MediaStream>[];
-  final riskyAudioTrack = _selectRiskiestAudio(audioStreams);
-  final riskyCodec = riskyAudioTrack?.codec?.toLowerCase();
-
-  if (riskyCodec == null) {
-    return PlaybackSelection(mediaSource: mediaSource, primaryRequest: primaryRequest);
-  }
-
-  if (_needsTranscodeFallback(riskyCodec)) {
-    return PlaybackSelection(
-      mediaSource: mediaSource,
-      primaryRequest: primaryRequest.copyWith(
-        allowDirectPlay: false,
-        allowDirectStream: false,
-        allowTranscoding: true,
-        enableAutoStreamCopy: false,
-        enableAutoStreamCopyAudio: false,
-      ),
-      fallbackRequest: primaryRequest.copyWith(
-        allowDirectPlay: false,
-        allowDirectStream: false,
-        allowTranscoding: true,
-        enableAutoStreamCopy: false,
-        enableAutoStreamCopyAudio: false,
-        enableAutoStreamCopyVideo: false,
-      ),
-      startsWithSoftwareDecoding: true,
-      fallbackReason: '检测到高风险音频编码 ${riskyCodec.toUpperCase()}，优先请求服务器转码以避免解码失败。',
-    );
-  }
-
-  if (_shouldDisableHardwareDecoding(riskyCodec)) {
-    return PlaybackSelection(
-      mediaSource: mediaSource,
-      primaryRequest: primaryRequest,
-      fallbackRequest: primaryRequest.copyWith(
-        allowDirectPlay: false,
-        allowDirectStream: false,
-        allowTranscoding: true,
-        enableAutoStreamCopy: false,
-        enableAutoStreamCopyAudio: false,
-      ),
-      startsWithSoftwareDecoding: true,
-      fallbackReason: '检测到兼容性较差的音频编码 ${riskyCodec.toUpperCase()}，先关闭硬件解码并准备转码兜底。',
-    );
-  }
-
+  // 当前播放器链路只依赖本地内核解码，不应因为音频编码类型自动切到
+  // 服务端转码/“更安全”的流策略，否则会破坏直连与 seek 的稳定性。
   return PlaybackSelection(
     mediaSource: mediaSource,
     primaryRequest: primaryRequest,
-    fallbackRequest: primaryRequest.copyWith(
-      allowDirectPlay: false,
-      allowDirectStream: false,
-      allowTranscoding: true,
-      enableAutoStreamCopy: false,
-      enableAutoStreamCopyAudio: false,
-    ),
   );
 }
 
@@ -182,31 +129,4 @@ String _preferredContainer(MediaSource? mediaSource) {
     return 'mkv';
   }
   return 'mp4';
-}
-
-MediaStream? _selectRiskiestAudio(List<MediaStream> audioStreams) {
-  MediaStream? risky;
-  for (final stream in audioStreams) {
-    final codec = stream.codec?.toLowerCase() ?? '';
-    if (_needsTranscodeFallback(codec)) {
-      return stream;
-    }
-    if (_shouldDisableHardwareDecoding(codec)) {
-      risky ??= stream;
-    }
-  }
-  return risky;
-}
-
-bool _needsTranscodeFallback(String codec) {
-  return codec.contains('truehd') ||
-      codec.contains('mlp') ||
-      codec.contains('dts-hd') ||
-      codec.contains('dtshd');
-}
-
-bool _shouldDisableHardwareDecoding(String codec) {
-  return codec.contains('dts') ||
-      codec.contains('eac3') ||
-      codec.contains('flac');
 }

@@ -37,6 +37,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
   late VideoPlayerService _playerService;
   bool _showRemaining = false;
   bool _isLongPressing = false;
+  bool _isSliderDragging = false;
+  double? _sliderDragValue;
   Timer? _longPressTimer;
   Timer? _sleepTimer;
   double? _initialVideoAspectRatio;
@@ -1255,6 +1257,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     _playerService.dispose();
     _longPressTimer?.cancel();
     _skipButtonTimer?.cancel();
+    _sleepTimer?.cancel();
 
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations([
@@ -1274,93 +1277,95 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
       backgroundColor: Colors.black,
       body: LayoutBuilder(
         builder: (context, constraints) {
-          return GestureDetector(
-            onTap: _playerService.toggleControls,
-            onDoubleTapDown: _onDoubleTapDown,
-            onLongPressStart: (_) => _onLongPressStart(),
-            onLongPressEnd: (_) => _onLongPressEnd(),
-            onHorizontalDragStart: (details) => _playerService.onDragStart(details, constraints),
-            onHorizontalDragUpdate: (details) => _playerService.onDragUpdate(details, constraints),
-            onHorizontalDragEnd: _playerService.onDragEnd,
-            onVerticalDragStart: (details) => _playerService.onDragStart(details, constraints),
-            onVerticalDragUpdate: (details) => _playerService.onDragUpdate(details, constraints),
-            onVerticalDragEnd: _playerService.onDragEnd,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                _buildVideoArea(),
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _playerService.toggleControls,
+                onDoubleTapDown: _onDoubleTapDown,
+                onLongPressStart: (_) => _onLongPressStart(),
+                onLongPressEnd: (_) => _onLongPressEnd(),
+                onHorizontalDragStart: (details) => _playerService.onDragStart(details, constraints),
+                onHorizontalDragUpdate: (details) => _playerService.onDragUpdate(details, constraints),
+                onHorizontalDragEnd: _playerService.onDragEnd,
+                onVerticalDragStart: (details) => _playerService.onDragStart(details, constraints),
+                onVerticalDragUpdate: (details) => _playerService.onDragUpdate(details, constraints),
+                onVerticalDragEnd: _playerService.onDragEnd,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    _buildVideoArea(),
 
-                if (_playerService.isBuffering)
-                  const Center(
-                    child: CircularProgressIndicator(color: Colors.white),
-                  ),
-
-                if (_playerService.hasError)
-                  Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.error_outline, color: Colors.white, size: 48),
-                        const SizedBox(height: 16),
-                        Text(
-                          '播放失败: ${_playerService.errorMessage}',
-                          style: const TextStyle(color: Colors.white),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 16),
-                        ElevatedButton(
-                          onPressed: _initializePlayer,
-                          child: const Text('重试'),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                // 亮度/音量手势指示器
-                if (_playerService.isDragging)
-                  _buildGestureIndicator(),
-
-                // 长按快进指示器
-                if (_isLongPressing)
-                  _buildLongPressIndicator(),
-
-                // 控制层
-                if (_playerService.showControls && !_playerService.isLocked)
-                  _buildControlsOverlay(item),
-
-                // 锁定按钮（始终显示）
-                if (_playerService.isLocked)
-                  Positioned(
-                    top: 40,
-                    left: 16,
-                    child: IconButton(
-                      icon: const Icon(Icons.lock, color: Colors.white),
-                      onPressed: _playerService.toggleLock,
-                    ),
-                  ),
-
-                // 拖动进度提示
-                if (_playerService.isDragging)
-                  _buildDragIndicator(),
-
-                // 跳过片头按钮
-                if (_showSkipButton)
-                  Positioned(
-                    top: 100,
-                    right: 24,
-                    child: ElevatedButton.icon(
-                      onPressed: _onSkipOpeningPressed,
-                      icon: const Icon(Icons.skip_next, size: 18),
-                      label: const Text('跳过片头'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.black.withValues(alpha: 0.7),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    if (_playerService.isBuffering)
+                      const Center(
+                        child: CircularProgressIndicator(color: Colors.white),
                       ),
-                    ),
+
+                    if (_playerService.hasError)
+                      Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.error_outline, color: Colors.white, size: 48),
+                            const SizedBox(height: 16),
+                            Text(
+                              '播放失败: ${_playerService.errorMessage}',
+                              style: const TextStyle(color: Colors.white),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 16),
+                            ElevatedButton(
+                              onPressed: _initializePlayer,
+                              child: const Text('重试'),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    if (_playerService.isDragging &&
+                        !_playerService.isScrubbingPosition)
+                      _buildGestureIndicator(),
+
+                    if (_isLongPressing)
+                      _buildLongPressIndicator(),
+
+                    if (_playerService.isDragging &&
+                        _playerService.isScrubbingPosition)
+                      _buildDragIndicator(),
+
+                    if (_showSkipButton)
+                      Positioned(
+                        top: 100,
+                        right: 24,
+                        child: ElevatedButton.icon(
+                          onPressed: _onSkipOpeningPressed,
+                          icon: const Icon(Icons.skip_next, size: 18),
+                          label: const Text('跳过片头'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.black.withValues(alpha: 0.7),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+
+              if (_playerService.showControls && !_playerService.isLocked)
+                Positioned.fill(child: _buildControlsOverlay(item)),
+
+              if (_playerService.isLocked)
+                Positioned(
+                  top: 40,
+                  left: 16,
+                  child: IconButton(
+                    icon: const Icon(Icons.lock, color: Colors.white),
+                    onPressed: _playerService.toggleLock,
                   ),
-              ],
-            ),
+                ),
+            ],
           );
         },
       ),
@@ -1559,26 +1564,22 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
   }
 
   Widget _buildControlsOverlay(MediaItem? item) {
-    return AnimatedOpacity(
-      opacity: _playerService.showControls ? 1.0 : 0.0,
-      duration: const Duration(milliseconds: 200),
-      child: SafeArea(
-        child: Column(
-          children: [
-            _buildTopBar(item),
-            Expanded(
-              child: Row(
-                children: [
-                  _buildLeftSideControls(),
-                  const Spacer(),
-                  _buildRightSideControls(),
-                ],
-              ),
+    return SafeArea(
+      child: Column(
+        children: [
+          _buildTopBar(item),
+          Expanded(
+            child: Row(
+              children: [
+                _buildLeftSideControls(),
+                const Spacer(),
+                _buildRightSideControls(),
+              ],
             ),
-            _buildProgressBar(),
-            _buildBottomBar(item),
-          ],
-        ),
+          ),
+          _buildProgressBar(),
+          _buildBottomBar(item),
+        ],
       ),
     );
   }
@@ -1711,8 +1712,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
   }
 
   Widget _buildProgressBar() {
-    final currentTime = _formatDuration(_playerService.position);
-    final remainingTime = _formatDuration(_playerService.duration - _playerService.position);
+    final effectiveProgress = _isSliderDragging
+        ? (_sliderDragValue ?? _playerService.progress).clamp(0.0, 1.0)
+        : _playerService.progress.clamp(0.0, 1.0);
+    final effectivePosition = Duration(
+      milliseconds: (effectiveProgress * _playerService.duration.inMilliseconds).round(),
+    );
+    final currentTime = _formatDuration(effectivePosition);
+    final remaining = _playerService.duration - effectivePosition;
+    final remainingTime = _formatDuration(
+      remaining.isNegative ? Duration.zero : remaining,
+    );
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -1744,12 +1754,22 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
                     thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
                   ),
                   child: Slider(
-                    value: _playerService.progress.clamp(0.0, 1.0),
+                    value: effectiveProgress,
                     onChanged: (value) {
+                      setState(() {
+                        _isSliderDragging = true;
+                        _sliderDragValue = value;
+                      });
+                    },
+                    onChangeEnd: (value) async {
                       final position = Duration(
                         milliseconds: (value * _playerService.duration.inMilliseconds).round(),
                       );
-                      _playerService.seekTo(position);
+                      setState(() {
+                        _isSliderDragging = false;
+                        _sliderDragValue = null;
+                      });
+                      await _playerService.seekTo(position);
                     },
                   ),
                 ),
@@ -1841,6 +1861,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     final direction = _playerService.dragDirection;
     final isForward = direction == 1;
     final isBackward = direction == -1;
+    final previewPosition = _playerService.isScrubbingPosition
+        ? _playerService.dragPreviewPosition
+        : _playerService.position;
 
     return Center(
       child: Container(
@@ -1863,7 +1886,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
             ),
             const SizedBox(height: 8),
             Text(
-              _formatDuration(_playerService.position),
+              _formatDuration(previewPosition),
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 16,
