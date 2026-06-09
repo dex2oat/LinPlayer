@@ -165,10 +165,21 @@ class MpvPlayerAdapter implements PlayerAdapter {
         // 这样字幕会正确显示在视频上，而不是作为单独层
         await np.setProperty('blend-subtitles', 'video');
         await np.setProperty('sub-visibility', 'yes');
+        if (_isHttpUrl(videoUrl)) {
+          await np.setProperty('cache', 'yes');
+          await np.setProperty('cache-pause', 'no');
+          await np.setProperty('cache-secs', '120');
+          await np.setProperty('demuxer-max-bytes', '268435456');
+          await np.setProperty('demuxer-max-back-bytes', '134217728');
+          await np.setProperty('demuxer-readahead-secs', '90');
+          await np.setProperty('network-timeout', '20');
+          await np.setProperty('stream-buffer-size', '4194304');
+          await np.setProperty('prefetch-playlist', 'no');
+        }
       }
 
       final media = Media(videoUrl);
-      await _player!.open(media);
+      await _player!.open(media, play: false);
 
       if (startPosition != null && startPosition > Duration.zero) {
         await _player!.seek(startPosition);

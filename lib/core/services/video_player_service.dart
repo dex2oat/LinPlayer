@@ -22,6 +22,7 @@ enum PlayerCoreType {
 class VideoPlayerService extends ChangeNotifier {
   PlayerAdapter? _adapter;
   PlayerCoreType _coreType = PlayerCoreType.exoPlayer;
+  bool _hasReportedStart = false;
 
   Timer? _progressTimer;
   Timer? _hideControlsTimer;
@@ -136,6 +137,7 @@ class VideoPlayerService extends ChangeNotifier {
     _onStartReport = onStart;
     _onProgressReport = onProgress;
     _onStopReport = onStop;
+    _hasReportedStart = false;
 
     if (coreType != null) {
       _coreType = coreType;
@@ -153,6 +155,10 @@ class VideoPlayerService extends ChangeNotifier {
       onDurationChanged: () => notifyListeners(),
       onPlayingStateChanged: () {
         if (_adapter?.isPlaying ?? false) {
+          if (!_hasReportedStart) {
+            _reportStart();
+            _hasReportedStart = true;
+          }
           _startHideControlsTimer();
         } else {
           _cancelHideControlsTimer();
@@ -175,12 +181,6 @@ class VideoPlayerService extends ChangeNotifier {
       useLibass: useLibass ?? false,
       preferredSubtitleLanguage: preferredSubtitleLanguage,
     );
-
-    // 开始播放
-    await _adapter!.play();
-
-    // 上报开始
-    _reportStart();
 
     // 加载 libass 字幕（如果启用）
     if (useLibass ?? false) {
@@ -518,6 +518,7 @@ class VideoPlayerService extends ChangeNotifier {
     _reportStop();
     _stopProgressTimer();
     _cancelHideControlsTimer();
+    _hasReportedStart = false;
     await _adapter?.dispose();
     _adapter = null;
     super.dispose();

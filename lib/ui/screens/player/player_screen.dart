@@ -210,6 +210,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     final videoUrl = api.playback.getVideoStreamUrl(
       widget.itemId,
       mediaSourceId: mediaSource?.id,
+      container: mediaSource?.container ?? videoStream?.codec,
+      playSessionId: '${widget.itemId}-${DateTime.now().microsecondsSinceEpoch}',
     );
 
     Duration? startPosition;
@@ -261,6 +263,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
         } catch (_) {}
       },
     );
+
+    await _playerService.play();
 
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     SystemChrome.setPreferredOrientations([

@@ -589,16 +589,35 @@ class EmbyPlaybackApi implements PlaybackApi {
   }
 
   @override
-  String getVideoStreamUrl(String itemId, {String? mediaSourceId}) {
-    final base = _client._currentLine;
+  String getVideoStreamUrl(
+    String itemId, {
+    String? mediaSourceId,
+    String? container,
+    String? playSessionId,
+    bool staticStream = true,
+  }) {
+    final base = _client._currentLine.endsWith('/')
+        ? _client._currentLine.substring(0, _client._currentLine.length - 1)
+        : _client._currentLine;
     final token = _client._authToken;
+    final normalizedContainer = (container ?? 'mkv').trim().toLowerCase();
+    final safeContainer = normalizedContainer.isEmpty ? 'mkv' : normalizedContainer;
     final params = <String>[
-      'static=true',
+      'static=$staticStream',
+      'download=false',
+      'EnableAutoStreamCopy=true',
+      'EnableAutoStreamCopyAudio=true',
+      'EnableAutoStreamCopyVideo=true',
+      'EnableDirectPlay=true',
+      'EnableDirectStream=true',
+      'EnableTranscoding=false',
       if (mediaSourceId != null && mediaSourceId.isNotEmpty)
         'MediaSourceId=${Uri.encodeQueryComponent(mediaSourceId)}',
-      if (token != null) 'api_key=$token',
+      if (playSessionId != null && playSessionId.isNotEmpty)
+        'PlaySessionId=${Uri.encodeQueryComponent(playSessionId)}',
+      if (token != null) 'api_key=${Uri.encodeQueryComponent(token)}',
     ];
-    return '$base/Videos/$itemId/stream?${params.join('&')}';
+    return '$base/Videos/$itemId/stream.$safeContainer?${params.join('&')}';
   }
 
   @override

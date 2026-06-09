@@ -402,7 +402,13 @@ abstract class PlaybackApi {
   
   /// 获取视频流
   /// GET /Videos/{Id}/stream
-  String getVideoStreamUrl(String itemId, {String? mediaSourceId});
+  String getVideoStreamUrl(
+    String itemId, {
+    String? mediaSourceId,
+    String? container,
+    String? playSessionId,
+    bool staticStream = true,
+  });
   
   /// 获取字幕流URL
   /// GET /Videos/{itemId}/{mediaSourceId}/Subtitles/{index}/Stream.{codec}

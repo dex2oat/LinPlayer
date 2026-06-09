@@ -89,12 +89,19 @@ class _DesktopTopBarState extends ConsumerState<_DesktopTopBar> {
   @override
   Widget build(BuildContext context) {
     final currentServer = ref.watch(currentServerProvider);
+    final mediaCountsAsync = currentServer != null && serverHasUsableAuth(currentServer)
+        ? ref.watch(embyMediaCountsProvider)
+        : null;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
       child: Row(
         children: [
           _buildServerSelector(context, ref, currentServer),
+          if (mediaCountsAsync != null) ...[
+            const SizedBox(width: 12),
+            _buildServerStats(context, mediaCountsAsync),
+          ],
           const Spacer(),
           _buildIconButton(
             icon: Icons.search,
@@ -163,6 +170,68 @@ class _DesktopTopBarState extends ConsumerState<_DesktopTopBar> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildServerStats(
+    BuildContext context,
+    AsyncValue<EmbyMediaCounts> mediaCountsAsync,
+  ) {
+    final theme = Theme.of(context);
+    final labelStyle = theme.textTheme.bodySmall?.copyWith(
+      fontSize: 12,
+      height: 1.35,
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    final valueStyle = theme.textTheme.bodySmall?.copyWith(
+      fontSize: 12,
+      height: 1.35,
+      fontWeight: FontWeight.w600,
+      color: theme.colorScheme.onSurface,
+    );
+
+    Widget buildLine(String label, String value) {
+      return RichText(
+        text: TextSpan(
+          style: labelStyle,
+          children: [
+            TextSpan(text: '$label：'),
+            TextSpan(text: value, style: valueStyle),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.28),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
+        ),
+      ),
+      child: mediaCountsAsync.when(
+        data: (counts) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            buildLine('电影', counts.movieCount.toString()),
+            buildLine('剧集', counts.seriesCount.toString()),
+            buildLine('总共', counts.totalCount.toString()),
+          ],
+        ),
+        loading: () => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            buildLine('电影', '...'),
+            buildLine('剧集', '...'),
+            buildLine('总共', '...'),
+          ],
+        ),
+        error: (_, __) => buildLine('统计', '--'),
       ),
     );
   }

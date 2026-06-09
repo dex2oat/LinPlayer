@@ -857,13 +857,18 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
         ? overlayBox.globalToLocal(anchor)
         : null;
     const menuWidth = 280.0;
+    final estimatedMenuHeight = (items.length * 58.0).clamp(120.0, 360.0);
     final screenSize = MediaQuery.of(context).size;
     final left = localAnchor?.dx
         .clamp(16.0, screenSize.width - menuWidth - 16.0)
         .toDouble();
-    final top = localAnchor?.dy
-        .clamp(16.0, screenSize.height - 24.0)
-        .toDouble();
+    final top = localAnchor == null
+        ? null
+        : (localAnchor.dy + 8.0 + estimatedMenuHeight > screenSize.height - 16.0
+              ? (localAnchor.dy - estimatedMenuHeight - 8.0)
+              : (localAnchor.dy + 8.0))
+            .clamp(16.0, screenSize.height - estimatedMenuHeight - 16.0)
+            .toDouble();
 
     return OverlayEntry(
       builder: (context) => Stack(
@@ -883,6 +888,7 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
               top: top,
               child: _MenuSurface(
                 width: menuWidth,
+                maxHeight: estimatedMenuHeight,
                 backgroundColor: widget.backgroundColor,
                 items: items,
                 primaryColor: widget.primaryColor,
@@ -895,6 +901,7 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
               offset: const Offset(0, 8),
               child: _MenuSurface(
                 width: menuWidth,
+                maxHeight: estimatedMenuHeight,
                 backgroundColor: widget.backgroundColor,
                 items: items,
                 primaryColor: widget.primaryColor,
@@ -1162,6 +1169,7 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
                         child: _SelectorCard(
                           label: '版本',
                           value: _buildSourceDisplayName(source, videoStream),
+                          tooltip: fileSummary,
                           scaleFactor: scale,
                           onTapDown: _rememberMenuAnchor,
                           onTap: () => _toggleSourceMenu(info),
@@ -1182,6 +1190,10 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
                                 siblings: audioStreams,
                               ) ??
                               '无',
+                          tooltip: selectedAudio?.readableLabel(
+                                siblings: audioStreams,
+                              ) ??
+                              '无',
                           scaleFactor: scale,
                           onTapDown: _rememberMenuAnchor,
                           onTap: () => _toggleAudioMenu(audioStreams),
@@ -1195,6 +1207,10 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
                         child: _SelectorCard(
                           label: '字幕',
                           value: selectedSubtitle?.readableLabel(
+                                siblings: subtitleStreams,
+                              ) ??
+                              '无',
+                          tooltip: selectedSubtitle?.readableLabel(
                                 siblings: subtitleStreams,
                               ) ??
                               '无',
@@ -1213,6 +1229,10 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
                     child: _SelectorCard(
                       label: '次字幕',
                       value: selectedSecondarySubtitle?.readableLabel(
+                            siblings: secondaryCandidates,
+                          ) ??
+                          '无',
+                      tooltip: selectedSecondarySubtitle?.readableLabel(
                             siblings: secondaryCandidates,
                           ) ??
                           '无',
@@ -1865,6 +1885,7 @@ class _PlayButtonState extends State<_PlayButton> {
 class _SelectorCard extends StatefulWidget {
   final String label;
   final String value;
+  final String? tooltip;
   final double scaleFactor;
   final VoidCallback onTap;
   final ValueChanged<TapDownDetails>? onTapDown;
@@ -1872,6 +1893,7 @@ class _SelectorCard extends StatefulWidget {
   const _SelectorCard({
     required this.label,
     required this.value,
+    this.tooltip,
     required this.scaleFactor,
     required this.onTap,
     this.onTapDown,
@@ -1924,15 +1946,19 @@ class _SelectorCardState extends State<_SelectorCard> {
                 ),
               ),
               SizedBox(height: 4 * scale),
-              Text(
-                widget.value,
-                style: TextStyle(
-                  fontSize: 13 * scale,
-                  color: _detailPrimaryText(context),
-                  fontWeight: FontWeight.w500,
+              Tooltip(
+                message: widget.tooltip ?? widget.value,
+                waitDuration: const Duration(milliseconds: 350),
+                child: Text(
+                  widget.value,
+                  style: TextStyle(
+                    fontSize: 13 * scale,
+                    color: _detailPrimaryText(context),
+                    fontWeight: FontWeight.w500,
+                  ),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
               ),
             ],
           ),
@@ -1960,12 +1986,14 @@ class _MenuItem {
 
 class _MenuSurface extends StatelessWidget {
   final double width;
+  final double maxHeight;
   final Color backgroundColor;
   final List<_MenuItem> items;
   final Color primaryColor;
 
   const _MenuSurface({
     required this.width,
+    required this.maxHeight,
     required this.backgroundColor,
     required this.items,
     required this.primaryColor,
@@ -2005,16 +2033,21 @@ class _MenuSurface extends StatelessWidget {
                 ),
               ],
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: items.map((item) {
-                return _FocusableMenuItem(
-                  icon: item.icon,
-                  label: item.label,
-                  onTap: item.onTap,
-                  primaryColor: primaryColor,
-                );
-              }).toList(),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: maxHeight),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: items.map((item) {
+                    return _FocusableMenuItem(
+                      icon: item.icon,
+                      label: item.label,
+                      onTap: item.onTap,
+                      primaryColor: primaryColor,
+                    );
+                  }).toList(),
+                ),
+              ),
             ),
           ),
         ),

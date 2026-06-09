@@ -33,6 +33,8 @@ class DesktopPlayerScreen extends ConsumerStatefulWidget {
 class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   late VideoPlayerService _playerService;
   final FocusNode _focusNode = FocusNode();
+  bool _initializingPlayer = false;
+  bool _autoPlayAttempted = false;
 
   // 控制栏显隐状态
   bool _showControls = true;
@@ -71,6 +73,14 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   }
 
   void _onPlayerUpdate() {
+    if (!_autoPlayAttempted &&
+        !_initializingPlayer &&
+        _playerService.isInitialized &&
+        !_playerService.isPlaying &&
+        !_playerService.hasError) {
+      _autoPlayAttempted = true;
+      unawaited(_playerService.play());
+    }
     setState(() {});
     _checkSkipOpening();
   }
@@ -99,75 +109,85 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   }
 
   Future<void> _initializePlayer() async {
+    if (_initializingPlayer) return;
+    _initializingPlayer = true;
+    _autoPlayAttempted = false;
     final api = ref.read(apiClientProvider);
-    final item = await api.media.getItemDetails(widget.itemId);
+    try {
+      final item = await api.media.getItemDetails(widget.itemId);
 
-    final playbackInfo = await api.playback.getPlaybackInfo(widget.itemId);
-    final mediaSource = _resolveMediaSource(playbackInfo);
+      final playbackInfo = await api.playback.getPlaybackInfo(widget.itemId);
+      final mediaSource = _resolveMediaSource(playbackInfo);
+      final videoStream = mediaSource?.mediaStreams.where((s) => s.isVideo).firstOrNull;
 
-    final videoUrl = api.playback.getVideoStreamUrl(
-      widget.itemId,
-      mediaSourceId: mediaSource?.id,
-    );
-
-    Duration? startPosition;
-    if (item.userData?.playbackPositionTicks != null) {
-      startPosition = Duration(
-        milliseconds: (item.userData!.playbackPositionTicks! / 10000).round(),
+      final videoUrl = api.playback.getVideoStreamUrl(
+        widget.itemId,
+        mediaSourceId: mediaSource?.id,
+        container: mediaSource?.container ?? videoStream?.codec,
+        playSessionId: '${widget.itemId}-${DateTime.now().microsecondsSinceEpoch}',
       );
+
+      Duration? startPosition;
+      if (item.userData?.playbackPositionTicks != null) {
+        startPosition = Duration(
+          milliseconds: (item.userData!.playbackPositionTicks! / 10000).round(),
+        );
+      }
+
+      ref.read(currentPlayingItemProvider.notifier).state = item;
+      ref.read(selectedMediaSourceProvider.notifier).state = mediaSource?.id;
+
+      final coreString = normalizePlayerCore(ref.read(playerCoreProvider));
+      final coreType = coreString == 'mpv' ? PlayerCoreType.mpv : PlayerCoreType.exoPlayer;
+
+      final dolbyVisionFix = coreType == PlayerCoreType.mpv ? ref.read(mpvDolbyVisionFixProvider) : false;
+      final useLibass = coreType == PlayerCoreType.exoPlayer ? ref.read(exoLibassProvider) : false;
+      final preferredSubtitleLanguage = ref.read(preferredSubtitleLanguageProvider);
+
+      await _playerService.initialize(
+        videoUrl: videoUrl,
+        itemId: widget.itemId,
+        mediaSourceId: mediaSource?.id,
+        startPosition: startPosition,
+        coreType: coreType,
+        dolbyVisionFix: dolbyVisionFix,
+        useLibass: useLibass,
+        preferredSubtitleLanguage: preferredSubtitleLanguage,
+        onStart: (info) async {
+          try { await api.playback.reportPlaybackStart(info); } catch (_) {}
+        },
+        onProgress: (info) async {
+          try { await api.playback.reportPlaybackProgress(info); } catch (_) {}
+        },
+        onStop: (info) async {
+          try { await api.playback.reportPlaybackStopped(info); } catch (_) {}
+        },
+      );
+
+      _playerService.setSubtitleSize(ref.read(subtitleSizeProvider));
+      _playerService.setSubtitlePosition(ref.read(subtitlePositionProvider));
+      _playerService.setSubtitleDelay(ref.read(subtitleDelayProvider));
+      _playerService.setSubtitleFont(ref.read(subtitleFontProvider));
+      _playerService.setSubtitleBackground(ref.read(subtitleBackgroundProvider));
+      _playerService.setAspectRatio(ref.read(aspectRatioProvider));
+
+      final audioStreams = mediaSource?.mediaStreams.where((s) => s.isAudio).toList() ?? [];
+      final selectedAudioIndex = ref.read(audioTrackProvider);
+      if (selectedAudioIndex != null) {
+        await _applyInitialAudioTrack(audioStreams, selectedAudioIndex);
+      }
+
+      final selectedSubtitleIndex = ref.read(subtitleTrackProvider);
+      if (selectedSubtitleIndex != null) {
+        await _applyInitialSubtitleTrack(selectedSubtitleIndex);
+      }
+
+      await _playerService.play();
+      _autoPlayAttempted = true;
+      _startHideControlsTimer();
+    } finally {
+      _initializingPlayer = false;
     }
-
-    ref.read(currentPlayingItemProvider.notifier).state = item;
-    ref.read(selectedMediaSourceProvider.notifier).state = mediaSource?.id;
-
-    final coreString = normalizePlayerCore(ref.read(playerCoreProvider));
-    final coreType = coreString == 'mpv' ? PlayerCoreType.mpv : PlayerCoreType.exoPlayer;
-
-    final dolbyVisionFix = coreType == PlayerCoreType.mpv ? ref.read(mpvDolbyVisionFixProvider) : false;
-    final useLibass = coreType == PlayerCoreType.exoPlayer ? ref.read(exoLibassProvider) : false;
-    final preferredSubtitleLanguage = ref.read(preferredSubtitleLanguageProvider);
-
-    await _playerService.initialize(
-      videoUrl: videoUrl,
-      itemId: widget.itemId,
-      mediaSourceId: mediaSource?.id,
-      startPosition: startPosition,
-      coreType: coreType,
-      dolbyVisionFix: dolbyVisionFix,
-      useLibass: useLibass,
-      preferredSubtitleLanguage: preferredSubtitleLanguage,
-      onStart: (info) async {
-        try { await api.playback.reportPlaybackStart(info); } catch (_) {}
-      },
-      onProgress: (info) async {
-        try { await api.playback.reportPlaybackProgress(info); } catch (_) {}
-      },
-      onStop: (info) async {
-        try { await api.playback.reportPlaybackStopped(info); } catch (_) {}
-      },
-    );
-
-    // 应用初始设置
-    _playerService.setSubtitleSize(ref.read(subtitleSizeProvider));
-    _playerService.setSubtitlePosition(ref.read(subtitlePositionProvider));
-    _playerService.setSubtitleDelay(ref.read(subtitleDelayProvider));
-    _playerService.setSubtitleFont(ref.read(subtitleFontProvider));
-    _playerService.setSubtitleBackground(ref.read(subtitleBackgroundProvider));
-    _playerService.setAspectRatio(ref.read(aspectRatioProvider));
-
-    // 初始音轨/字幕
-    final audioStreams = mediaSource?.mediaStreams.where((s) => s.isAudio).toList() ?? [];
-    final selectedAudioIndex = ref.read(audioTrackProvider);
-    if (selectedAudioIndex != null) {
-      await _applyInitialAudioTrack(audioStreams, selectedAudioIndex);
-    }
-
-    final selectedSubtitleIndex = ref.read(subtitleTrackProvider);
-    if (selectedSubtitleIndex != null) {
-      await _applyInitialSubtitleTrack(selectedSubtitleIndex);
-    }
-
-    _startHideControlsTimer();
   }
 
   MediaSource? _resolveMediaSource(PlaybackInfo playbackInfo) {
