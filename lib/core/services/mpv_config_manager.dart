@@ -158,9 +158,8 @@ class MpvConfigManager {
     buffer.writeln('sub-ass=yes');
     buffer.writeln('sub-ass-override=no');
     buffer.writeln('slang=chi,zh,eng,en');
-    // 使用 blend-subtitles=video 让 MPV 将字幕混合到视频帧中
-    // 这样字幕会正确显示在视频上，而不是作为单独层
-    buffer.writeln('blend-subtitles=video');
+    // 保持默认字幕合成路径，避免强制视频混合引入额外渲染负担。
+    buffer.writeln('blend-subtitles=no');
 
     final configPath = configFilePath;
     final file = File(configPath);

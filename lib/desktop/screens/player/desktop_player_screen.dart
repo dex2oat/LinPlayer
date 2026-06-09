@@ -39,10 +39,12 @@ class DesktopPlayerScreen extends ConsumerStatefulWidget {
 
 class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   static const MethodChannel _windowChannel = MethodChannel('com.linplayer/window');
+  static const Duration _uiRefreshInterval = Duration(milliseconds: 200);
 
   late VideoPlayerService _playerService;
   final FocusNode _focusNode = FocusNode();
   bool _initializingPlayer = false;
+  Timer? _uiRefreshTimer;
 
   // 控制栏显隐状态
   bool _showControls = true;
@@ -59,6 +61,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   // 跳过片头按钮
   bool _showSkipButton = false;
   Timer? _skipButtonTimer;
+  bool _autoSkipTriggeredForCurrentOpening = false;
 
   // 鼠标是否在控制栏区域内
   bool _mouseInControlsArea = false;
@@ -71,6 +74,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   bool _showStatsOverlay = false;
   Map<String, String> _playbackStats = {};
   Timer? _statsRefreshTimer;
+  bool _statsRefreshInFlight = false;
   MediaSource? _currentMediaSource;
   String? _displayTitle;
 
@@ -78,10 +82,14 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   void initState() {
     super.initState();
     _playerService = VideoPlayerService();
-    _playerService.addListener(_onPlayerUpdate);
     _initializePlayer();
     _focusNode.requestFocus();
     unawaited(_syncFullscreenState());
+    _uiRefreshTimer = Timer.periodic(_uiRefreshInterval, (_) {
+      if (!mounted) return;
+      _checkSkipOpening();
+      setState(() {});
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.listenManual(audioTrackProvider, (prev, next) {
         if (_initializingPlayer || prev == next || next == null) {
@@ -132,22 +140,24 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     });
   }
 
-  void _onPlayerUpdate() {
-    setState(() {});
-    _checkSkipOpening();
-  }
-
   void _checkSkipOpening() {
     final openingStart = ref.read(skipOpeningStartProvider);
     final openingEnd = ref.read(skipOpeningEndProvider);
     final autoSkip = ref.read(skipAutoModeProvider);
-    if (openingStart <= 0 || openingEnd <= 0 || openingEnd <= openingStart) return;
+    if (openingStart <= 0 || openingEnd <= 0 || openingEnd <= openingStart) {
+      _autoSkipTriggeredForCurrentOpening = false;
+      return;
+    }
 
     final pos = _playerService.position.inSeconds;
     final inOpening = pos >= openingStart && pos < openingEnd;
 
     if (inOpening && autoSkip) {
-      _playerService.seekTo(Duration(seconds: openingEnd));
+      if (_autoSkipTriggeredForCurrentOpening) {
+        return;
+      }
+      _autoSkipTriggeredForCurrentOpening = true;
+      unawaited(_playerService.seekTo(Duration(seconds: openingEnd)));
     } else if (inOpening && !_showSkipButton) {
       setState(() => _showSkipButton = true);
       _skipButtonTimer?.cancel();
@@ -157,6 +167,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     } else if (!inOpening && _showSkipButton) {
       setState(() => _showSkipButton = false);
       _skipButtonTimer?.cancel();
+    } else if (!inOpening) {
+      _autoSkipTriggeredForCurrentOpening = false;
     }
   }
 
@@ -259,12 +271,16 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
         },
       );
 
-      _playerService.setSubtitleSize(ref.read(subtitleSizeProvider));
-      _playerService.setSubtitlePosition(ref.read(subtitlePositionProvider));
-      _playerService.setSubtitleDelay(ref.read(subtitleDelayProvider));
-      _playerService.setSubtitleFont(ref.read(subtitleFontProvider));
-      _playerService.setSubtitleBackground(ref.read(subtitleBackgroundProvider));
-      _playerService.setAspectRatio(ref.read(aspectRatioProvider));
+      await Future.wait([
+        _playerService.setSubtitleSize(ref.read(subtitleSizeProvider)),
+        _playerService.setSubtitlePosition(ref.read(subtitlePositionProvider)),
+        _playerService.setSubtitleDelay(ref.read(subtitleDelayProvider)),
+        _playerService.setSubtitleFont(ref.read(subtitleFontProvider)),
+        _playerService.setSubtitleBackground(ref.read(subtitleBackgroundProvider)),
+        _playerService.setAspectRatio(ref.read(aspectRatioProvider)),
+      ]);
+
+      await _playerService.play();
 
       final audioStreams = mediaSource?.mediaStreams.where((s) => s.isAudio).toList() ?? [];
       final subtitleStreams = mediaSource?.mediaStreams.where((s) => s.isSubtitle).toList() ?? [];
@@ -293,12 +309,6 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
         ref.read(subtitleTrackProvider.notifier).state = null;
       }
 
-      await _playerService.play();
-      if (coreType == PlayerCoreType.mpv) {
-        final currentPosition = _playerService.position;
-        await Future<void>.delayed(const Duration(milliseconds: 16));
-        await _playerService.seekTo(currentPosition);
-      }
       _startHideControlsTimer();
     } finally {
       _initializingPlayer = false;
@@ -405,8 +415,9 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     final codec = (target.codec ?? '').toLowerCase();
     final targetTitle = target.displayTitle ?? target.title;
     final isExternal = target.isExternal == true;
+    final isGraphical = _isGraphicalSubtitleCodec(codec);
 
-    if (!isExternal) {
+    if (!isExternal && !isGraphical) {
       _playerService.setSubtitleSelectionHint(codec: codec, title: targetTitle);
       final trackId = _matchSubtitleTrackId(
         subtitleStreams,
@@ -490,11 +501,12 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
       title: targetTitle,
     );
     if (_playerService.coreType == PlayerCoreType.mpv) {
-      final directMatch = _matchMpvSubtitleTrackByType(
+      final directMatch = _matchLegacyMpvSubtitleTrack(
         subtitleTracks,
         targetLang: targetLang,
         targetTitle: targetTitle,
-        targetKind: kind,
+        targetCodec: targetCodec,
+        targetStreamIndex: targetStreamIndex,
       );
       if (directMatch != null && directMatch.isNotEmpty) {
         return directMatch;
@@ -517,30 +529,35 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     );
   }
 
-  String? _matchMpvSubtitleTrackByType(
+  String? _matchLegacyMpvSubtitleTrack(
     List<Map<String, dynamic>> subtitleTracks, {
     required String? targetLang,
     required String? targetTitle,
-    required SubtitleKind targetKind,
+    required String? targetCodec,
+    required int targetStreamIndex,
   }) {
-    var candidates = subtitleTracks.where((track) {
-      final trackKind = SubtitleTrackMatcher.classifyKind(
-        codec: track['codec']?.toString(),
-        title: track['title']?.toString(),
-        isBitmap: track['isBitmap'] == true || track['type'] == 'bitmap',
-        isAss: track['isAss'] == true,
-      );
-      if (targetKind == SubtitleKind.bitmap) {
-        return trackKind == SubtitleKind.bitmap;
-      }
-      if (targetKind == SubtitleKind.ass) {
-        return trackKind == SubtitleKind.ass;
-      }
-      return trackKind == SubtitleKind.text;
-    }).toList();
+    final codec = targetCodec?.toLowerCase() ?? '';
+    final isGraphical = codec == 'pgssub' ||
+        codec == 'sup' ||
+        codec == 'pgs' ||
+        codec == 'dvdsub' ||
+        codec == 'vobsub' ||
+        codec.contains('hdmv') ||
+        codec.contains('pgs');
+    final isAss = codec == 'ass' || codec == 'ssa';
+
+    var candidates = isGraphical
+        ? subtitleTracks
+            .where((track) => track['type'] == 'bitmap' || track['isBitmap'] == true)
+            .toList()
+        : isAss
+            ? subtitleTracks
+                .where((track) => track['isAss'] == true || track['type'] == 'text')
+                .toList()
+            : subtitleTracks;
 
     if (candidates.isEmpty) {
-      return null;
+      return subtitleTracks.isNotEmpty ? subtitleTracks.first['id']?.toString() : null;
     }
 
     if (targetTitle != null && targetTitle.isNotEmpty) {
@@ -560,15 +577,40 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
             language == 'chi' ||
             language == 'zh';
       }).toList();
-      if (langMatches.length == 1) {
+      if (langMatches.length == 1) return langMatches.first['id']?.toString();
+      if (langMatches.length > 1 && targetTitle != null && targetTitle.isNotEmpty) {
+        for (final track in langMatches) {
+          final title = (track['title'] ?? '').toString();
+          if (title.isNotEmpty && _titlesMatch(targetTitle, title)) {
+            return track['id']?.toString();
+          }
+        }
+        if (targetStreamIndex >= 0 && targetStreamIndex < langMatches.length) {
+          return langMatches[targetStreamIndex]['id']?.toString();
+        }
         return langMatches.first['id']?.toString();
-      }
-      if (langMatches.length > 1) {
-        candidates = langMatches;
       }
     }
 
-    return candidates.length == 1 ? candidates.first['id']?.toString() : null;
+    final embySubIndex = _extractEmbySubtitleIndex(targetStreamIndex, subtitleTracks);
+    if (embySubIndex >= 0 && embySubIndex < candidates.length) {
+      return candidates[embySubIndex]['id']?.toString();
+    }
+
+    return candidates.first['id']?.toString();
+  }
+
+  int _extractEmbySubtitleIndex(
+    int targetStreamIndex,
+    List<Map<String, dynamic>> subtitleTracks,
+  ) {
+    if (subtitleTracks.isEmpty) return targetStreamIndex;
+    final minId = subtitleTracks
+        .map((track) => int.tryParse(track['id']?.toString() ?? ''))
+        .whereType<int>()
+        .fold<int?>(null, (prev, value) => prev == null || value < prev ? value : prev);
+    if (minId == null) return targetStreamIndex;
+    return targetStreamIndex - minId;
   }
 
   int _typedSubtitleStreamPosition(
@@ -1497,8 +1539,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     _speedLongPressTimer?.cancel();
     _volumeSliderTimer?.cancel();
     _statsRefreshTimer?.cancel();
+    _uiRefreshTimer?.cancel();
     _focusNode.dispose();
-    _playerService.removeListener(_onPlayerUpdate);
     _playerService.dispose();
     super.dispose();
   }
@@ -1522,12 +1564,17 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   }
 
   Future<void> _refreshStats() async {
-    if (!_showStatsOverlay || !mounted) return;
-    final stats = await _playerService.getPlaybackStats();
-    if (mounted) {
-      setState(() {
-        _playbackStats = stats;
-      });
+    if (!_showStatsOverlay || !mounted || _statsRefreshInFlight) return;
+    _statsRefreshInFlight = true;
+    try {
+      final stats = await _playerService.getPlaybackStats();
+      if (mounted && _showStatsOverlay) {
+        setState(() {
+          _playbackStats = stats;
+        });
+      }
+    } finally {
+      _statsRefreshInFlight = false;
     }
   }
 
@@ -2160,10 +2207,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     final wasPlaying = _playerService.isPlaying;
 
     ref.read(hardwareDecodingProvider.notifier).state = !current;
-    _playerService.removeListener(_onPlayerUpdate);
     await _playerService.dispose();
     _playerService = VideoPlayerService();
-    _playerService.addListener(_onPlayerUpdate);
     await _initializePlayer();
     if (savedPosition > Duration.zero) {
       await _playerService.seekTo(savedPosition);

@@ -41,8 +41,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
   String? _secondarySid;
   bool _hasBitmapSubtitle = false;
   bool _currentSubIsAss = false;
-  bool _needsInitialPlaybackNudge = false;
-  Duration _initialPlaybackPosition = Duration.zero;
 
   List<Map<String, dynamic>> _tracks = [];
   List<SubtitleTrack> _subtitleTracks = [];
@@ -128,8 +126,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
       _subtitleTracks = [];
       _audioTracks = [];
       _secondarySid = null;
-      _needsInitialPlaybackNudge = false;
-      _initialPlaybackPosition = startPosition ?? Duration.zero;
 
       await _configManager.initialize();
       await _configManager.writeConfig(
@@ -170,9 +166,8 @@ class MpvPlayerAdapter implements PlayerAdapter {
         // 默认关闭次字幕可见性，只有用户明确选择次字幕时才开启
         // 避免同时显示两个字幕（主字幕+次字幕）
         await np.setProperty('secondary-sub-visibility', 'no');
-        // 使用 blend-subtitles=video 让 MPV 将字幕混合到视频帧中
-        // 这样字幕会正确显示在视频上，而不是作为单独层
-        await np.setProperty('blend-subtitles', 'video');
+        // 保持 mpv 默认字幕合成路径，避免强制视频混合导致字幕/视频一起掉帧。
+        await np.setProperty('blend-subtitles', 'no');
         await np.setProperty('sub-visibility', 'yes');
         await np.setProperty('hwdec', hardwareDecoding ? 'auto-safe' : 'no');
         if (_isHttpUrl(videoUrl)) {
@@ -194,8 +189,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
       if (startPosition != null && startPosition > Duration.zero) {
         await _player!.seek(startPosition);
       }
-
-      _needsInitialPlaybackNudge = true;
 
       _isInitialized = true;
       _callbacks?.onDurationChanged?.call();
@@ -268,9 +261,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
         );
         final isBitmap = kind == SubtitleKind.bitmap;
         final isAss = kind == SubtitleKind.ass;
-        if (isBitmap) {
-          _hasBitmapSubtitle = true;
-        }
         trackList.add({
           'id': track.id,
           'type': isBitmap ? 'bitmap' : 'text',
@@ -928,17 +918,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
     if (_player == null) return;
     await _player!.play();
     _isCompleted = false;
-    if (_needsInitialPlaybackNudge) {
-      _needsInitialPlaybackNudge = false;
-      final nudgePosition =
-          _position > Duration.zero ? _position : _initialPlaybackPosition;
-      try {
-        await Future<void>.delayed(const Duration(milliseconds: 16));
-        await _player!.seek(nudgePosition);
-      } catch (e) {
-        _logger.w('MpvAdapter', '初始起播刷新失败: $e');
-      }
-    }
   }
 
   @override
@@ -1000,8 +979,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
     _isBuffering = false;
     _position = Duration.zero;
     _duration = Duration.zero;
-    _needsInitialPlaybackNudge = false;
-    _initialPlaybackPosition = Duration.zero;
     _tracks = [];
     _subtitleTracks = [];
     _audioTracks = [];
