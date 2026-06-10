@@ -415,9 +415,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     final codec = (target.codec ?? '').toLowerCase();
     final targetTitle = target.displayTitle ?? target.title;
     final isExternal = target.isExternal == true;
-    final isGraphical = _isGraphicalSubtitleCodec(codec);
 
-    if (!isExternal && !isGraphical) {
+    if (!isExternal) {
       _playerService.setSubtitleSelectionHint(codec: codec, title: targetTitle);
       final trackId = _matchSubtitleTrackId(
         subtitleStreams,
@@ -1494,6 +1493,21 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
       rows.add(_buildStatRow('缓冲', '${cacheDuration}s'));
     }
 
+    final cacheSpeed = _playbackStats['cache-speed'];
+    if (cacheSpeed != null && cacheSpeed.isNotEmpty) {
+      rows.add(_buildStatRow('缓存速率', '${cacheSpeed}x'));
+    }
+
+    final pausedForCache = _playbackStats['paused-for-cache'];
+    if (pausedForCache != null && pausedForCache.isNotEmpty) {
+      rows.add(_buildStatRow('缓存等待', pausedForCache == 'yes' ? '是' : pausedForCache));
+    }
+
+    final cacheBufferingState = _playbackStats['cache-buffering-state'];
+    if (cacheBufferingState != null && cacheBufferingState.isNotEmpty) {
+      rows.add(_buildStatRow('缓存状态', cacheBufferingState));
+    }
+
     // 播放状态
     rows.add(_buildStatRow('速度', '${_playerService.speed.toStringAsFixed(2)}x'));
     rows.add(_buildStatRow('位置', '${_formatDuration(_playerService.position)} / ${_formatDuration(_playerService.duration)}'));
@@ -1608,8 +1622,38 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
 
                 // 缓冲指示器
                 if (_playerService.isBuffering)
-                  const Center(
-                    child: CircularProgressIndicator(color: Colors.white),
+                  Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.72),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2.4,
+                            ),
+                          ),
+                          SizedBox(width: 12),
+                          Text(
+                            '正在缓冲，等待更多数据...',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
 
                 // 错误显示

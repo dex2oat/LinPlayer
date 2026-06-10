@@ -41,6 +41,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
   String? _secondarySid;
   bool _hasBitmapSubtitle = false;
   bool _currentSubIsAss = false;
+  bool _usingExternalSubtitle = false;
 
   List<Map<String, dynamic>> _tracks = [];
   List<SubtitleTrack> _subtitleTracks = [];
@@ -126,6 +127,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
       _subtitleTracks = [];
       _audioTracks = [];
       _secondarySid = null;
+      _usingExternalSubtitle = false;
 
       await _configManager.initialize();
       await _configManager.writeConfig(
@@ -172,13 +174,16 @@ class MpvPlayerAdapter implements PlayerAdapter {
         await np.setProperty('hwdec', hardwareDecoding ? 'auto-safe' : 'no');
         if (_isHttpUrl(videoUrl)) {
           await np.setProperty('cache', 'yes');
-          await np.setProperty('cache-pause', 'no');
-          await np.setProperty('cache-secs', '120');
-          await np.setProperty('demuxer-max-bytes', '268435456');
-          await np.setProperty('demuxer-max-back-bytes', '134217728');
-          await np.setProperty('demuxer-readahead-secs', '90');
+          await np.setProperty('cache-pause', 'yes');
+          await np.setProperty('cache-pause-wait', '8');
+          await np.setProperty('cache-secs', '300');
+          await np.setProperty('demuxer-max-bytes', '536870912');
+          await np.setProperty('demuxer-max-back-bytes', '268435456');
+          await np.setProperty('demuxer-readahead-secs', '180');
           await np.setProperty('network-timeout', '20');
-          await np.setProperty('stream-buffer-size', '4194304');
+          await np.setProperty('stream-buffer-size', '33554432');
+          await np.setProperty('cache-on-disk', 'no');
+          await np.setProperty('interpolation', 'no');
           await np.setProperty('prefetch-playlist', 'no');
         }
       }
@@ -235,6 +240,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
       _subtitleTracks = tracks.subtitle;
       _audioTracks = tracks.audio;
       _hasBitmapSubtitle = false;
+      _usingExternalSubtitle = false;
 
       final trackList = <Map<String, dynamic>>[];
       for (final track in tracks.video) {
@@ -368,6 +374,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
         );
         _hasBitmapSubtitle = kind == SubtitleKind.bitmap;
         _currentSubIsAss = kind == SubtitleKind.ass;
+        _usingExternalSubtitle = false;
         _logger.i('MpvAdapter', '字幕轨道已选择: id=${target.id}, title=${target.title}, lang=${target.language}, codec=${target.codec}, bitmap=$_hasBitmapSubtitle, ass=$_currentSubIsAss');
         await _player!.setSubtitleTrack(target);
         _markTrackSelected(subtitleTrackId: target.id.toString());
@@ -375,6 +382,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
         _logger.w('MpvAdapter', '未找到字幕轨道: id=$trackId, 可用: ${realTracks.map((t) => '${t.id}/${t.language}/${t.codec}').toList()}');
         await _player!.setSubtitleTrack(SubtitleTrack.auto());
         _selectedSubtitleTrackId = null;
+        _usingExternalSubtitle = false;
         _markTrackSelected();
       }
       _pendingSubtitleCodec = null;
@@ -455,6 +463,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
       );
       _hasBitmapSubtitle = kind == SubtitleKind.bitmap;
       _currentSubIsAss = kind == SubtitleKind.ass;
+      _usingExternalSubtitle = false;
       await _player!.setSubtitleTrack(target);
       _markTrackSelected(subtitleTrackId: target.id.toString());
       await _applySubtitleRuntimeProperties();
@@ -486,6 +495,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
       _selectedSubtitleTrackId = null;
       _hasBitmapSubtitle = false;
       _currentSubIsAss = false;
+      _usingExternalSubtitle = false;
       _markTrackSelected();
     } catch (e, stackTrace) {
       _logger.eWithStack('MpvAdapter', '关闭字幕失败', e, stackTrace);
@@ -508,7 +518,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
   @override
   Future<void> loadLibassSubtitle(String path) async {
     _logger.i('MpvAdapter', '加载外挂字幕: $path');
-    if (_player == null) return;
+    if (_player == null || !_isInitialized) return;
 
     try {
       if (_isHttpUrl(path)) {
@@ -518,8 +528,15 @@ class MpvPlayerAdapter implements PlayerAdapter {
         final isPgs = ext == 'pgs' || ext == 'sup' || path.contains('format=pgs') || path.contains('Codec=pgs');
         _currentSubIsAss = isAss;
         _hasBitmapSubtitle = isPgs;
+        _usingExternalSubtitle = true;
         _logger.i('MpvAdapter', 'HTTP字幕类型: ext=$ext, isAss=$_currentSubIsAss, isBitmap=$_hasBitmapSubtitle');
-        await _player!.setSubtitleTrack(SubtitleTrack.uri(path));
+        final np = _nativePlayer;
+        if (_hasBitmapSubtitle && np != null) {
+          await np.command(['sub-add', path, 'select', 'External Subtitle', 'und']);
+        } else {
+          await _player!.setSubtitleTrack(SubtitleTrack.uri(path));
+        }
+        _selectedSubtitleTrackId = 'external';
         await _applySubtitleRuntimeProperties();
         _logger.i('MpvAdapter', 'HTTP外挂字幕加载成功');
         return;
@@ -531,13 +548,17 @@ class MpvPlayerAdapter implements PlayerAdapter {
         _logger.i('MpvAdapter', '图形字幕 (PGS/SUP)，直接加载: $path');
         _hasBitmapSubtitle = true;
         _currentSubIsAss = false;
+        _usingExternalSubtitle = true;
         // 强制关闭 libass 以允许 MPV 原生渲染位图字幕
         final np = _nativePlayer;
         if (np != null) {
           await np.setProperty('sub-ass', 'no');
           await np.setProperty('sub-ass-override', 'no');
+          await np.command(['sub-add', path, 'select', 'External Subtitle', 'und']);
+        } else {
+          await _player!.setSubtitleTrack(SubtitleTrack.uri(path));
         }
-        await _player!.setSubtitleTrack(SubtitleTrack.uri(path));
+        _selectedSubtitleTrackId = 'external';
         await _applySubtitleRuntimeProperties();
         _logger.i('MpvAdapter', '图形字幕加载完成，等待渲染');
         return;
@@ -552,6 +573,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
       if (ext == 'ass' || ext == 'ssa') {
         _currentSubIsAss = true;
         _hasBitmapSubtitle = false;
+        _usingExternalSubtitle = true;
         if (_subtitleFont != null && _subtitleFont != '默认') {
           processedPath = await SubtitleProcessor.modifyAssStyle(
             processedPath,
@@ -561,10 +583,12 @@ class MpvPlayerAdapter implements PlayerAdapter {
       } else {
         _currentSubIsAss = false;
         _hasBitmapSubtitle = false;
+        _usingExternalSubtitle = true;
         _logger.i('MpvAdapter', '文本字幕 (SRT/VTT等)，isAss=false');
       }
 
       await _player!.setSubtitleTrack(SubtitleTrack.uri(processedPath));
+      _selectedSubtitleTrackId = 'external';
       await _applySubtitleRuntimeProperties();
 
       _logger.i('MpvAdapter', '外挂字幕加载成功: $processedPath');
@@ -586,6 +610,9 @@ class MpvPlayerAdapter implements PlayerAdapter {
         await np.setProperty('sub-ass-override', 'no');
         await np.setProperty('sub-back-color', '#00000000');
         await np.setProperty('sub-visibility', 'yes');
+        if (_usingExternalSubtitle) {
+          await np.setProperty('sub-pos', '100');
+        }
         // 位图字幕保留轨道原生布局，只应用缩放。
         await np.setProperty('sub-scale', _subtitleScale.toStringAsFixed(2));
         _logger.i('MpvAdapter', '已应用图形字幕(PGS/SUP)配置: scale=$_subtitleScale, ass=no');
@@ -870,6 +897,10 @@ class MpvPlayerAdapter implements PlayerAdapter {
       'file-size',
       'path',
       'demuxer-cache-duration',
+      'cache-speed',
+      'paused-for-cache',
+      'cache-buffering-state',
+      'demuxer-cache-state',
       'decoder-frame-drop-count',
       'frame-drop-count',
       'hwdec-current',
