@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../../core/services/app_logger.dart';
 import '../../../core/services/subtitle_track_matcher.dart';
 import '../../../core/services/video_player_service.dart';
 import '../../../core/utils/playback_url_resolver.dart';
@@ -417,9 +418,19 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     final codec = (target.codec ?? '').toLowerCase();
     final targetTitle = target.displayTitle ?? target.title;
     final isExternal = target.isExternal == true;
+    final subtitleKind = SubtitleTrackMatcher.classifyKind(
+      codec: target.codec,
+      title: targetTitle,
+    );
     final forceExternalBitmapSubtitle =
         _playerService.coreType == PlayerCoreType.mpv &&
-        _isGraphicalSubtitleCodec(codec);
+        subtitleKind == SubtitleKind.bitmap;
+
+    AppLogger().i(
+      'DesktopPlayer',
+      '字幕切换请求: index=${target.index}, codec=${target.codec}, title=$targetTitle, '
+      'external=$isExternal, kind=$subtitleKind, forceBitmapExternal=$forceExternalBitmapSubtitle',
+    );
 
     if (!isExternal && !forceExternalBitmapSubtitle) {
       _playerService.setSubtitleSelectionHint(codec: codec, title: targetTitle);
@@ -444,7 +455,12 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     // file and render through its native bitmap pipeline.
     _playerService.setSubtitleSelectionHint();
     await _playerService.deselectSubtitleTrack();
-    final subtitleFile = await _prepareExternalSubtitleFile(target, codec);
+    final subtitleFile = await _prepareExternalSubtitleFile(
+      target,
+      codec,
+      title: targetTitle,
+      kind: subtitleKind,
+    );
     await _loadExternalSubtitleWithRetry(subtitleFile);
   }
 
@@ -663,67 +679,94 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     return false;
   }
 
-  bool _isAssSubtitleCodec(String codec) {
-    return SubtitleTrackMatcher.isAssSubtitleCodec(codec);
-  }
-
-  bool _isGraphicalSubtitleCodec(String codec) {
-    return SubtitleTrackMatcher.isGraphicalSubtitleCodec(codec);
-  }
-
-  String _embySubtitleCodec(String codec) {
+  String _embySubtitleCodec(String codec, {String? title, SubtitleKind? kind}) {
     final lower = codec.toLowerCase();
+    final resolvedKind = kind ??
+        SubtitleTrackMatcher.classifyKind(
+          codec: codec,
+          title: title,
+        );
     if (lower == 'srt' || lower == 'subrip') {
       return 'srt';
     }
     if (lower == 'vtt' || lower == 'webvtt') {
       return 'vtt';
     }
-    if (_isGraphicalSubtitleCodec(lower)) {
+    if (resolvedKind == SubtitleKind.bitmap) {
       return 'pgs';
     }
     return 'ass';
   }
 
-  String _subtitleFileExtension(String codec) {
+  String _subtitleFileExtension(String codec, {String? title, SubtitleKind? kind}) {
     final lower = codec.toLowerCase();
+    final resolvedKind = kind ??
+        SubtitleTrackMatcher.classifyKind(
+          codec: codec,
+          title: title,
+        );
     if (lower == 'srt' || lower == 'subrip') {
       return 'srt';
     }
     if (lower == 'vtt' || lower == 'webvtt') {
       return 'vtt';
     }
-    if (_isAssSubtitleCodec(lower)) {
+    if (resolvedKind == SubtitleKind.ass) {
       return 'ass';
     }
-    if (_isGraphicalSubtitleCodec(lower)) {
+    if (resolvedKind == SubtitleKind.bitmap) {
       return 'sup';
     }
     return 'srt';
   }
 
-  Future<File> _prepareExternalSubtitleFile(MediaStream target, String codec) async {
+  Future<File> _prepareExternalSubtitleFile(
+    MediaStream target,
+    String codec, {
+    String? title,
+    SubtitleKind? kind,
+  }) async {
     final currentSource = _currentMediaSource;
     if (currentSource == null) {
       throw StateError('当前媒体源为空，无法加载外挂字幕');
     }
+    final resolvedKind = kind ??
+        SubtitleTrackMatcher.classifyKind(
+          codec: codec,
+          title: title,
+        );
+    final embyCodec = _embySubtitleCodec(
+      codec,
+      title: title,
+      kind: resolvedKind,
+    );
+    final fileExtension = _subtitleFileExtension(
+      codec,
+      title: title,
+      kind: resolvedKind,
+    );
     final api = ref.read(apiClientProvider);
     final subtitleUrl = api.playback.getSubtitleStreamUrl(
       widget.itemId,
       currentSource.id,
       target.index,
-      _embySubtitleCodec(codec),
+      embyCodec,
     );
 
     final tempDir = await getTemporaryDirectory();
     final file = File(
       p.join(
         tempDir.path,
-        'desktop_subtitle_${widget.itemId}_${target.index}.${_subtitleFileExtension(codec)}',
+        'desktop_subtitle_${widget.itemId}_${target.index}.$fileExtension',
       ),
     );
 
-    final shouldForceRefresh = _isGraphicalSubtitleCodec(codec);
+    final shouldForceRefresh = resolvedKind == SubtitleKind.bitmap;
+    AppLogger().i(
+      'DesktopPlayer',
+      '准备外挂字幕文件: index=${target.index}, codec=${target.codec}, title=$title, '
+      'kind=$resolvedKind, embyCodec=$embyCodec, file=${file.path}',
+    );
     if (shouldForceRefresh && file.existsSync()) {
       await file.delete();
     }
@@ -755,6 +798,10 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     Object? lastError;
     for (var attempt = 1; attempt <= 3; attempt++) {
       try {
+        AppLogger().i(
+          'DesktopPlayer',
+          '尝试加载外挂字幕: attempt=$attempt, path=${subtitleFile.path}',
+        );
         await _playerService.loadLibassSubtitle(subtitleFile.path);
         return;
       } catch (e) {
@@ -762,6 +809,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
         if (attempt >= 3) {
           break;
         }
+        await _playerService.deselectSubtitleTrack();
         await Future.delayed(const Duration(milliseconds: 220));
       }
     }
@@ -1681,36 +1729,47 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
 
                 // 缓冲指示器
                 if (_playerService.isBuffering)
-                  Center(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.72),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2.4,
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: AnimatedOpacity(
+                        opacity: 1,
+                        duration: const Duration(milliseconds: 140),
+                        curve: Curves.easeOut,
+                        child: Container(
+                          color: Colors.black.withValues(alpha: 0.88),
+                          alignment: Alignment.center,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.06),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2.4,
+                                  ),
+                                ),
+                                SizedBox(width: 12),
+                                Text(
+                                  '正在缓冲，等待更多数据...',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 0.2,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          SizedBox(width: 12),
-                          Text(
-                            '正在缓冲，等待更多数据...',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 0.2,
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   ),

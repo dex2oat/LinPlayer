@@ -46,6 +46,8 @@ class MpvPlayerAdapter implements PlayerAdapter {
   bool _usingExternalSubtitle = false;
   bool _isSeekBuffering = false;
   Timer? _seekBufferingFallbackTimer;
+  Timer? _seekBufferingPollTimer;
+  bool _isSeekInFlight = false;
 
   List<Map<String, dynamic>> _tracks = [];
   List<SubtitleTrack> _subtitleTracks = [];
@@ -239,15 +241,20 @@ class MpvPlayerAdapter implements PlayerAdapter {
           await np.setProperty('cache', 'yes');
           await np.setProperty('cache-pause', 'yes');
           await np.setProperty('cache-pause-wait', '8');
+          await np.setProperty('cache-pause-initial', 'yes');
           await np.setProperty('cache-secs', '300');
           await np.setProperty('demuxer-max-bytes', '536870912');
           await np.setProperty('demuxer-max-back-bytes', '268435456');
           await np.setProperty('demuxer-readahead-secs', '180');
+          await np.setProperty('demuxer-seekable-cache', 'yes');
+          await np.setProperty('demuxer-cache-wait', 'yes');
           await np.setProperty('network-timeout', '20');
           await np.setProperty('stream-buffer-size', '33554432');
           await np.setProperty('cache-on-disk', 'no');
           await np.setProperty('interpolation', 'no');
           await np.setProperty('prefetch-playlist', 'no');
+          await np.setProperty('vd-lavc-threads', '0');
+          await np.setProperty('ad-lavc-threads', '0');
         }
       }
 
@@ -278,6 +285,11 @@ class MpvPlayerAdapter implements PlayerAdapter {
     }));
     _subscriptions.add(_player!.stream.position.listen((position) {
       _position = position;
+      if (_isSeekBuffering &&
+          position.inMilliseconds >= 0 &&
+          (_duration == Duration.zero || position <= _duration)) {
+        _isSeekInFlight = false;
+      }
       _callbacks?.onPositionChanged?.call();
     }));
     _subscriptions.add(_player!.stream.duration.listen((duration) {
@@ -286,6 +298,18 @@ class MpvPlayerAdapter implements PlayerAdapter {
     }));
     _subscriptions.add(_player!.stream.buffering.listen((buffering) {
       _setBufferingState(buffering);
+      if (_isSeekBuffering && !buffering) {
+        unawaited(() async {
+          try {
+            final stillBuffering = await _isCacheStillBuffering();
+            if (!stillBuffering) {
+              _completeSeekBuffering();
+            }
+          } catch (_) {
+            _completeSeekBuffering();
+          }
+        }());
+      }
       _callbacks?.onBufferingStateChanged?.call();
     }));
     _subscriptions.add(_player!.stream.completed.listen((completed) {
@@ -378,6 +402,8 @@ class MpvPlayerAdapter implements PlayerAdapter {
 
   void _beginSeekBuffering() {
     _isSeekBuffering = true;
+    _isSeekInFlight = true;
+    _seekBufferingPollTimer?.cancel();
     _seekBufferingFallbackTimer?.cancel();
     _seekBufferingFallbackTimer = Timer(const Duration(seconds: 3), () {
       _completeSeekBuffering();
@@ -388,13 +414,58 @@ class MpvPlayerAdapter implements PlayerAdapter {
 
   void _completeSeekBuffering() {
     if (!_isSeekBuffering) {
+      _isSeekInFlight = false;
+      _seekBufferingPollTimer?.cancel();
+      _seekBufferingPollTimer = null;
       return;
     }
     _isSeekBuffering = false;
+    _isSeekInFlight = false;
+    _seekBufferingPollTimer?.cancel();
+    _seekBufferingPollTimer = null;
     _seekBufferingFallbackTimer?.cancel();
     _seekBufferingFallbackTimer = null;
     _setBufferingState(false);
     _callbacks?.onBufferingStateChanged?.call();
+  }
+
+  Future<bool> _isCacheStillBuffering() async {
+    final np = _nativePlayer;
+    if (np == null) {
+      return false;
+    }
+    final pausedForCache = (await np.getProperty('paused-for-cache')).toLowerCase();
+    final cacheBufferingState =
+        (await np.getProperty('cache-buffering-state')).toLowerCase();
+    final cacheDurationRaw = await np.getProperty('demuxer-cache-duration');
+    final cacheDuration = double.tryParse(cacheDurationRaw) ?? 0.0;
+    return pausedForCache == 'yes' ||
+        cacheBufferingState == 'yes' ||
+        cacheBufferingState == 'true' ||
+        cacheBufferingState == '1' ||
+        (_isSeekInFlight && cacheDuration <= 0.05);
+  }
+
+  void _startSeekBufferingMonitor() {
+    _seekBufferingPollTimer?.cancel();
+    _seekBufferingPollTimer = Timer.periodic(
+      const Duration(milliseconds: 180),
+      (_) async {
+        if (!_isSeekBuffering) {
+          _seekBufferingPollTimer?.cancel();
+          _seekBufferingPollTimer = null;
+          return;
+        }
+        try {
+          final stillBuffering = await _isCacheStillBuffering();
+          if (!stillBuffering) {
+            _completeSeekBuffering();
+          }
+        } catch (_) {
+          // Let the fallback timer close the buffering state.
+        }
+      },
+    );
   }
 
   SubtitleKind _classifySubtitleTrackKind(
@@ -772,8 +843,17 @@ class MpvPlayerAdapter implements PlayerAdapter {
       if (_isHttpUrl(path)) {
         _logger.i('MpvAdapter', 'HTTP URL字幕，直接传给mpv加载');
         final ext = _extractExtension(path);
-        final isAss = ext == 'ass' || ext == 'ssa' || path.contains('format=ass') || path.contains('Codec=ass');
-        final isPgs = ext == 'pgs' || ext == 'sup' || path.contains('format=pgs') || path.contains('Codec=pgs');
+        final normalizedPath = path.toLowerCase();
+        final isAss = ext == 'ass' ||
+            ext == 'ssa' ||
+            normalizedPath.contains('format=ass') ||
+            normalizedPath.contains('codec=ass');
+        final isPgs = ext == 'pgs' ||
+            ext == 'sup' ||
+            normalizedPath.contains('format=pgs') ||
+            normalizedPath.contains('codec=pgs') ||
+            normalizedPath.contains('pgssub') ||
+            normalizedPath.contains('hdmv');
         _currentSubIsAss = isAss;
         _hasBitmapSubtitle = isPgs;
         _usingExternalSubtitle = true;
@@ -849,6 +929,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
       _logger.i('MpvAdapter', '外挂字幕加载成功: $processedPath');
     } catch (e, stackTrace) {
       _logger.eWithStack('MpvAdapter', '外挂字幕加载失败', e, stackTrace);
+      rethrow;
     }
   }
 
@@ -1216,16 +1297,12 @@ class MpvPlayerAdapter implements PlayerAdapter {
       milliseconds: max(0, min(position.inMilliseconds, _duration.inMilliseconds)),
     );
     _beginSeekBuffering();
+    _startSeekBufferingMonitor();
     await _player!.seek(clamped);
     final np = _nativePlayer;
     if (np != null) {
       try {
-        final pausedForCache = (await np.getProperty('paused-for-cache')).toLowerCase();
-        final cacheBufferingState = (await np.getProperty('cache-buffering-state')).toLowerCase();
-        final stillBuffering = pausedForCache == 'yes' ||
-            cacheBufferingState == 'yes' ||
-            cacheBufferingState == 'true' ||
-            cacheBufferingState == '1';
+        final stillBuffering = await _isCacheStillBuffering();
         if (!stillBuffering) {
           _completeSeekBuffering();
         }
@@ -1265,6 +1342,8 @@ class MpvPlayerAdapter implements PlayerAdapter {
 
   @override
   Future<void> dispose() async {
+    _seekBufferingPollTimer?.cancel();
+    _seekBufferingPollTimer = null;
     _seekBufferingFallbackTimer?.cancel();
     _seekBufferingFallbackTimer = null;
     for (final sub in _subscriptions) {
@@ -1289,6 +1368,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
     _currentSubIsAss = false;
     _usingExternalSubtitle = false;
     _isSeekBuffering = false;
+    _isSeekInFlight = false;
     _selectedSubtitleTrackId = null;
     _selectedAudioTrackId = null;
   }
