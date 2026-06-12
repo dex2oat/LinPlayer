@@ -16,7 +16,7 @@ permissions:
   contents: write
 
 env:
-  FLUTTER_VERSION: '3.41.2'
+  FLUTTER_VERSION: '3.44.2'
   FLUTTER_CHANNEL: 'stable'
 
 jobs:
@@ -276,12 +276,6 @@ jobs:
       - name: Enable Linux desktop
         run: flutter config --enable-linux-desktop
 
-      - name: Ensure Linux platform scaffold
-        run: |
-          if [ ! -d linux ]; then
-            flutter create --platforms=linux .
-          fi
-
       - name: Get dependencies
         run: flutter pub get
 
@@ -347,12 +341,6 @@ jobs:
 
       - name: Enable macOS desktop
         run: flutter config --enable-macos-desktop
-
-      - name: Ensure macOS platform scaffold
-        run: |
-          if [ ! -d macos ]; then
-            flutter create --platforms=macos .
-          fi
 
       - name: Get dependencies
         run: flutter pub get
