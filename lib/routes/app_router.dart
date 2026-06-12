@@ -379,14 +379,17 @@ class _MainShellState extends State<MainShell> {
     return NotificationListener<ScrollNotification>(
       onNotification: _onScrollNotification,
       child: Scaffold(
-        body: MediaQuery(
-          data: mediaQuery.copyWith(
-            padding: mediaQuery.padding.copyWith(
-              bottom: mediaQuery.padding.bottom + tabHeight,
-            ),
-          ),
-          child: widget.navigationShell,
-        ),
+        resizeToAvoidBottomInset: true, // 显式设置以确保键盘正确处理
+        body: isKeyboardVisible
+            ? widget.navigationShell // 键盘显示时不修改 MediaQuery，让系统自动处理
+            : MediaQuery(
+                data: mediaQuery.copyWith(
+                  padding: mediaQuery.padding.copyWith(
+                    bottom: mediaQuery.padding.bottom + tabHeight,
+                  ),
+                ),
+                child: widget.navigationShell,
+              ),
         bottomNavigationBar: const SizedBox.shrink(),
         floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
         floatingActionButton: showFloatingTabBar
