@@ -86,6 +86,7 @@ class MpvPlayerAdapter implements PlayerAdapter {
   bool get hasError => _errorMessage != null;
   @override
   String? get errorMessage => _errorMessage;
+  bool get pgsDecoderAvailable => _pgsDecoderAvailable;
   @override
   bool get libassReady => true;
   @override
@@ -134,6 +135,21 @@ class MpvPlayerAdapter implements PlayerAdapter {
     return Uri.file(path).toString();
   }
 
+  Future<void> _openVideoSource(
+    String videoUrl, {
+    Duration? startPosition,
+  }) async {
+    // Keep media_kit's own open path as the primary entrypoint so the
+    // underlying player state and Flutter Video widget stay in sync.
+    // Network edge cases are handled one layer above via playback URL
+    // fallback instead of bypassing Player.open here.
+    final media = Media(videoUrl);
+    await _player!.open(media, play: false);
+    if (startPosition != null && startPosition > Duration.zero) {
+      await _player!.seek(startPosition);
+    }
+  }
+
   /// 探测当前 libmpv 是否包含 PGS/SUP 解码器。
   ///
   /// media-kit 的 Windows 预编译包为了体积会 `--disable-decoders` 并漏掉
@@ -148,16 +164,69 @@ class MpvPlayerAdapter implements PlayerAdapter {
       final decoderList = await np.getProperty('decoder-list');
       _pgsDecoderAvailable = decoderList.contains('hdmv_pgs_subtitle');
       if (!_pgsDecoderAvailable) {
+        final runtimeEvidence = _describeWindowsLibmpvRuntimeEvidence();
         _logger.w(
           'MpvAdapter',
           '当前 libmpv 未包含 hdmv_pgs_subtitle 解码器，PC 端 PGS/SUP 图形字幕将无法渲染。'
-          '请运行 windows/scripts/upgrade_libmpv_for_pgs.ps1 替换完整版 libmpv-2.dll。',
+          '请运行 windows/scripts/upgrade_libmpv_for_pgs.ps1 替换完整版 libmpv-2.dll。'
+          '运行时证据: $runtimeEvidence',
         );
       } else {
-        _logger.i('MpvAdapter', '当前 libmpv 已包含 hdmv_pgs_subtitle 解码器');
+        _logger.i(
+          'MpvAdapter',
+          '当前 libmpv 已包含 hdmv_pgs_subtitle 解码器。'
+          '运行时证据: ${_describeWindowsLibmpvRuntimeEvidence()}',
+        );
       }
     } catch (e) {
       _logger.w('MpvAdapter', '探测 PGS 解码器失败: $e');
+    }
+  }
+
+  String _describeWindowsLibmpvRuntimeEvidence() {
+    try {
+      final executablePath = Platform.resolvedExecutable;
+      final executableDir = File(executablePath).parent;
+      final dllFile = File('${executableDir.path}${Platform.pathSeparator}libmpv-2.dll');
+      final backupFile = File('${executableDir.path}${Platform.pathSeparator}libmpv-2.dll.orig');
+      final manifestFile =
+          File('${executableDir.path}${Platform.pathSeparator}libmpv-upgrade.json');
+
+      final parts = <String>[
+        'exe=$executablePath',
+        'dir=${executableDir.path}',
+        'dll=${dllFile.existsSync()}',
+        'backup=${backupFile.existsSync()}',
+        'manifest=${manifestFile.existsSync()}',
+      ];
+      if (dllFile.existsSync()) {
+        parts.add('dllBytes=${dllFile.lengthSync()}');
+      }
+      if (backupFile.existsSync()) {
+        parts.add('backupBytes=${backupFile.lengthSync()}');
+      }
+      final parentDir = executableDir.parent;
+      final grandParentDir = parentDir.parent;
+      if (executableDir.path.isNotEmpty &&
+          parentDir.path.isNotEmpty &&
+          grandParentDir.path.isNotEmpty &&
+          parentDir.path.toLowerCase().endsWith('${Platform.pathSeparator}runner')) {
+        final sharedLibmpvDir =
+            Directory('${grandParentDir.path}${Platform.pathSeparator}libmpv');
+        final sharedDllFile =
+            File('${sharedLibmpvDir.path}${Platform.pathSeparator}libmpv-2.dll');
+        final sharedManifestFile =
+            File('${sharedLibmpvDir.path}${Platform.pathSeparator}libmpv-upgrade.json');
+        parts.add('sharedDir=${sharedLibmpvDir.path}');
+        parts.add('sharedDll=${sharedDllFile.existsSync()}');
+        parts.add('sharedManifest=${sharedManifestFile.existsSync()}');
+        if (sharedDllFile.existsSync()) {
+          parts.add('sharedDllBytes=${sharedDllFile.lengthSync()}');
+        }
+      }
+      return parts.join(', ');
+    } catch (e) {
+      return 'runtime-evidence-error=$e';
     }
   }
 
@@ -260,66 +329,50 @@ class MpvPlayerAdapter implements PlayerAdapter {
       _videoController = VideoController(_player!);
       _setupStreamListeners();
 
-      final np = _nativePlayer;
-      if (np != null) {
-        final fontsDir = _configManager.fontsDirectory;
-        const systemFontsDir = '/system/fonts';
-        final dir = Directory(fontsDir);
-        if (dir.listSync().isNotEmpty) {
-          await np.setProperty('sub-fonts-dir', fontsDir);
-        } else {
-          await np.setProperty('sub-fonts-dir', systemFontsDir);
-        }
-        // 默认关闭次字幕可见性，只有用户明确选择次字幕时才开启
-        // 避免同时显示两个字幕（主字幕+次字幕）
-        await np.setProperty('secondary-sub-visibility', 'no');
-        // 使用视频混合路径，确保 PGS/SUP 等位图字幕稳定显示。
-        await np.setProperty('blend-subtitles', 'video');
-        await np.setProperty('sub-visibility', 'yes');
-        await np.setProperty('hwdec', hardwareDecoding ? 'auto-safe' : 'no');
-        await _applyShaderList(_glslShaders);
-        if (_isHttpUrl(videoUrl)) {
-          await np.setProperty('cache', 'yes');
-          await np.setProperty('cache-pause', 'yes');
-          // Don't block startup on an aggressive initial cache fill.
-          // We still keep pause-on-underflow for mid-playback stability.
-          await np.setProperty('cache-pause-wait', '2.5');
-          await np.setProperty('cache-pause-initial', 'no');
-          await np.setProperty('cache-secs', '300');
-          await np.setProperty('demuxer-max-bytes', '536870912');
-          await np.setProperty('demuxer-max-back-bytes', '268435456');
-          await np.setProperty('demuxer-readahead-secs', '180');
-          await np.setProperty('demuxer-seekable-cache', 'yes');
-          await np.setProperty('demuxer-cache-wait', 'no');
-          await np.setProperty('network-timeout', '20');
-          await np.setProperty('stream-buffer-size', '33554432');
-          await np.setProperty('cache-on-disk', 'no');
-          await np.setProperty('interpolation', 'no');
-          await np.setProperty('prefetch-playlist', 'no');
-          await np.setProperty('vd-lavc-threads', '0');
-          await np.setProperty('ad-lavc-threads', '0');
+      {
+        final np = _nativePlayer;
+        if (np != null) {
+          final fontsDir = _configManager.fontsDirectory;
+          const systemFontsDir = '/system/fonts';
+          final dir = Directory(fontsDir);
+          if (dir.listSync().isNotEmpty) {
+            await np.setProperty('sub-fonts-dir', fontsDir);
+          } else {
+            await np.setProperty('sub-fonts-dir', systemFontsDir);
+          }
+          // 默认关闭次字幕可见性，只有用户明确选择次字幕时才开启
+          // 避免同时显示两个字幕（主字幕+次字幕）
+          await np.setProperty('secondary-sub-visibility', 'no');
+          // 使用视频混合路径，确保 PGS/SUP 等位图字幕稳定显示。
+          await np.setProperty('blend-subtitles', 'video');
+          await np.setProperty('sub-visibility', 'yes');
+          await np.setProperty('hwdec', hardwareDecoding ? 'auto-safe' : 'no');
+          await _applyShaderList(_glslShaders);
+          if (_isHttpUrl(videoUrl)) {
+            await np.setProperty('cache', 'yes');
+            await np.setProperty('cache-pause', 'yes');
+            // Don't block startup on an aggressive initial cache fill.
+            // We still keep pause-on-underflow for mid-playback stability.
+            await np.setProperty('cache-pause-wait', '2.5');
+            await np.setProperty('cache-pause-initial', 'no');
+            await np.setProperty('cache-secs', '300');
+            await np.setProperty('demuxer-max-bytes', '536870912');
+            await np.setProperty('demuxer-max-back-bytes', '268435456');
+            await np.setProperty('demuxer-readahead-secs', '180');
+            await np.setProperty('demuxer-seekable-cache', 'yes');
+            await np.setProperty('demuxer-cache-wait', 'no');
+            await np.setProperty('network-timeout', '20');
+            await np.setProperty('stream-buffer-size', '33554432');
+            await np.setProperty('cache-on-disk', 'no');
+            await np.setProperty('interpolation', 'no');
+            await np.setProperty('prefetch-playlist', 'no');
+            await np.setProperty('vd-lavc-threads', '0');
+            await np.setProperty('ad-lavc-threads', '0');
+          }
         }
       }
 
-      // 使用 mpv_command 数组形式调用 loadfile，避免 URL 中的特殊字符被错误解析。
-      // media_kit 的 Player.open 内部会把 URL 拼成字符串，极端场景下引号/空格容易出错。
-      final np = _nativePlayer;
-      if (np != null) {
-        final options = <String>[];
-        if (startPosition != null && startPosition > Duration.zero) {
-          options.add(
-            'start=${(startPosition.inMilliseconds / 1000.0).toStringAsFixed(3)}',
-          );
-        }
-        options.add('pause');
-        await np.command(['loadfile', videoUrl, 'replace', options.join(',')]);
-      } else {
-        final media = Media(videoUrl);
-        await _player!.open(media, play: false);
-        if (startPosition != null && startPosition > Duration.zero) {
-          await _player!.seek(startPosition);
-        }
-      }
+      await _openVideoSource(videoUrl, startPosition: startPosition);
 
       _isInitialized = true;
       _callbacks?.onDurationChanged?.call();

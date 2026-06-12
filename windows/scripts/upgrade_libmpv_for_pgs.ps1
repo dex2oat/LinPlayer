@@ -24,10 +24,20 @@
 [CmdletBinding()]
 param(
     [string]$BuildOutput = "",
-    [string]$DownloadUrl = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260610/mpv-dev-x86_64-20260610-git-304426c.7z"
+    [string]$DownloadUrl = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260610/mpv-dev-x86_64-20260610-git-304426c.7z",
+    [switch]$AllowFailure
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$global:ErrorActionPreference = "Stop"
+trap {
+    Write-Warning "libmpv升级脚本遇到错误: $_"
+    if ($AllowFailure) {
+        exit 0
+    }
+    exit 1
+}
 
 function Find-BuildOutputDirectory {
     param([string]$hint)
@@ -47,13 +57,53 @@ function Find-BuildOutputDirectory {
     throw "Flutter Windows build output directory not found. Please specify -BuildOutput."
 }
 
+function Get-UpgradeTargetDirectories {
+    param([string]$PrimaryOutputDirectory)
+
+    $resolvedPrimary = (Resolve-Path -LiteralPath $PrimaryOutputDirectory).Path
+    $targets = [System.Collections.Generic.List[string]]::new()
+    $targets.Add($resolvedPrimary)
+
+    $dirInfo = Get-Item -LiteralPath $resolvedPrimary
+    if ($dirInfo.Name -in @("Release", "Debug", "Profile") -and
+        $dirInfo.Parent -and
+        $dirInfo.Parent.Name -eq "runner" -and
+        $dirInfo.Parent.Parent) {
+        $buildRoot = $dirInfo.Parent.Parent.FullName
+        $sharedLibmpvDir = Join-Path $buildRoot "libmpv"
+        $sharedLibmpvDll = Join-Path $sharedLibmpvDir "libmpv-2.dll"
+        if (Test-Path -LiteralPath $sharedLibmpvDll) {
+            $targets.Add((Resolve-Path -LiteralPath $sharedLibmpvDir).Path)
+        }
+    } elseif ($dirInfo.Name -eq "libmpv" -and $dirInfo.Parent) {
+        $runnerRoot = Join-Path $dirInfo.Parent.FullName "runner"
+        foreach ($config in @("Release", "Debug", "Profile")) {
+            $candidateDir = Join-Path $runnerRoot $config
+            $candidateDll = Join-Path $candidateDir "libmpv-2.dll"
+            if (Test-Path -LiteralPath $candidateDll) {
+                $targets.Add((Resolve-Path -LiteralPath $candidateDir).Path)
+            }
+        }
+    }
+
+    return $targets | Select-Object -Unique
+}
+
 function Invoke-DownloadFile {
     param([string]$url, [string]$outFile)
     Write-Host "Downloading full libmpv package: $url"
     $progressPreference = $ProgressPreference
     $ProgressPreference = "SilentlyContinue"
     try {
-        Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing
+        $curl = Get-Command "curl.exe" -ErrorAction SilentlyContinue
+        if ($curl) {
+            & $curl.Source -L --fail --output $outFile $url
+            if ($LASTEXITCODE -ne 0) {
+                throw "curl download failed (exit=$LASTEXITCODE)"
+            }
+        } else {
+            Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing
+        }
     } finally {
         $ProgressPreference = $progressPreference
     }
@@ -92,6 +142,38 @@ function Expand-SevenZipArchive {
     }
 }
 
+function Remove-PathWithRetry {
+    param(
+        [string]$Path,
+        [switch]$Recurse,
+        [int]$MaxAttempts = 5,
+        [int]$DelayMilliseconds = 400
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $true
+    }
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            if ($Recurse) {
+                Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            } else {
+                Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+            }
+            return $true
+        } catch {
+            if ($attempt -eq $MaxAttempts) {
+                Write-Warning "Temporary path cleanup skipped: $Path ($($_.Exception.Message))"
+                return $false
+            }
+            Start-Sleep -Milliseconds $DelayMilliseconds
+        }
+    }
+
+    return $false
+}
+
 function Get-LibmpvDllPath {
     param([string]$extractDir)
     $dll = Get-ChildItem -Path $extractDir -Recurse -Filter "libmpv-2.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -101,50 +183,185 @@ function Get-LibmpvDllPath {
     return $dll.FullName
 }
 
+function Get-FileSha256 {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "File not found: $Path"
+    }
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Read-UpgradeManifest {
+    param([string]$OutputDirectory)
+
+    $manifestPath = Join-Path $OutputDirectory "libmpv-upgrade.json"
+    if (-not (Test-Path -LiteralPath $manifestPath)) {
+        return $null
+    }
+    try {
+        return Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    } catch {
+        Write-Warning "Failed to parse existing libmpv-upgrade.json, ignoring it: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Get-ManifestProperty {
+    param(
+        $Manifest,
+        [string]$Name
+    )
+
+    if ($null -eq $Manifest) {
+        return $null
+    }
+
+    $property = $Manifest.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
+}
+
+function Write-UpgradeManifest {
+    param(
+        [string]$OutputDirectory,
+        [string]$SourceUrl,
+        [string]$DllPath,
+        [string]$BackupPath,
+        [string]$SourceDllSha256
+    )
+
+    $dllInfo = Get-Item -LiteralPath $DllPath
+    $dllSha256 = Get-FileSha256 -Path $DllPath
+    $backupLength = 0
+    $backupSha256 = ""
+    if (Test-Path -LiteralPath $BackupPath) {
+        $backupInfo = Get-Item -LiteralPath $BackupPath
+        $backupLength = $backupInfo.Length
+        $backupSha256 = Get-FileSha256 -Path $BackupPath
+    }
+
+    $manifestPath = Join-Path $OutputDirectory "libmpv-upgrade.json"
+    $manifest = [ordered]@{
+        manifestVersion = 2
+        upgradedAtUtc = [DateTime]::UtcNow.ToString("o")
+        downloadUrl = $SourceUrl
+        dllPath = $DllPath
+        dllLength = $dllInfo.Length
+        dllSha256 = $dllSha256
+        sourceDllSha256 = $SourceDllSha256
+        backupPath = $BackupPath
+        backupLength = $backupLength
+        backupSha256 = $backupSha256
+        verifiedBy = "downloaded-full-build-sha256-match"
+    } | ConvertTo-Json
+
+    Set-Content -LiteralPath $manifestPath -Value $manifest -Encoding UTF8
+}
+
+function Upgrade-LibmpvTarget {
+    param(
+        [string]$OutputDirectory,
+        [string]$SourceUrl,
+        [string]$SourceDll,
+        [string]$SourceDllSha256,
+        [long]$SourceDllLength
+    )
+
+    $targetDll = Join-Path $OutputDirectory "libmpv-2.dll"
+    if (-not (Test-Path -LiteralPath $targetDll)) {
+        throw "libmpv-2.dll not found in target directory: $OutputDirectory"
+    }
+
+    $backup = "$targetDll.orig"
+    $existingManifest = Read-UpgradeManifest -OutputDirectory $OutputDirectory
+    $existingManifestVersion = Get-ManifestProperty -Manifest $existingManifest -Name "manifestVersion"
+    $existingSourceDllSha256 = Get-ManifestProperty -Manifest $existingManifest -Name "sourceDllSha256"
+    if ($existingManifest -and
+        $existingManifestVersion -and
+        [int]$existingManifestVersion -ge 2 -and
+        $existingSourceDllSha256) {
+        $currentTargetSha256 = Get-FileSha256 -Path $targetDll
+        if ($currentTargetSha256 -eq $existingSourceDllSha256) {
+            Write-Host "libmpv-2.dll 已经匹配已验证的完整版哈希，跳过升级: $OutputDirectory"
+            return
+        }
+    }
+
+    $targetDllSha256 = Get-FileSha256 -Path $targetDll
+    if ($targetDllSha256 -eq $SourceDllSha256) {
+        Write-Host "libmpv-2.dll 已与下载的完整版一致，跳过复制: $OutputDirectory"
+        Write-UpgradeManifest -OutputDirectory $OutputDirectory -SourceUrl $SourceUrl -DllPath $targetDll -BackupPath $backup -SourceDllSha256 $SourceDllSha256
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath $backup)) {
+        Copy-Item -LiteralPath $targetDll -Destination $backup -Force
+        Write-Host "Backed up original libmpv-2.dll to $backup"
+    }
+
+    Copy-Item -LiteralPath $SourceDll -Destination $targetDll -Force
+    $replacedTargetSha256 = Get-FileSha256 -Path $targetDll
+    if ($replacedTargetSha256 -ne $SourceDllSha256) {
+        if (Test-Path -LiteralPath $backup) {
+            Copy-Item -LiteralPath $backup -Destination $targetDll -Force
+        }
+        throw "Replacement completed but verification failed: target libmpv-2.dll hash does not match the downloaded full build ($OutputDirectory)"
+    }
+
+    Write-Host "Replaced libmpv-2.dll with the full build: $targetDll size=$SourceDllLength sha256=$SourceDllSha256"
+    Write-UpgradeManifest -OutputDirectory $OutputDirectory -SourceUrl $SourceUrl -DllPath $targetDll -BackupPath $backup -SourceDllSha256 $SourceDllSha256
+}
+
 # ---------------------------------------------------------------------------
 $outDir = Find-BuildOutputDirectory $BuildOutput
 Write-Host "Target directory: $outDir"
 
-$targetDll = Join-Path $outDir "libmpv-2.dll"
-if (-not (Test-Path -LiteralPath $targetDll)) {
-    throw "libmpv-2.dll not found in target directory. Run 'flutter build windows' first."
+$targetDirectories = Get-UpgradeTargetDirectories -PrimaryOutputDirectory $outDir
+Write-Host "Upgrade targets: $($targetDirectories -join ', ')"
+
+$primaryTargetDll = Join-Path $outDir "libmpv-2.dll"
+if (-not (Test-Path -LiteralPath $primaryTargetDll)) {
+    throw "libmpv-2.dll not found in target directory. Run 'flutter build windows' first to generate the base DLL, then rebuild."
 }
 
-$backup = "$targetDll.orig"
-if ((Test-Path -LiteralPath $backup) -and (Test-Path -LiteralPath $targetDll)) {
-    $targetInfo = Get-Item -LiteralPath $targetDll
-    $backupInfo = Get-Item -LiteralPath $backup
-    if ($targetInfo.Length -gt $backupInfo.Length) {
-        Write-Host "libmpv-2.dll 已经是完整版，跳过升级。"
-        return
-    }
-}
-
-$tempRoot = Join-Path $env:TEMP "linplayer_libmpv_upgrade"
+$tempBase = Join-Path $env:TEMP "linplayer_libmpv_upgrade"
+New-Item -ItemType Directory -Path $tempBase -Force | Out-Null
+$tempRoot = Join-Path $tempBase ([guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 $archiveFile = Join-Path $tempRoot "mpv-dev-full.7z"
 $extractDir = Join-Path $tempRoot "mpv-dev-full"
 
 if (Test-Path -LiteralPath $archiveFile) {
-    Remove-Item -LiteralPath $archiveFile -Force
+    Remove-PathWithRetry -Path $archiveFile | Out-Null
 }
 if (Test-Path -LiteralPath $extractDir) {
-    Remove-Item -LiteralPath $extractDir -Recurse -Force
+    Remove-PathWithRetry -Path $extractDir -Recurse | Out-Null
 }
 
 Invoke-DownloadFile -url $DownloadUrl -outFile $archiveFile
 Expand-SevenZipArchive -archive $archiveFile -destination $extractDir
 $sourceDll = Get-LibmpvDllPath -extractDir $extractDir
+$sourceDllSha256 = Get-FileSha256 -Path $sourceDll
+$sourceDllLength = (Get-Item -LiteralPath $sourceDll).Length
 
-$backup = "$targetDll.orig"
-if (-not (Test-Path -LiteralPath $backup)) {
-    Copy-Item -LiteralPath $targetDll -Destination $backup -Force
-    Write-Host "Backed up original libmpv-2.dll to $backup"
+foreach ($targetDirectory in $targetDirectories) {
+    Upgrade-LibmpvTarget `
+        -OutputDirectory $targetDirectory `
+        -SourceUrl $DownloadUrl `
+        -SourceDll $sourceDll `
+        -SourceDllSha256 $sourceDllSha256 `
+        -SourceDllLength $sourceDllLength
 }
+Write-Host "libmpv upgrade completed for $($targetDirectories.Count) target(s)."
 
-Copy-Item -LiteralPath $sourceDll -Destination $targetDll -Force
-Write-Host "Replaced libmpv-2.dll with the full build. PGS/SUP decoder (hdmv_pgs_subtitle) should now be available."
-
-Remove-Item -LiteralPath $archiveFile -Force
-Remove-Item -LiteralPath $extractDir -Recurse -Force
-Write-Host "Temporary files cleaned up."
+$archiveRemoved = Remove-PathWithRetry -Path $archiveFile
+$extractRemoved = Remove-PathWithRetry -Path $extractDir -Recurse
+$tempRemoved = Remove-PathWithRetry -Path $tempRoot -Recurse
+if ($archiveRemoved -and $extractRemoved -and $tempRemoved) {
+    Write-Host "Temporary files cleaned up."
+} else {
+    Write-Warning "Temporary files were not fully cleaned up. You can remove $tempRoot later if needed."
+}

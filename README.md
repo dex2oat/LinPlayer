@@ -81,7 +81,9 @@ flutter build windows
 
 CMake 默认会在构建完成后调用 `windows/scripts/upgrade_libmpv_for_pgs.ps1`，
 从 shinchiro 发布页下载完整版 `mpv-dev` 包并提取 `libmpv-2.dll`。
-如果已经升级过，脚本会自动跳过，不会重复下载。
+如果目标 DLL 已经包含 `hdmv_pgs_subtitle`，脚本会自动跳过，不会重复下载。
+如果下载、解压、替换或校验失败，Windows 构建会直接失败，避免继续产出一个
+“能启动但 PGS/SUP 一定不显示”的残缺包。
 
 如需关闭自动升级：
 
@@ -96,6 +98,7 @@ flutter build windows
 .\windows\scripts\upgrade_libmpv_for_pgs.ps1
 ```
 
+脚本成功后会在构建目录额外写入 `libmpv-upgrade.json` 作为校验记录。
 替换后，MPV 内核即可正常解码并渲染 PGS/SUP 图形字幕。
 
 ## 项目结构

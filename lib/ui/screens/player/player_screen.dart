@@ -1099,7 +1099,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> with WidgetsBinding
     final server = ref.read(currentServerProvider);
     final logger = AppLogger();
 
-    if (!_playerService.coreType == PlayerCoreType.mpv) {
+    if (_playerService.coreType != PlayerCoreType.mpv) {
       logger.w('Player', '次字幕仅支持MPV内核');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -517,11 +517,16 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
         _playerService.coreType == PlayerCoreType.mpv &&
         subtitleKind == SubtitleKind.bitmap &&
         !isExternal;
+    final canAttemptExternalSubtitleFallback =
+        _canAttemptExternalSubtitleFallback(target);
 
     AppLogger().i(
       'DesktopPlayer',
       '字幕切换请求: index=${target.index}, codec=${target.codec}, title=$targetTitle, '
-      'external=$isExternal, kind=$subtitleKind, preferNativeBitmap=$shouldPreferNativeBitmapSubtitle',
+      'external=$isExternal, externalUrl=${target.isExternalUrl == true}, '
+      'hasDeliveryUrl=${_hasSubtitleDeliveryUrl(target)}, '
+      'kind=$subtitleKind, preferNativeBitmap=$shouldPreferNativeBitmapSubtitle, '
+      'canExternalFallback=$canAttemptExternalSubtitleFallback',
     );
 
     if (!isExternal) {
@@ -585,6 +590,27 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
 
     // Only use the external bitmap subtitle path as a fallback after native
     // track selection fails, or when the subtitle is already external.
+    if (!canAttemptExternalSubtitleFallback) {
+      AppLogger().w(
+        'DesktopPlayer',
+        '跳过外挂字幕回退: index=${target.index}, codec=${target.codec}, '
+        'reason=${_describeExternalSubtitleFallbackBlocker(target)}',
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _externalSubtitleFallbackUnavailableMessage(
+              target,
+              subtitleKind,
+            ),
+          ),
+        ),
+      );
+      return;
+    }
     _playerService.setSubtitleSelectionHint();
     await _playerService.deselectSubtitleTrack();
     try {
@@ -662,6 +688,58 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
       );
       return false;
     }
+  }
+
+  bool _hasSubtitleDeliveryUrl(MediaStream target) {
+    final deliveryUrl = target.deliveryUrl?.trim();
+    return deliveryUrl != null && deliveryUrl.isNotEmpty;
+  }
+
+  bool _hasHttpSubtitlePath(MediaStream target) {
+    final path = target.path?.trim();
+    return path != null &&
+        path.isNotEmpty &&
+        (path.startsWith('http://') || path.startsWith('https://'));
+  }
+
+  bool _canUseApiSubtitleStreamRoute(MediaStream target) {
+    if (target.isExternal == true || target.isExternalUrl == true) {
+      return true;
+    }
+    final deliveryMethod = target.deliveryMethod?.trim().toLowerCase();
+    return deliveryMethod == 'external';
+  }
+
+  bool _canAttemptExternalSubtitleFallback(MediaStream target) {
+    return _hasSubtitleDeliveryUrl(target) ||
+        _hasHttpSubtitlePath(target) ||
+        _canUseApiSubtitleStreamRoute(target);
+  }
+
+  String _describeExternalSubtitleFallbackBlocker(MediaStream target) {
+    return 'external=${target.isExternal == true}, '
+        'externalUrl=${target.isExternalUrl == true}, '
+        'deliveryUrl=${_hasSubtitleDeliveryUrl(target)}, '
+        'httpPath=${_hasHttpSubtitlePath(target)}, '
+        'deliveryMethod=${target.deliveryMethod ?? ''}';
+  }
+
+  String _externalSubtitleFallbackUnavailableMessage(
+    MediaStream target,
+    SubtitleKind subtitleKind,
+  ) {
+    final adapter = _playerService.adapter;
+    final missingPgsDecoder =
+        subtitleKind == SubtitleKind.bitmap &&
+        adapter is MpvPlayerAdapter &&
+        !adapter.pgsDecoderAvailable;
+    if (missingPgsDecoder) {
+      return '当前 PC 端缺少 PGS/SUP 解码器，且该字幕没有可下载外挂源';
+    }
+    if (target.isExternal == true || target.isExternalUrl == true) {
+      return '当前外挂字幕没有可用的下载地址';
+    }
+    return '当前字幕没有可用的外挂下载地址';
   }
 
   String? _matchAudioTrackId(List<MediaStream> audioStreams, int selectedIndex) {
@@ -1002,6 +1080,9 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
         currentSource: currentSource,
         codecCandidates: embyCodecCandidates,
       );
+      if (subtitleUrls.isEmpty) {
+        throw StateError('当前字幕没有可用的外挂下载地址');
+      }
       AppLogger().i(
         'DesktopPlayer',
         '外挂字幕候选地址: ${subtitleUrls.join(' | ')}',
@@ -1063,15 +1144,17 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
       urls.add(path);
     }
 
-    for (final codec in codecCandidates) {
-      urls.add(
-        api.playback.getSubtitleStreamUrl(
-          widget.itemId,
-          currentSource.id,
-          target.index,
-          codec,
-        ),
-      );
+    if (_canUseApiSubtitleStreamRoute(target)) {
+      for (final codec in codecCandidates) {
+        urls.add(
+          api.playback.getSubtitleStreamUrl(
+            widget.itemId,
+            currentSource.id,
+            target.index,
+            codec,
+          ),
+        );
+      }
     }
 
     return urls.toSet().toList();

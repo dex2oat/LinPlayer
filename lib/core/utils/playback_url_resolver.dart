@@ -107,11 +107,28 @@ PlaybackSelection buildPlaybackSelection({
     mediaSourceId: mediaSource?.id,
     container: normalizedContainer,
     playSessionId: playSessionId,
+    allowDirectPlay: true,
+    allowDirectStream: false,
+    allowTranscoding: false,
+    enableAutoStreamCopy: false,
+    enableAutoStreamCopyAudio: false,
+    enableAutoStreamCopyVideo: false,
+  );
+  final fallbackRequest = PlaybackUrlRequest(
+    itemId: itemId,
+    mediaSourceId: mediaSource?.id,
+    container: normalizedContainer,
+    playSessionId: playSessionId,
+    allowDirectPlay: false,
+    allowDirectStream: true,
+    allowTranscoding: false,
   );
 
   return PlaybackSelection(
     mediaSource: mediaSource,
     primaryRequest: primaryRequest,
+    fallbackRequest: fallbackRequest,
+    fallbackReason: '直连失败后回退到服务端直传流',
   );
 }
 

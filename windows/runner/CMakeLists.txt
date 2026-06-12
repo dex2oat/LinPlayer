@@ -46,7 +46,7 @@ option(LINPLAYER_UPGRADE_LIBMPV "Upgrade libmpv-2.dll for PGS/SUP support" ON)
 if(LINPLAYER_UPGRADE_LIBMPV AND NOT DEFINED ENV{LINPLAYER_SKIP_LIBMPV_UPGRADE})
   add_custom_command(
     TARGET ${BINARY_NAME} POST_BUILD
-    COMMAND powershell -ExecutionPolicy Bypass -File "${CMAKE_SOURCE_DIR}/../scripts/upgrade_libmpv_for_pgs.ps1" -BuildOutput "$<TARGET_FILE_DIR:${BINARY_NAME}>"
+    COMMAND powershell -ExecutionPolicy Bypass -File "${CMAKE_SOURCE_DIR}/scripts/upgrade_libmpv_for_pgs.ps1" -BuildOutput "$<TARGET_FILE_DIR:${BINARY_NAME}>"
     COMMENT "升级 libmpv-2.dll 以支持 PGS/SUP 图形字幕"
     VERBATIM
   )

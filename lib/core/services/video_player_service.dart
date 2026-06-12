@@ -36,6 +36,8 @@ class VideoPlayerService extends ChangeNotifier {
   bool _lastHardwareDecoding = true;
   bool _lastStartWithSoftwareDecoding = false;
   String? _primaryVideoUrl;
+  String? _fallbackVideoUrl;
+  bool _fallbackActivated = false;
   bool _autoRetryInFlight = false;
   int _startupRetryCount = 0;
   String? _selectedSubtitleTrackId;
@@ -197,6 +199,117 @@ class VideoPlayerService extends ChangeNotifier {
     }
   }
 
+  Future<void> _initializeAdapterForUrl(
+    String videoUrl, {
+    required Duration? startPosition,
+    required bool hardwareDecoding,
+    required String? preferredSubtitleLanguage,
+  }) async {
+    await _adapter!.initialize(
+      videoUrl: videoUrl,
+      startPosition: startPosition,
+      dolbyVisionFix: _lastDolbyVisionFix,
+      useLibass: _lastUseLibass,
+      hardwareDecoding: hardwareDecoding,
+      preferredSubtitleLanguage: preferredSubtitleLanguage,
+    );
+    if (!(_adapter?.isInitialized ?? false) || (_adapter?.hasError ?? false)) {
+      throw StateError(_adapter?.errorMessage ?? '播放器初始化失败');
+    }
+  }
+
+  Future<void> _recreateAdapter() async {
+    await _adapter?.dispose();
+    _adapter = _createAdapter();
+    _bindAdapterCallbacks();
+  }
+
+  Future<void> _restoreTrackSelections({
+    String? audioTrackId,
+    String? subtitleTrackId,
+  }) async {
+    if (audioTrackId != null && audioTrackId.isNotEmpty) {
+      try {
+        await _adapter!.selectAudioTrack(audioTrackId);
+      } catch (e, stackTrace) {
+        _logger.eWithStack(
+          'VideoPlayerService',
+          '恢复音轨选择失败: $audioTrackId',
+          e,
+          stackTrace,
+        );
+      }
+    }
+
+    if (subtitleTrackId != null && subtitleTrackId.isNotEmpty) {
+      try {
+        await _adapter!.selectSubtitleTrack(subtitleTrackId);
+      } catch (e, stackTrace) {
+        _logger.eWithStack(
+          'VideoPlayerService',
+          '恢复字幕轨选择失败: $subtitleTrackId',
+          e,
+          stackTrace,
+        );
+      }
+    }
+  }
+
+  Future<bool> _tryActivateFallbackUrl({
+    required Duration? startPosition,
+    required bool hardwareDecoding,
+    required String? preferredSubtitleLanguage,
+    String? audioTrackId,
+    String? subtitleTrackId,
+    bool autoPlay = false,
+  }) async {
+    final fallbackUrl = _fallbackVideoUrl;
+    if (_fallbackActivated ||
+        fallbackUrl == null ||
+        fallbackUrl.isEmpty ||
+        fallbackUrl == _primaryVideoUrl) {
+      return false;
+    }
+
+    _logger.w(
+      'VideoPlayerService',
+      '主播放链路失败，切换到兜底链路: reason=${_lastFallbackReason ?? 'unknown'}',
+    );
+
+    try {
+      _fallbackActivated = true;
+      await _recreateAdapter();
+      await _initializeAdapterForUrl(
+        fallbackUrl,
+        startPosition: startPosition,
+        hardwareDecoding: hardwareDecoding,
+        preferredSubtitleLanguage: preferredSubtitleLanguage,
+      );
+      _primaryVideoUrl = fallbackUrl;
+      _lastInitializationUsedFallback = true;
+      _startupRetryCount = 0;
+
+      if (autoPlay) {
+        await _adapter!.play();
+      }
+
+      await _restoreTrackSelections(
+        audioTrackId: audioTrackId,
+        subtitleTrackId: subtitleTrackId,
+      );
+      return true;
+    } catch (error, stackTrace) {
+      _fallbackActivated = false;
+      _logger.eWithStack(
+        'VideoPlayerService',
+        '兜底播放链路初始化失败',
+        error,
+        stackTrace,
+      );
+      return false;
+    }
+  }
+
   Future<void> _attemptStartupRetry() async {
     if (_autoRetryInFlight ||
         _primaryVideoUrl == null ||
@@ -229,50 +342,21 @@ class VideoPlayerService extends ChangeNotifier {
             '播放器直连自动重试: attempt=$attempt, resume=${resumePosition.inMilliseconds}ms',
           );
 
-          await _adapter?.dispose();
-          _adapter = _createAdapter();
-          _bindAdapterCallbacks();
+          await _recreateAdapter();
 
-          await _adapter!.initialize(
-            videoUrl: _primaryVideoUrl!,
+          await _initializeAdapterForUrl(
+            _primaryVideoUrl!,
             startPosition: resumePosition,
-            dolbyVisionFix: _lastDolbyVisionFix,
-            useLibass: _lastUseLibass,
             hardwareDecoding: hardwareDecoding,
             preferredSubtitleLanguage: _lastPreferredSubtitleLanguage,
           );
-          if (!(_adapter?.isInitialized ?? false) ||
-              (_adapter?.hasError ?? false)) {
-            throw StateError(_adapter?.errorMessage ?? '播放器直连重试初始化失败');
-          }
 
           await _adapter!.play();
 
-          if (audioTrackId != null && audioTrackId.isNotEmpty) {
-            try {
-              await _adapter!.selectAudioTrack(audioTrackId);
-            } catch (e, stackTrace) {
-              _logger.eWithStack(
-                'VideoPlayerService',
-                '恢复音轨选择失败: $audioTrackId',
-                e,
-                stackTrace,
-              );
-            }
-          }
-
-          if (subtitleTrackId != null && subtitleTrackId.isNotEmpty) {
-            try {
-              await _adapter!.selectSubtitleTrack(subtitleTrackId);
-            } catch (e, stackTrace) {
-              _logger.eWithStack(
-                'VideoPlayerService',
-                '恢复字幕轨选择失败: $subtitleTrackId',
-                e,
-                stackTrace,
-              );
-            }
-          }
+          await _restoreTrackSelections(
+            audioTrackId: audioTrackId,
+            subtitleTrackId: subtitleTrackId,
+          );
 
           _logger.i(
             'VideoPlayerService',
@@ -291,6 +375,18 @@ class VideoPlayerService extends ChangeNotifier {
             await Future.delayed(const Duration(milliseconds: 350));
           }
         }
+      }
+      final fallbackActivated = await _tryActivateFallbackUrl(
+        startPosition: resumePosition,
+        hardwareDecoding: hardwareDecoding,
+        preferredSubtitleLanguage: _lastPreferredSubtitleLanguage,
+        audioTrackId: audioTrackId,
+        subtitleTrackId: subtitleTrackId,
+        autoPlay: true,
+      );
+      if (fallbackActivated) {
+        _logger.i('VideoPlayerService', '播放器已切换到兜底播放链路');
+        return;
       }
       throw lastError ?? StateError('播放器直连重试失败');
     } finally {
@@ -326,6 +422,8 @@ class VideoPlayerService extends ChangeNotifier {
     _lastInitializationUsedFallback = false;
     _lastFallbackReason = fallbackReason;
     _primaryVideoUrl = videoUrl;
+    _fallbackVideoUrl = fallbackVideoUrl;
+    _fallbackActivated = false;
     _initialStartPosition = startPosition;
     _lastDolbyVisionFix = dolbyVisionFix ?? false;
     _lastUseLibass = useLibass ?? false;
@@ -343,31 +441,27 @@ class VideoPlayerService extends ChangeNotifier {
     }
 
     // 释放旧适配器
-    await _adapter?.dispose();
-
-    // 创建新适配器
-    _adapter = _createAdapter();
-
-    // 设置回调
-    _bindAdapterCallbacks();
+    await _recreateAdapter();
 
     // 初始化
     final desiredHardwareDecoding =
         startWithSoftwareDecoding ? false : (hardwareDecoding ?? true);
     try {
-      await _adapter!.initialize(
-        videoUrl: videoUrl,
+      await _initializeAdapterForUrl(
+        videoUrl,
         startPosition: startPosition,
-        dolbyVisionFix: _lastDolbyVisionFix,
-        useLibass: _lastUseLibass,
         hardwareDecoding: desiredHardwareDecoding,
         preferredSubtitleLanguage: preferredSubtitleLanguage,
       );
-      if (!(_adapter?.isInitialized ?? false) || (_adapter?.hasError ?? false)) {
-        throw StateError(_adapter?.errorMessage ?? '播放器初始化失败');
+    } catch (error, stackTrace) {
+      final fallbackActivated = await _tryActivateFallbackUrl(
+        startPosition: startPosition,
+        hardwareDecoding: desiredHardwareDecoding,
+        preferredSubtitleLanguage: preferredSubtitleLanguage,
+      );
+      if (!fallbackActivated) {
+        Error.throwWithStackTrace(error, stackTrace);
       }
-    } catch (_) {
-      rethrow;
     }
 
     // 加载 libass 字幕（如果启用）
@@ -463,22 +557,26 @@ class VideoPlayerService extends ChangeNotifier {
           rethrow;
         }
         _startupRetryCount = attempt + 1;
-        await _adapter?.dispose();
-        _adapter = _createAdapter();
-        _bindAdapterCallbacks();
-        await _adapter!.initialize(
-          videoUrl: _primaryVideoUrl!,
+        await _recreateAdapter();
+        await _initializeAdapterForUrl(
+          _primaryVideoUrl!,
           startPosition: _initialStartPosition,
-          dolbyVisionFix: _lastDolbyVisionFix,
-          useLibass: _lastUseLibass,
           hardwareDecoding:
               _lastStartWithSoftwareDecoding ? false : _lastHardwareDecoding,
           preferredSubtitleLanguage: _lastPreferredSubtitleLanguage,
         );
-        if (!(_adapter?.isInitialized ?? false) || (_adapter?.hasError ?? false)) {
-          throw StateError(_adapter?.errorMessage ?? '播放器直连重试失败');
-        }
       }
+    }
+    final fallbackActivated = await _tryActivateFallbackUrl(
+      startPosition: _initialStartPosition,
+      hardwareDecoding:
+          _lastStartWithSoftwareDecoding ? false : _lastHardwareDecoding,
+      preferredSubtitleLanguage: _lastPreferredSubtitleLanguage,
+      autoPlay: true,
+    );
+    if (fallbackActivated) {
+      _logger.i('VideoPlayerService', '起播阶段已切换到兜底播放链路');
+      return;
     }
     throw lastError ?? StateError('播放器直连重试失败');
   }
@@ -776,6 +874,8 @@ class VideoPlayerService extends ChangeNotifier {
     _pendingPlaybackTimer?.cancel();
     _pendingPlaybackTimer = null;
     _primaryVideoUrl = null;
+    _fallbackVideoUrl = null;
+    _fallbackActivated = false;
     _initialStartPosition = null;
     _lastPreferredSubtitleLanguage = null;
     _autoRetryInFlight = false;

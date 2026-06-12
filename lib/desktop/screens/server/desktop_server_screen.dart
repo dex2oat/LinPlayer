@@ -45,6 +45,37 @@ class _DesktopServerScreenState extends ConsumerState<DesktopServerScreen> {
                   ),
                   const Spacer(),
                   
+                  // 添加服务器按钮
+                  MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      onTap: () => context.push('/add-server'),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF5B8DEF),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.add, color: Colors.white, size: 18),
+                            SizedBox(width: 6),
+                            Text(
+                              '添加服务器',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  
                   // 视图切换
                   IconButton(
                     icon: Icon(_isGridView ? Icons.view_list : Icons.grid_view),
