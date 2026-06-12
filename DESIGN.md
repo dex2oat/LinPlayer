@@ -2,7 +2,7 @@
 
 > 本文档记录 LinPlayer 项目的完整设计决策树，按依赖顺序展开。从架构选型到每个页面的交互细节，一层层推进。
 >
-> 状态：**手机端完整 ✓** | PC 端 🚧 | TV 端 🚧
+> 状态：**手机端完整 ✓** | PC 端 🚧 | TV 端 🚧 | Apple 端计划复用 Flutter 代码线
 
 ---
 
@@ -16,52 +16,24 @@
 
 | 技术栈 | 覆盖平台 | 播放内核 |
 |--------|---------|---------|
-| **Flutter + Dart** | Android（手机）、Android TV、Windows、Linux | mpv（默认）+ ExoPlayer（Android 备用） |
-| **Swift/SwiftUI** | iOS、macOS、tvOS | mpv（原生）+ VLCKit |
+| **Flutter + Dart** | Android（手机）、Android TV、Windows、Linux、iOS、macOS、tvOS（规划中） | mpv（默认）+ ExoPlayer（Android 备用） |
 
-两套代码零共享，独立开发，独立文件夹。
+当前以 Flutter 单代码线长期演进，不再规划独立的 Swift/SwiftUI 实现。
 
 ### 1.3 项目结构
 
-#### Flutter Monorepo
+#### 当前仓库
 
 ```
-linplayer-flutter/
-├── packages/
-│   └── linplayer_core/        # Emby API + mpv FFI + 播放状态机 + 本地存储
-│       ├── lib/
-│       │   ├── api/            # Emby REST 客户端 (Dio)
-│       │   ├── models/         # 数据模型
-│       │   ├── player/         # mpv FFI + ExoPlayer Platform Channel
-│       │   ├── storage/        # Drift 数据库
-│       │   ├── providers/      # Riverpod Provider（认证/播放/媒体库）
-│       │   └── utils/          # 工具类（日志/错误处理）
-│       └── pubspec.yaml
-├── apps/
-│   ├── mobile/                 # Android 手机
-│   ├── tv/                     # Android TV
-│   └── desktop/                # Windows + Linux
-└── melos.yaml
-```
-
-#### Swift Monorepo
-
-```
-linplayer-swift/
-├── Packages/
-│   └── LinPlayerCore/          # Emby API + VLCKit/mpv + 数据持久化
-│       ├── Sources/
-│       │   ├── API/            # Emby REST 客户端 (Alamofire)
-│       │   ├── Models/         # Codable 模型
-│       │   ├── Player/         # VLCKit + mpv 播放抽象层
-│       │   ├── Storage/        # GRDB 数据库
-│       │   └── Utils/          # 日志/错误处理
-│       └── Package.swift
-├── Apps/
-│   ├── Mobile/                 # iOS
-│   ├── Desktop/               # macOS
-│   └── TV/                    # tvOS
-└── LinPlayer.xcworkspace
+linplayer/
+├── lib/
+│   ├── core/                   # API、Provider、播放器服务、工具
+│   ├── ui/                     # 移动端页面与通用组件
+│   ├── desktop/                # 桌面端页面与桌面专属交互
+│   └── routes/                 # 路由与应用入口
+├── android/                    # Android 原生桥接与播放器插件
+├── windows/                    # Windows Runner 与构建脚本
+└── assets/                     # 着色器、图标与静态资源
 ```
 
 ---
@@ -70,12 +42,11 @@ linplayer-swift/
 
 ```
 平台范围
-├─ Flutter: Android / Android TV / Windows / Linux
-└─ Swift:  iOS / macOS / tvOS
+└─ Flutter: Android / Android TV / Windows / Linux / iOS / macOS / tvOS
 
 ├─ 代码复用
-│  ├─ 两套代码零共享
-│  └─ 各自 monorepo：core package + 3 个 UI app
+│  ├─ 单代码线长期维护
+│  └─ 按平台 UI 与平台桥接分层，而不是按语言拆仓库
 
 ├─ 功能范围
 │  ├─ V1：播放 + 浏览 + 搜索 + 弹幕 + 代理(TV) + 更新检查 + 备份
@@ -85,29 +56,19 @@ linplayer-swift/
 │  ├─ 用户自主选择，无自动降级
 │  ├─ 默认 mpv（全平台）
 │  ├─ Android 可选 ExoPlayer
-│  └─ Apple 可选 VLCKit
+│  └─ Apple 端沿用 Flutter 播放抽象，按能力补齐平台桥接
 │
 ├─ Flutter 侧技术选型
 │  ├─ 状态管理：Riverpod
 │  ├─ 路由：GoRouter
 │  ├─ 网络：Dio（拦截器链：Auth → Retry → Log）
-│  ├─ 持久化：Drift（主体）+ shared_preferences（KV）
+│  ├─ 持久化：shared_preferences（当前）+ 预留后续结构化存储扩展点
 │  ├─ 图片加载：extended_image（支持自定义 Header 注 Token）
-│  ├─ 日志：talker（TalkerDioLogger + TalkerFileLogger）
-│  ├─ i18n：slang（i18next JSON 格式）
+│  ├─ 日志：自定义 AppLogger
+│  ├─ i18n：Flutter Localizations（当前）
 │  ├─ 弹幕渲染：CustomPainter + Canvas 绘制
 │  ├─ 视频渲染：Flutter Texture widget + TextureRegistry + mpv 离屏 FBO
 │  └─ 代理：内置 mihomo 二进制（TV 端专属）
-│
-├─ Swift 侧技术选型
-│  ├─ 导航：TabView + NavigationStack + NavigationSplitView（原生）
-│  ├─ 网络：Alamofire（RequestInterceptor + RetryPolicy）
-│  ├─ 持久化：GRDB（SQLite）+ AppStorage（KV）
-│  ├─ 图片加载：Kingfisher（requestModifier 注 Token）
-│  ├─ 日志：SwiftLog + 自定义 FileLogHandler
-│  ├─ i18n：Apple 原生 String Catalog (.xcstrings)
-│  ├─ 视频渲染：UIViewRepresentable/NSViewRepresentable → MTKView
-│  └─ 弹幕渲染：Canvas + Text / SpriteKit
 │
 ├─ 全局基础设施
 │  ├─ 错误架构：sealed class(AppError) / enum AppError: LocalizedError
@@ -134,7 +95,7 @@ linplayer-swift/
 ├─ 分发渠道
 │  ├─ GitHub Release 直发（主力）
 │  ├─ App Store / TestFlight（iOS/macOS/tvOS）
-│  └─ CI/CD：Flutter → GitHub Actions / Swift → Codemagic
+│  └─ CI/CD：Flutter → GitHub Actions
 │
 ├─ 最低系统版本
 │  ├─ Android: API 24+
@@ -151,7 +112,7 @@ linplayer-swift/
 
 ## 三、手机端 UI 设计
 
-> 双风格策略：Flutter 端 Material 3 品牌化定制，Swift 端 Apple 原生 SwiftUI 风格。
+> 统一策略：所有平台沿用 Flutter 设计语言与组件抽象，再按平台补充交互细节。
 
 ### 3.1 设计 Tokens
 
@@ -657,7 +618,7 @@ linplayer://add-server?url=https://xxx.com&name=线路名
 │ 线路切换     │  → 选择不同线路
 │ 旋转屏幕     │  → 强制旋转（默认自动按视频比例）
 │ 定时关闭     │  → 设置倒计时
-│ 内核切换     │  → 切换 mpv/ExoPlayer/VLCKit
+│ 内核切换     │  → 切换 mpv/ExoPlayer
 │ 统计信息     │  → 视频/音频/网络统计
 │ 画面比例     │  → 原始/16:9/4:3/填充/裁剪/拉伸
 │ 画面裁剪     │  → 自定义裁剪

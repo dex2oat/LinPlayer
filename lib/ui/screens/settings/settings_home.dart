@@ -1,0 +1,165 @@
+part of 'settings_screen.dart';
+
+class SettingsScreen extends ConsumerWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('设置'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _SettingsCard(
+            icon: Icons.palette,
+            title: '通用设置',
+            subtitle: '外观、语言、启动页等',
+            onTap: () => _showGeneralSettings(context),
+          ),
+          _SettingsCard(
+            icon: Icons.play_circle,
+            title: '播放器设置',
+            subtitle: '内核、手势、播放行为等',
+            onTap: () => _showPlayerSettings(context),
+          ),
+          _SettingsCard(
+            icon: Icons.chat_bubble,
+            title: '弹幕设置',
+            subtitle: '外观、屏蔽词、延迟等',
+            onTap: () => _showDanmakuSettings(context),
+          ),
+          _SettingsCard(
+            icon: Icons.info,
+            title: '关于',
+            subtitle: '版本、开源许可、致谢',
+            onTap: () => _showAbout(context),
+          ),
+          _SettingsCard(
+            icon: Icons.backup,
+            title: '备份与恢复',
+            subtitle: '导出/导入服务器配置、WebDAV同步',
+            onTap: () => _showBackupRestore(context),
+          ),
+          // 线路同步已移至各服务器的线路管理页面
+        ],
+      ),
+    );
+  }
+
+  void _showGeneralSettings(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const GeneralSettingsScreen()),
+    );
+  }
+
+  void _showPlayerSettings(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const PlayerSettingsScreen()),
+    );
+  }
+
+  void _showDanmakuSettings(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const DanmakuSettingsScreen()),
+    );
+  }
+
+  void _showAbout(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('关于'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Linplayer v1.0.0'),
+            SizedBox(height: 8),
+            Text('GitHub: https://github.com/your-repo'),
+            SizedBox(height: 8),
+            Text('mpv version: 0.37.0'),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context), child: const Text('关闭')),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _exportLogs(context);
+            },
+            child: const Text('导出日志'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _exportLogs(BuildContext context) async {
+    try {
+      final path = await AppLogger().exportToFile();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('日志已导出到: $path')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导出日志失败: $e')),
+        );
+      }
+    }
+  }
+
+  void _showBackupRestore(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const BackupRestoreScreen()),
+    );
+  }
+}
+
+/// 设置卡片
+class _SettingsCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _SettingsCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: ListTile(
+        leading: Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(icon, color: const Color(0xFF5B8DEF)),
+        ),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Text(subtitle),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onTap,
+      ),
+    );
+  }
+}
+
+/// 通用设置页

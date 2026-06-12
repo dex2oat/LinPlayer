@@ -14,7 +14,6 @@ dependencies:
   
   # 状态管理
   flutter_riverpod: ^2.5.1
-  riverpod_annotation: ^2.3.5
   
   # 路由
   go_router: ^14.0.0
@@ -25,18 +24,11 @@ dependencies:
   
   # 图片加载
   extended_image: ^8.2.0
-  extended_image_library: ^4.0.0
   http_client_helper: ^3.0.0
   
   # 本地存储
   shared_preferences: ^2.2.2
-  drift: ^2.18.0
-  sqlite3_flutter_libs: ^0.5.20
-  
-  # 国际化
-  slang: ^3.30.0
-  slang_flutter: ^3.30.0
-  
+
   # 原生播放器
   # media_kit: 跨平台视频播放器（基于 libmpv 的封装库）
   # 注意：PC 端 PGS/SUP 渲染依赖 libmpv 是否包含 hdmv_pgs_subtitle 解码器；
@@ -45,30 +37,17 @@ dependencies:
   media_kit_video: ^1.3.1
   media_kit_libs_video: ^1.0.7
 
-
   # 工具
-  freezed_annotation: ^2.4.1
-  json_annotation: ^4.8.1
   path_provider: ^2.1.2
   path: ^1.9.0
   uuid: ^4.3.3
   
   # UI增强
   cupertino_icons: ^1.0.6
-  flutter_staggered_grid_view: ^0.7.0
-  shimmer: ^3.0.0
   
   # 颜色提取
   palette_generator: ^0.3.3+7
-  
-  # 日志
-  talker: ^4.0.0
-  talker_dio_logger: ^4.0.0
-  
-  # 手势
-  flutter_volume_controller: ^1.3.1
-  brightness_volume: ^1.0.3
-  
+
   # 投屏使用纯HTTP扫描（无需原生插件）
   
   # 后台下载
@@ -88,11 +67,6 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
-  build_runner: ^2.4.8
-  riverpod_generator: ^2.4.0
-  freezed: ^2.4.7
-  json_serializable: ^6.7.1
-  slang_build_runner: ^3.30.0
 
 flutter:
   uses-material-design: true

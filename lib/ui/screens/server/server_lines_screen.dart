@@ -14,11 +14,11 @@ class ServerLinesScreen extends ConsumerStatefulWidget {
 
 class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
   bool _isSyncing = false;
-  
+
   Future<void> _syncLines() async {
     final servers = ref.read(serverListProvider);
     final server = servers.firstWhere((s) => s.id == widget.serverId);
-    
+
     if (server.authToken == null) {
       _showToast('服务器未登录，无法同步');
       return;
@@ -36,10 +36,11 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
     int totalAdded = 0;
     int syncSourceCount = 0;
     String? lastError;
+    var workingServer = server;
 
     try {
       final service = ref.read(extDomainServiceProvider);
-      
+
       // 尝试从每条现有线路同步
       for (final line in server.lines) {
         try {
@@ -48,35 +49,32 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
             embyServerUrl: server.baseUrl,
             embyToken: server.authToken!,
           );
-          
+
           if (lines.isNotEmpty) {
             syncSourceCount++;
-            // 将获取的线路转换为 ServerLine 并更新到当前服务器
-            final newLines = lines.map((l) => ServerLine(
-              id: '${DateTime.now().millisecondsSinceEpoch}_${l.name}',
-              name: l.name,
-              url: l.url,
-              remark: l.remark,
-            )).toList();
+            final newLines = lines
+                .map(
+                  (entry) => ServerLine(
+                    id: '${DateTime.now().millisecondsSinceEpoch}_${entry.name}',
+                    name: entry.name,
+                    url: entry.url,
+                    remark: entry.remark,
+                  ),
+                )
+                .toList();
 
             // 合并现有线路和新线路（去重）
-            final existingLines = server.lines;
+            final existingLines = workingServer.lines;
             final mergedLines = [...existingLines];
             for (final newLine in newLines) {
-              if (!mergedLines.any((l) => l.url == newLine.url)) {
+              if (!mergedLines.any((existing) => existing.url == newLine.url)) {
                 mergedLines.add(newLine);
                 totalAdded++;
               }
             }
 
-            final updatedServer = server.copyWith(lines: mergedLines);
-            ref.read(serverListProvider.notifier).updateServer(updatedServer);
-            
-            // 如果当前选中的就是这个服务器，也更新当前服务器
-            final currentServer = ref.read(currentServerProvider);
-            if (currentServer?.id == widget.serverId) {
-              ref.read(currentServerProvider.notifier).state = updatedServer;
-            }
+            workingServer = workingServer.copyWith(lines: mergedLines);
+            _persistServerUpdate(ref, workingServer);
           }
         } catch (e) {
           lastError = e.toString();
@@ -142,7 +140,7 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
   Widget build(BuildContext context) {
     final servers = ref.watch(serverListProvider);
     final server = servers.firstWhere((s) => s.id == widget.serverId);
-    
+
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -182,12 +180,13 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
           
           return Card(
             margin: const EdgeInsets.only(bottom: 12),
-            color: isActive 
-                ? Theme.of(context).colorScheme.primaryContainer
-                : null,
+            color: isActive ? Theme.of(context).colorScheme.primaryContainer : null,
             child: ListTile(
               onTap: () {
-                ref.read(serverListProvider.notifier).setActiveLine(widget.serverId, index);
+                _persistServerUpdate(
+                  ref,
+                  server.copyWith(activeLineIndex: index),
+                );
               },
               title: Text(line.name),
               subtitle: Column(
@@ -225,7 +224,7 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
     final nameController = TextEditingController();
     final urlController = TextEditingController();
     final remarkController = TextEditingController();
-    
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -264,7 +263,8 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
                 url: urlController.text,
                 remark: remarkController.text.isEmpty ? null : remarkController.text,
               );
-              ref.read(serverListProvider.notifier).updateServer(
+              _persistServerUpdate(
+                ref,
                 server.copyWith(lines: [...server.lines, newLine]),
               );
               Navigator.pop(context);
@@ -280,7 +280,7 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
     final nameController = TextEditingController(text: line.name);
     final urlController = TextEditingController(text: line.url);
     final remarkController = TextEditingController(text: line.remark ?? '');
-    
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -312,7 +312,8 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
                 }
                 return l;
               }).toList();
-              ref.read(serverListProvider.notifier).updateServer(
+              _persistServerUpdate(
+                ref,
                 server.copyWith(lines: updatedLines),
               );
               Navigator.pop(context);
@@ -336,8 +337,17 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
             onPressed: () {
               final servers = ref.read(serverListProvider);
               final server = servers.firstWhere((s) => s.id == serverId);
-              ref.read(serverListProvider.notifier).updateServer(
-                server.copyWith(lines: server.lines.where((l) => l.id != line.id).toList()),
+              final remainingLines =
+                  server.lines.where((entry) => entry.id != line.id).toList();
+              final nextActiveLineIndex = remainingLines.isEmpty
+                  ? 0
+                  : server.activeLineIndex.clamp(0, remainingLines.length - 1);
+              _persistServerUpdate(
+                ref,
+                server.copyWith(
+                  lines: remainingLines,
+                  activeLineIndex: nextActiveLineIndex,
+                ),
               );
               Navigator.pop(context);
             },
@@ -347,5 +357,13 @@ class _ServerLinesScreenState extends ConsumerState<ServerLinesScreen> {
         ],
       ),
     );
+  }
+
+  void _persistServerUpdate(WidgetRef ref, ServerConfig updatedServer) {
+    ref.read(serverListProvider.notifier).updateServer(updatedServer);
+    final currentServer = ref.read(currentServerProvider);
+    if (currentServer?.id == updatedServer.id) {
+      ref.read(currentServerProvider.notifier).state = updatedServer;
+    }
   }
 }

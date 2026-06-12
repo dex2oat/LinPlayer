@@ -6,16 +6,19 @@
 // tree, read text, and verify that the values of widget properties are correct.
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:linplayer_mobile/app.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:linplayer_mobile/core/providers/app_preferences.dart';
 
 void main() {
   testWidgets('App renders smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
+    SharedPreferences.setMockInitialValues({});
+    await initializeAppPreferences();
+
     await tester.pumpWidget(const ProviderScope(child: LinPlayerApp()));
 
-    // Verify that the app renders without error.
     expect(find.byType(LinPlayerApp), findsOneWidget);
   });
 }

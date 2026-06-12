@@ -1,5 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/api/api_interfaces.dart';
@@ -1540,7 +1541,7 @@ class _LibrariesSection extends ConsumerWidget {
                 scrollDirection: Axis.horizontal,
                 primary: false,
                 physics: const ClampingScrollPhysics(),
-                cacheExtent: 640,
+                scrollCacheExtent: const ScrollCacheExtent.pixels(640),
                 itemCount: libraries.length,
                 itemBuilder: (context, index) {
                   final library = libraries[index];
@@ -1717,7 +1718,7 @@ class _LibraryLatestItems extends ConsumerWidget {
                 scrollDirection: Axis.horizontal,
                 primary: false,
                 physics: const ClampingScrollPhysics(),
-                cacheExtent: 720,
+                scrollCacheExtent: const ScrollCacheExtent.pixels(720),
                 itemCount: items.length,
                 itemBuilder: (context, index) {
                   return Padding(

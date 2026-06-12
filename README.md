@@ -2,6 +2,9 @@
 
 LinPlayer - Emby 第三方客户端移动端
 
+当前仓库以 Flutter 作为唯一长期代码线演进。
+后续 Apple 平台也计划复用这套 Flutter 架构，不再单独维护原生 Swift/SwiftUI 实现。
+
 ## 功能特性
 
 - **双播放器内核**：

@@ -124,17 +124,11 @@ class EmbyApiClient implements ApiClientFactory {
 }
 ```
 
-### 4. 替换Mock
+### 4. API 客户端入口
 
-在 `lib/core/providers/app_providers.dart` 中替换：
-
-```dart
-// 当前使用Mock
-final apiClientProvider = Provider<ApiClientFactory>((ref) => MockApiClient());
-
-// 替换为真实实现
-final apiClientProvider = Provider<ApiClientFactory>((ref) => EmbyApiClient());
-```
+当前 `apiClientProvider` 会基于已选择的服务器自动创建 `EmbyApiClient`。
+如果你要接入新的后端协议或做离线调试，保留这个 provider 作为统一 seam，
+在这里切换具体实现即可，而不是让页面直接 new API 客户端。
 
 ### 5. 数据模型
 
@@ -180,14 +174,12 @@ flutter build apk --release
 - ✅ 媒体库详情页（筛选、网格布局）
 - ✅ 下载页（下载列表、进度显示）
 
-### 待接入功能
+### 待补强功能
 
-- 🔄 Emby API 真实实现
-- 🔄 视频播放器内核（mpv/ExoPlayer）
-- 🔄 弹幕渲染引擎
-- 🔄 本地数据库（Drift）
-- 🔄 图片缓存（extended_image）
-- 🔄 国际化（slang）
+- 🔄 Apple 平台适配（沿用当前 Flutter 代码线）
+- 🔄 更多自动化测试与回归用例
+- 🔄 更完整的国际化与文案收敛
+- 🔄 结构化数据存储扩展（当前以 `shared_preferences` 为主）
 
 ## 贡献指南
 
