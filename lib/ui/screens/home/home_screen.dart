@@ -6,6 +6,7 @@ import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/media_providers.dart';
 import '../../../core/utils/color_extractor.dart';
 import '../../utils/media_helpers.dart';
+import '../../widgets/common/dynamic_background.dart';
 import '../../widgets/common/media_widgets.dart';
 
 /// 首页构建性能优化
@@ -78,60 +79,53 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final currentServer = ref.watch(currentServerProvider);
     final hideDailyRecommendations = ref.watch(hideDailyRecommendationsProvider);
     final recommendationsAsync = ref.watch(randomRecommendationsProvider);
-    final foregroundColor = readableTextColorForBackground(_backgroundColor);
-
     return Scaffold(
       backgroundColor: _backgroundColor,
-      body: Theme(
-        data: Theme.of(context).copyWith(
-          textTheme: Theme.of(context).textTheme.apply(
-                bodyColor: foregroundColor,
-                displayColor: foregroundColor,
-              ),
-        ),
+      body: DynamicBackground(
+        backgroundColor: _backgroundColor,
         child: Stack(
-          children: [
-            CustomScrollView(
-              controller: _scrollController,
-              slivers: [
-                // 随机推荐轮播（可被隐藏）- 直接顶到最上方
-                if (!hideDailyRecommendations)
-                  SliverToBoxAdapter(
-                    child: RandomRecommendationCarousel(
-                      onColorChanged: _onBackgroundColorChanged,
+            children: [
+              CustomScrollView(
+                controller: _scrollController,
+                slivers: [
+                  // 随机推荐轮播（可被隐藏）- 直接顶到最上方
+                  if (!hideDailyRecommendations)
+                    SliverToBoxAdapter(
+                      child: RandomRecommendationCarousel(
+                        onColorChanged: _onBackgroundColorChanged,
+                      ),
                     ),
-                  ),
 
-                // 继续观看
-                const SliverToBoxAdapter(child: ContinueWatchingSection()),
+                  // 继续观看
+                  const SliverToBoxAdapter(child: ContinueWatchingSection()),
 
-                // 媒体库
-                const SliverToBoxAdapter(child: LibrariesSection()),
+                  // 媒体库
+                  const SliverToBoxAdapter(child: LibrariesSection()),
 
-                // 各媒体库最新内容
-                const SliverToBoxAdapter(child: LatestItemsSections()),
+                  // 各媒体库最新内容
+                  const SliverToBoxAdapter(child: LatestItemsSections()),
 
-                const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
-              ],
-            ),
-            // 顶部栏（悬浮，透明背景）
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: AnimatedOpacity(
-                opacity: _appBarOpacity,
-                duration: const Duration(milliseconds: 150),
-                child: _HomeAppBar(
-                  serverName: currentServer?.name ?? '服务器',
-                  backgroundImage: recommendationsAsync.when(
-                    data: (items) => items.isNotEmpty ? items.first : null,
-                    loading: () => null,
-                    error: (_, __) => null,
+                  const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
+                ],
+              ),
+              // 顶部栏（悬浮，透明背景）
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: AnimatedOpacity(
+                  opacity: _appBarOpacity,
+                  duration: const Duration(milliseconds: 150),
+                  child: _HomeAppBar(
+                    serverName: currentServer?.name ?? '服务器',
+                    backgroundImage: recommendationsAsync.when(
+                      data: (items) => items.isNotEmpty ? items.first : null,
+                      loading: () => null,
+                      error: (_, __) => null,
+                    ),
                   ),
                 ),
               ),
-            ),
           ],
         ),
       ),
@@ -1394,7 +1388,7 @@ class _LibraryLatestSection extends ConsumerWidget {
               ),
             ),
             HorizontalList(
-              height: 200,
+              height: 240,
               children: items.map((item) {
                 return SizedBox(
                   width: 120,

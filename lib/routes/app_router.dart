@@ -164,6 +164,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/season/:id',
         builder: (context, state) => SeasonDetailScreen(
           seasonId: state.pathParameters['id']!,
+          backgroundColor: state.extra is Color ? state.extra as Color : null,
         ),
       ),
       GoRoute(
