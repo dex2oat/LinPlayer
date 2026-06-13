@@ -11,6 +11,12 @@ val ciTargetAbis = providers.gradleProperty("linplayerTargetAbis")
     ?.map(String::trim)
     ?.filter(String::isNotEmpty)
     ?: emptyList()
+val knownNativeAbis = listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+val excludedCiAbis = if (ciTargetAbis.isNotEmpty()) {
+    knownNativeAbis.filterNot(ciTargetAbis::contains)
+} else {
+    emptyList()
+}
 
 android {
     namespace = "com.example.linplayer_mobile"
@@ -69,6 +75,7 @@ android {
     }
 
     packagingOptions {
+        excludes += excludedCiAbis.map { "lib/$it/**" }
         // Prefer a single shared STL copy when prebuilt dependencies bundle it.
         pickFirsts += listOf(
             "lib/arm64-v8a/libc++_shared.so",

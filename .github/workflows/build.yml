@@ -136,14 +136,14 @@ jobs:
           CLEAN_SECRET=$(printf '%s' "$DANDANPLAY_APP_SECRET" | tr -d '\r\n')
           VERSION="${{ needs.prepare.outputs.version }}"
 
-          flutter build apk --release \
+          flutter build apk --release --split-per-abi \
             --flavor mobile \
             --target-platform android-arm64 \
             --dart-define=DANDANPLAY_APP_ID="$CLEAN_ID" \
             --dart-define=DANDANPLAY_APP_SECRET="$CLEAN_SECRET"
 
           APK_DIR="build/app/outputs/flutter-apk"
-          ARM64_SOURCE=$(find "$APK_DIR" -maxdepth 1 -type f -name '*mobile*release.apk' | head -n 1)
+          ARM64_SOURCE=$(find "$APK_DIR" -maxdepth 1 -type f -name '*arm64-v8a*release.apk' | head -n 1)
           ARM64_TARGET="$APK_DIR/LinPlayer-Android-Mobile-v$VERSION-arm64-v8a.apk"
 
           if [ -z "$ARM64_SOURCE" ] || [ ! -f "$ARM64_SOURCE" ]; then
@@ -153,6 +153,19 @@ jobs:
           fi
 
           cp "$ARM64_SOURCE" "$ARM64_TARGET"
+          APK_ABIS=$(unzip -Z1 "$ARM64_TARGET" | grep '^lib/' | cut -d/ -f2 | sort -u)
+          echo "Android Mobile APK ABIs:"
+          printf '%s\n' "$APK_ABIS"
+          if ! printf '%s\n' "$APK_ABIS" | grep -qx 'arm64-v8a'; then
+            echo "arm64-v8a ABI missing from mobile APK"
+            exit 1
+          fi
+          UNEXPECTED_ABIS=$(printf '%s\n' "$APK_ABIS" | grep -v '^arm64-v8a$' || true)
+          if [ -n "$UNEXPECTED_ABIS" ]; then
+            echo "Unexpected ABI entries found in mobile APK:"
+            printf '%s\n' "$UNEXPECTED_ABIS"
+            exit 1
+          fi
           ls -lh "$ARM64_TARGET"
 
       - name: Upload Android Mobile APK
@@ -245,7 +258,7 @@ jobs:
           VERSION="${{ needs.prepare.outputs.version }}"
 
           # Android TV release only needs the 32-bit build.
-          flutter build apk --release \
+          flutter build apk --release --split-per-abi \
             --flavor tv \
             --target-platform android-arm \
             --dart-define=FLAVOR=tv \
@@ -253,7 +266,7 @@ jobs:
             --dart-define=DANDANPLAY_APP_SECRET="$CLEAN_SECRET"
 
           TV_APK_DIR="build/app/outputs/flutter-apk"
-          TV_APK_SOURCE=$(find "$TV_APK_DIR" -maxdepth 1 -type f -name '*tv*release.apk' | head -n 1)
+          TV_APK_SOURCE=$(find "$TV_APK_DIR" -maxdepth 1 -type f -name '*armeabi-v7a*release.apk' | head -n 1)
           TV_APK_TARGET="$TV_APK_DIR/LinPlayer-Android-TV-v$VERSION-armeabi-v7a.apk"
 
           if [ -z "$TV_APK_SOURCE" ] || [ ! -f "$TV_APK_SOURCE" ]; then
@@ -263,6 +276,19 @@ jobs:
           fi
 
           cp "$TV_APK_SOURCE" "$TV_APK_TARGET"
+          APK_ABIS=$(unzip -Z1 "$TV_APK_TARGET" | grep '^lib/' | cut -d/ -f2 | sort -u)
+          echo "Android TV APK ABIs:"
+          printf '%s\n' "$APK_ABIS"
+          if ! printf '%s\n' "$APK_ABIS" | grep -qx 'armeabi-v7a'; then
+            echo "armeabi-v7a ABI missing from Android TV APK"
+            exit 1
+          fi
+          UNEXPECTED_ABIS=$(printf '%s\n' "$APK_ABIS" | grep -v '^armeabi-v7a$' || true)
+          if [ -n "$UNEXPECTED_ABIS" ]; then
+            echo "Unexpected ABI entries found in Android TV APK:"
+            printf '%s\n' "$UNEXPECTED_ABIS"
+            exit 1
+          fi
           ls -lh "$TV_APK_TARGET"
 
       - name: Upload Android TV APK
