@@ -9,6 +9,7 @@ import '../../../core/utils/color_extractor.dart';
 import '../../../core/utils/platform_utils.dart';
 import '../../screens/download/download_screen.dart';
 import '../../utils/media_helpers.dart';
+import '../../widgets/common/dynamic_background.dart';
 import '../../widgets/common/media_widgets.dart';
 import '../../widgets/common/playback_options.dart';
 import '../../widgets/common/video_background.dart';
@@ -62,13 +63,8 @@ class _DetailContentState extends State<_DetailContent> {
     final foregroundColor = readableTextColorForBackground(_backgroundColor);
     return Scaffold(
       backgroundColor: _backgroundColor,
-      body: Theme(
-        data: Theme.of(context).copyWith(
-          textTheme: Theme.of(context).textTheme.apply(
-                bodyColor: foregroundColor,
-                displayColor: foregroundColor,
-              ),
-        ),
+      body: DynamicBackground(
+        backgroundColor: _backgroundColor,
         child: CustomScrollView(
         slivers: [
           // 封面区域
@@ -94,7 +90,7 @@ class _DetailContentState extends State<_DetailContent> {
               child: _SeasonsAndEpisodesSection(
                 itemId: widget.itemId,
                 onEpisodeTap: (episode) => context.push('/episode/${episode.id}'),
-                onSeasonTap: (season) => context.push('/season/${season.id}'),
+                onSeasonTap: (season) => context.push('/season/${season.id}', extra: _backgroundColor),
               ),
             ),
           ],
@@ -726,6 +722,7 @@ class _EpisodeListTile extends ConsumerWidget {
           Expanded(
             child: Text(
               'E${episode.indexNumber} ${episode.name}',
+              style: TextStyle(color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -820,10 +817,12 @@ class _MoviePlayButtons extends ConsumerWidget {
     final api = ref.read(apiClientProvider);
     showModalBottomSheet(
       context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+      builder: (context) => DefaultTextStyle.merge(
+        style: TextStyle(color: Theme.of(context).textTheme.bodyLarge?.color),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
             ListTile(
               leading: const Icon(Icons.cast),
               title: const Text('投屏'),
@@ -902,6 +901,7 @@ class _MoviePlayButtons extends ConsumerWidget {
           ],
         ),
       ),
+      ),
     );
   }
 
@@ -942,8 +942,10 @@ class _MoviePlayButtons extends ConsumerWidget {
     
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
+      builder: (context) => DefaultTextStyle.merge(
+        style: TextStyle(color: Theme.of(context).textTheme.bodyLarge?.color),
+        child: AlertDialog(
+          title: Row(
           children: [
             const Text('投屏设备'),
             const Spacer(),
@@ -999,8 +1001,9 @@ class _MoviePlayButtons extends ConsumerWidget {
           ),
         ],
       ),
+      ),
     );
-    
+
     // 开始扫描
     castService.startDiscovery();
   }

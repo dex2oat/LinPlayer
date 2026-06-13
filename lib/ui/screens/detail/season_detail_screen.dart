@@ -9,6 +9,7 @@ import '../../../core/utils/color_extractor.dart';
 import '../../../core/utils/platform_utils.dart';
 import '../../screens/download/download_screen.dart';
 import '../../utils/media_helpers.dart';
+import '../../widgets/common/dynamic_background.dart';
 import '../../widgets/common/media_widgets.dart';
 import '../../widgets/common/playback_options.dart';
 import '../../widgets/common/video_background.dart';
@@ -16,8 +17,13 @@ import '../../widgets/common/video_background.dart';
 /// 季详情页
 class SeasonDetailScreen extends ConsumerStatefulWidget {
   final String seasonId;
+  final Color? backgroundColor;
 
-  const SeasonDetailScreen({super.key, required this.seasonId});
+  const SeasonDetailScreen({
+    super.key,
+    required this.seasonId,
+    this.backgroundColor,
+  });
 
   @override
   ConsumerState<SeasonDetailScreen> createState() => _SeasonDetailScreenState();
@@ -59,73 +65,77 @@ class _SeasonDetailScreenState extends ConsumerState<SeasonDetailScreen> {
   Widget build(BuildContext context) {
     final api = ref.read(apiClientProvider);
 
-    if (_seriesId == null) {
-      return Scaffold(
-        appBar: AppBar(title: Text(_seasonName ?? '季详情')),
-        body: const Center(child: CircularProgressIndicator()),
-      );
-    }
-
-    final episodesAsync = ref.watch(episodesProvider((seriesId: _seriesId!, seasonId: widget.seasonId)));
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_seasonName ?? '季详情'),
+    return DynamicBackground(
+      backgroundColor: widget.backgroundColor ?? const Color(0xFF121212),
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_seasonName ?? '季详情'),
+        ),
+        body: _seriesId == null
+            ? const Center(child: CircularProgressIndicator())
+            : _buildEpisodeList(api),
       ),
-      body: episodesAsync.when(
-        data: (episodes) {
-          if (episodes.isEmpty) {
-            return const Center(child: Text('暂无集数'));
-          }
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: episodes.length,
-            itemBuilder: (context, index) {
-              final episode = episodes[index];
-              final imageUrls = resolveEpisodeLandscapeImageUrls(
-                api,
-                episode,
-                maxWidth: 480,
-              );
-              return Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                child: ListTile(
-                  onTap: () => context.push('/episode/${episode.id}'),
-                  leading: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      width: 100,
-                      height: 60,
-                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                      child: imageUrls.isNotEmpty
-                          ? MediaImage(
-                              imageUrl: imageUrls.first,
-                              imageUrls: imageUrls.length > 1
-                                  ? imageUrls.sublist(1)
-                                  : null,
-                              width: 100,
-                              height: 60,
-                              fit: BoxFit.cover,
-                            )
-                          : const Center(child: Icon(Icons.play_arrow)),
-                    ),
+    );
+  }
+
+  Widget _buildEpisodeList(ApiClientFactory api) {
+    final episodesAsync = ref.watch(
+      episodesProvider((seriesId: _seriesId!, seasonId: widget.seasonId)),
+    );
+
+    return episodesAsync.when(
+      data: (episodes) {
+        if (episodes.isEmpty) {
+          return const Center(child: Text('暂无集数'));
+        }
+        return ListView.builder(
+          padding: const EdgeInsets.all(16),
+          itemCount: episodes.length,
+          itemBuilder: (context, index) {
+            final episode = episodes[index];
+            final imageUrls = resolveEpisodeLandscapeImageUrls(
+              api,
+              episode,
+              maxWidth: 480,
+            );
+            return Card(
+              margin: const EdgeInsets.only(bottom: 12),
+              child: ListTile(
+                onTap: () => context.push('/episode/${episode.id}'),
+                leading: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    width: 100,
+                    height: 60,
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    child: imageUrls.isNotEmpty
+                        ? MediaImage(
+                            imageUrl: imageUrls.first,
+                            imageUrls: imageUrls.length > 1
+                                ? imageUrls.sublist(1)
+                                : null,
+                            width: 100,
+                            height: 60,
+                            fit: BoxFit.cover,
+                          )
+                        : const Center(child: Icon(Icons.play_arrow)),
                   ),
-                  title: Text('E${episode.indexNumber} ${episode.name}'),
-                  subtitle: Text(
-                    episode.formattedRuntime ?? '',
-                    style: TextStyle(color: Theme.of(context).textTheme.bodySmall?.color),
-                  ),
-                  trailing: episode.userData?.played ?? false
-                      ? const Icon(Icons.check_circle, color: Color(0xFF5B8DEF))
-                      : null,
                 ),
-              );
-            },
-          );
-        },
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, _) => Center(child: Text('错误: $error')),
-      ),
+                title: Text('E${episode.indexNumber} ${episode.name}'),
+                subtitle: Text(
+                  episode.formattedRuntime ?? '',
+                  style: TextStyle(color: Theme.of(context).textTheme.bodySmall?.color),
+                ),
+                trailing: episode.userData?.played ?? false
+                    ? const Icon(Icons.check_circle, color: Color(0xFF5B8DEF))
+                    : null,
+              ),
+            );
+          },
+        );
+      },
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (error, _) => Center(child: Text('错误: $error')),
     );
   }
 }
@@ -181,13 +191,8 @@ class _EpisodeDetailScreenState extends ConsumerState<EpisodeDetailScreen> {
     return Scaffold(
       backgroundColor: _backgroundColor,
       body: itemAsync.when(
-        data: (item) => Theme(
-          data: Theme.of(context).copyWith(
-            textTheme: Theme.of(context).textTheme.apply(
-                  bodyColor: foregroundColor,
-                  displayColor: foregroundColor,
-                ),
-          ),
+        data: (item) => DynamicBackground(
+          backgroundColor: _backgroundColor,
           child: CustomScrollView(
           slivers: [
             // 封面区域
