@@ -283,14 +283,12 @@ jobs:
           retention-days: 3
 
   # ============================================================
-  # Apple TV 构建 (实验性)
+  # iOS 移动端构建
   # ============================================================
-  build-apple-tv:
-    name: Build Apple TV (Experimental)
+  build-ios:
+    name: Build iOS App Bundle
     runs-on: macos-latest
     needs: [prepare, analyze]
-    # Mark as experimental - Flutter tvOS support is limited
-    continue-on-error: true
 
     steps:
       - name: Checkout code
@@ -306,7 +304,10 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Build Apple TV Release (Experimental)
+      - name: Enable iOS
+        run: flutter config --enable-ios
+
+      - name: Build iOS Release (unsigned)
         env:
           DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
           DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
@@ -314,42 +315,38 @@ jobs:
           CLEAN_ID=$(printf '%s' "$DANDANPLAY_APP_ID" | tr -d '\r\n')
           CLEAN_SECRET=$(printf '%s' "$DANDANPLAY_APP_SECRET" | tr -d '\r\n')
 
-          # Note: Flutter tvOS support is experimental
-          # This requires tvOS platform setup in the project
-          # For now, we create a placeholder artifact with build instructions
-          mkdir -p build/tv/apple
-          echo "LinPlayer Apple TV build - Experimental" > build/tv/apple/README.txt
-          echo "Flutter tvOS support is currently experimental." >> build/tv/apple/README.txt
-          echo "Build Date: $(date)" >> build/tv/apple/README.txt
-          echo "Version: ${{ needs.prepare.outputs.version }}" >> build/tv/apple/README.txt
-
-          # Attempt to build if tvOS is configured
-          if flutter build ios --release \
-            --dart-define=FLAVOR=tv \
+          flutter build ios --release --no-codesign \
             --dart-define=DANDANPLAY_APP_ID="$CLEAN_ID" \
-            --dart-define=DANDANPLAY_APP_SECRET="$CLEAN_SECRET" 2>/dev/null; then
-            echo "iOS build succeeded - tvOS build may be possible with additional configuration"
-            # Copy iOS build artifacts as reference
-            cp -R build/ios/Release-iphoneos/Runner.app build/tv/apple/ 2>/dev/null || true
+            --dart-define=DANDANPLAY_APP_SECRET="$CLEAN_SECRET"
+
+      - name: Package iOS app bundle
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          APP_PATH=$(find build/ios/iphoneos -maxdepth 1 -type d -name "*.app" | head -n 1)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "No iOS app bundle found in build output"
+            exit 1
           fi
 
-          # Package the TV build directory
-          cd build/tv/apple
-          zip -r "../../../LinPlayer-AppleTV-v${{ needs.prepare.outputs.version }}.zip" . || true
-          cd ../../..
+          OUTPUT_NAME="LinPlayer-iOS-v$VERSION-unsigned"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$OUTPUT_NAME.zip"
 
-      - name: Upload Apple TV artifact
+          echo "Created: $OUTPUT_NAME.zip"
+          ls -la build/ios/iphoneos
+
+      - name: Upload iOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-apple-tv
-          path: LinPlayer-AppleTV-*.zip
+          name: release-ios
+          path: LinPlayer-iOS-*.zip
           retention-days: 30
 
       - name: Upload build logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs-apple-tv
+          name: build-logs-ios
           path: build/
           retention-days: 3
 
@@ -586,7 +583,7 @@ jobs:
   # ============================================================
   create-prerelease:
     name: Create Pre-release
-    needs: [prepare, build-android, build-android-tv, build-windows, build-linux, build-macos, build-apple-tv]
+    needs: [prepare, build-android, build-android-tv, build-ios, build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
 

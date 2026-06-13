@@ -39,18 +39,11 @@ jobs:
             "/tmp/assets/app-arm64-v8a-release.apk"
             "/tmp/assets/app-armeabi-v7a-release.apk"
             "/tmp/assets/linplayer-tv.apk"
+            "/tmp/assets/LinPlayer-iOS-v${{ inputs.version }}-unsigned.zip"
             "/tmp/assets/LinPlayer-Windows-v${{ inputs.version }}.zip"
             "/tmp/assets/LinPlayer-Linux-v${{ inputs.version }}.tar.gz"
             "/tmp/assets/LinPlayer-macOS-v${{ inputs.version }}.zip"
           )
-
-          # Apple TV is optional (experimental)
-          APPLETV_FILE="/tmp/assets/LinPlayer-AppleTV-v${{ inputs.version }}.zip"
-          if [ -f "$APPLETV_FILE" ]; then
-            echo "Found Apple TV artifact (experimental)"
-          else
-            echo "Apple TV artifact not found (expected for experimental build)"
-          fi
 
           for file in "${REQUIRED_FILES[@]}"; do
             if [ ! -f "$file" ]; then
@@ -75,14 +68,14 @@ jobs:
             ### 下载
 
             **Android**
-            - `app-arm64-v8a-release.apk`：推荐，大多数现代 Android 设备使用此版本
-            - `app-armeabi-v7a-release.apk`：兼容较老的 32 位 Android 设备
+            - `app-arm64-v8a-release.apk`：推荐给大多数现代 Android 设备
+            - `app-armeabi-v7a-release.apk`：兼容较旧的 32 位 Android 设备
 
             **Android TV**
-            - `linplayer-tv.apk`：专为 Android TV 优化，支持遥控器导航和焦点系统
+            - `linplayer-tv.apk`：针对 Android TV 遥控器和焦点导航优化
 
-            **Apple TV** (Experimental)
-            - `LinPlayer-AppleTV-v${{ inputs.version }}.zip`：实验性支持，功能可能不完整
+            **iOS**
+            - `LinPlayer-iOS-v${{ inputs.version }}-unsigned.zip`：真实 iOS Release 构建产物，当前为未签名 `.app` 打包
 
             **Windows**
             - `LinPlayer-Windows-v${{ inputs.version }}.zip`：解压后运行其中的可执行文件
@@ -91,44 +84,41 @@ jobs:
             - `LinPlayer-Linux-v${{ inputs.version }}.tar.gz`：解压后运行目录中的可执行文件
 
             **macOS**
-            - `LinPlayer-macOS-v${{ inputs.version }}.zip`：解压后打开 `.app` 应用包
+            - `LinPlayer-macOS-v${{ inputs.version }}.zip`：解压后打开 `.app`
 
             ### 安装说明
 
             **Android**
-            1. 下载适合设备架构的 APK
-            2. 允许安装未知来源应用
-            3. 完成安装后启动应用
+            1. 下载适合设备架构的 APK。
+            2. 允许安装未知来源应用。
+            3. 完成安装后启动应用。
 
             **Android TV**
-            1. 下载 `linplayer-tv.apk`
-            2. 通过 ADB 或文件管理器安装到 Android TV
-            3. 使用遥控器导航，支持方向键和确认键
-            4. 注意事项：
-               - 强制深色模式，无浅色选项
-               - 支持遥控器焦点导航（放大 1.15x + 白色边框）
-               - 播放器支持 MPV（默认）和 ExoPlayer 切换
-               - 虚拟键盘 26 键布局，左右键切换
+            1. 下载 `linplayer-tv.apk`。
+            2. 通过 ADB 或文件管理器安装到 Android TV。
+            3. 使用遥控器方向键和确认键导航。
 
-            **Apple TV** (Experimental)
-            1. 下载 ZIP 文件
-            2. 当前为实验性构建，完整 tvOS 支持需要额外配置
-            3. 关注后续版本更新以获取完整 Apple TV 支持
+            **iOS**
+            1. 下载 `LinPlayer-iOS-v${{ inputs.version }}-unsigned.zip`。
+            2. 在 macOS 上解压得到 `.app`。
+            3. 使用开发证书或分发证书重新签名后，再通过 Xcode、Apple Configurator 或其他分发流程安装。
+            4. 如需直接产出可安装 `.ipa`，请在 CI 或本地 Xcode 中补充 Apple 签名与导出配置。
+            5. Flutter 官方当前不支持 tvOS，因此不会发布 Apple TV 安装包。
 
             **Windows**
-            1. 下载 ZIP 文件
-            2. 解压到任意目录
-            3. 运行其中的应用程序
+            1. 下载 ZIP 文件。
+            2. 解压到任意目录。
+            3. 运行其中的应用程序。
 
             **Linux**
-            1. 下载 `.tar.gz` 文件
-            2. 解压到任意目录
-            3. 为可执行文件添加执行权限后运行
+            1. 下载 `.tar.gz` 文件。
+            2. 解压到任意目录。
+            3. 为可执行文件添加执行权限后运行。
 
             **macOS**
-            1. 下载 ZIP 文件
-            2. 解压得到 `.app`
-            3. 首次打开如遇到安全提示，请在系统设置中允许启动
+            1. 下载 ZIP 文件。
+            2. 解压得到 `.app`。
+            3. 首次打开如遇到安全提示，请在系统设置中允许运行。
 
       - name: Delete Pre-release
         env:
