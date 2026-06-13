@@ -166,10 +166,12 @@ class _EpisodeDetailScreenState extends ConsumerState<EpisodeDetailScreen> {
   }
 
   void _resetPlaybackSelections() {
-    ref.read(selectedMediaSourceProvider.notifier).state = null;
-    ref.read(audioTrackProvider.notifier).state = null;
-    ref.read(subtitleTrackProvider.notifier).state = null;
-    ref.read(secondarySubtitleTrackProvider.notifier).state = null;
+    Future.microtask(() {
+      ref.read(selectedMediaSourceProvider.notifier).state = null;
+      ref.read(audioTrackProvider.notifier).state = null;
+      ref.read(subtitleTrackProvider.notifier).state = null;
+      ref.read(secondarySubtitleTrackProvider.notifier).state = null;
+    });
   }
 
   Color _backgroundColor = const Color(0xFF121212);
