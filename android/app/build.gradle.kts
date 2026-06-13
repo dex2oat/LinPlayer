@@ -5,6 +5,13 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val ciTargetAbis = providers.gradleProperty("linplayerTargetAbis")
+    .orNull
+    ?.split(",")
+    ?.map(String::trim)
+    ?.filter(String::isNotEmpty)
+    ?: emptyList()
+
 android {
     namespace = "com.example.linplayer_mobile"
     compileSdk = 36
@@ -32,6 +39,12 @@ android {
                 // Keep the JNI bridge self-contained so packaging does not
                 // collide with the shared STL shipped by prebuilt native libs.
                 arguments += "-DANDROID_STL=c++_static"
+            }
+        }
+
+        ndk {
+            if (ciTargetAbis.isNotEmpty()) {
+                abiFilters.addAll(ciTargetAbis)
             }
         }
 

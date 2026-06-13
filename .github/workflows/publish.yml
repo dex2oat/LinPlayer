@@ -36,11 +36,10 @@ jobs:
           echo "Verifying downloaded assets..."
 
           REQUIRED_FILES=(
-            "/tmp/assets/app-arm64-v8a-release.apk"
-            "/tmp/assets/app-armeabi-v7a-release.apk"
-            "/tmp/assets/linplayer-tv.apk"
+            "/tmp/assets/LinPlayer-Android-Mobile-v${{ inputs.version }}-arm64-v8a.apk"
+            "/tmp/assets/LinPlayer-Android-TV-v${{ inputs.version }}-armeabi-v7a.apk"
             "/tmp/assets/LinPlayer-iOS-v${{ inputs.version }}-unsigned.zip"
-            "/tmp/assets/LinPlayer-tvOS-v${{ inputs.version }}-unsigned.zip"
+            "/tmp/assets/LinPlayer-AppleTV-v${{ inputs.version }}-unsigned-app.zip"
             "/tmp/assets/LinPlayer-Windows-v${{ inputs.version }}.zip"
             "/tmp/assets/LinPlayer-Linux-v${{ inputs.version }}.tar.gz"
             "/tmp/assets/LinPlayer-macOS-v${{ inputs.version }}.zip"
@@ -68,37 +67,36 @@ jobs:
 
             ### 下载
 
-            **Android**
-            - `app-arm64-v8a-release.apk`：推荐给大多数现代 Android 设备
-            - `app-armeabi-v7a-release.apk`：兼容较旧的 32 位 Android 设备
+            **Android Mobile**
+            - `LinPlayer-Android-Mobile-v${{ inputs.version }}-arm64-v8a.apk`：仅包含 64 位 `arm64-v8a`，适用于现代 Android 手机和平板。
 
             **Android TV**
-            - `linplayer-tv.apk`：针对 Android TV 遥控器和焦点导航优化
+            - `LinPlayer-Android-TV-v${{ inputs.version }}-armeabi-v7a.apk`：仅包含 32 位 `armeabi-v7a`，针对 Android TV 遥控器和焦点导航优化。
 
             **iOS Mobile**
-            - `LinPlayer-iOS-v${{ inputs.version }}-unsigned.zip`：真实 iOS Release 构建产物，当前为未签名 `.app` 打包
+            - `LinPlayer-iOS-v${{ inputs.version }}-unsigned.zip`：真实 iOS Release 构建产物，当前为未签名 `.app` 打包。
 
             **Apple TV (tvOS)**
-            - `LinPlayer-tvOS-v${{ inputs.version }}-unsigned.zip`：原生 Swift/SwiftUI 构建，当前为未签名 `.app` 打包
+            - `LinPlayer-AppleTV-v${{ inputs.version }}-unsigned-app.zip`：原生 Swift/SwiftUI 构建，当前为未签名 `.app` 打包。
 
             **Windows**
-            - `LinPlayer-Windows-v${{ inputs.version }}.zip`：解压后运行其中的可执行文件
+            - `LinPlayer-Windows-v${{ inputs.version }}.zip`：解压后运行其中的可执行文件。
 
             **Linux**
-            - `LinPlayer-Linux-v${{ inputs.version }}.tar.gz`：解压后运行目录中的可执行文件
+            - `LinPlayer-Linux-v${{ inputs.version }}.tar.gz`：解压后运行目录中的可执行文件。
 
             **macOS**
-            - `LinPlayer-macOS-v${{ inputs.version }}.zip`：解压后打开 `.app`
+            - `LinPlayer-macOS-v${{ inputs.version }}.zip`：解压后打开 `.app`。
 
             ### 安装说明
 
-            **Android**
-            1. 下载适合设备架构的 APK。
+            **Android Mobile**
+            1. 下载 `LinPlayer-Android-Mobile-v${{ inputs.version }}-arm64-v8a.apk`。
             2. 允许安装未知来源应用。
             3. 完成安装后启动应用。
 
             **Android TV**
-            1. 下载 `linplayer-tv.apk`。
+            1. 下载 `LinPlayer-Android-TV-v${{ inputs.version }}-armeabi-v7a.apk`。
             2. 通过 ADB 或文件管理器安装到 Android TV。
             3. 使用遥控器方向键和确认键导航。
 
@@ -109,10 +107,10 @@ jobs:
             4. 如需直接产出可安装 `.ipa`，请在 CI 或本地 Xcode 中补充 Apple 签名与导出配置。
 
             **Apple TV (tvOS)**
-            1. 下载 `LinPlayer-tvOS-v${{ inputs.version }}-unsigned.zip`。
+            1. 下载 `LinPlayer-AppleTV-v${{ inputs.version }}-unsigned-app.zip`。
             2. 在 macOS 上解压得到 `.app`。
             3. 使用 Apple 开发证书重新签名后，通过 Xcode 或 Apple Configurator 安装到 Apple TV。
-            4. 也可通过 TestFlight 分发（需配置 App Store Connect）。
+            4. 也可通过 TestFlight 分发，前提是已配置 App Store Connect。
 
             **Windows**
             1. 下载 ZIP 文件。

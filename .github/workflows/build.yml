@@ -66,7 +66,7 @@ jobs:
   # Android 构建
   # ============================================================
   build-android:
-    name: Build Android APK
+    name: Build Android Mobile APK (arm64-v8a)
     runs-on: ubuntu-latest
     needs: [prepare, analyze]
 
@@ -124,47 +124,42 @@ jobs:
             fi
           done
 
-      - name: Build Release APK (split per ABI)
+      - name: Build Android Mobile Release APK (arm64-v8a)
         env:
           DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
           DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
+          ORG_GRADLE_PROJECT_linplayerTargetAbis: arm64-v8a
         run: |
           $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "platforms;android-36" 2>/dev/null || true
 
           CLEAN_ID=$(printf '%s' "$DANDANPLAY_APP_ID" | tr -d '\r\n')
           CLEAN_SECRET=$(printf '%s' "$DANDANPLAY_APP_SECRET" | tr -d '\r\n')
+          VERSION="${{ needs.prepare.outputs.version }}"
 
-          flutter build apk --release --split-per-abi \
+          flutter build apk --release \
             --flavor mobile \
-            --target-platform android-arm,android-arm64 \
+            --target-platform android-arm64 \
             --dart-define=DANDANPLAY_APP_ID="$CLEAN_ID" \
             --dart-define=DANDANPLAY_APP_SECRET="$CLEAN_SECRET"
 
           APK_DIR="build/app/outputs/flutter-apk"
-          ARM64_SOURCE=$(find "$APK_DIR" -maxdepth 1 -type f -name '*arm64-v8a*release.apk' | head -n 1)
-          ARMEABI_SOURCE=$(find "$APK_DIR" -maxdepth 1 -type f -name '*armeabi-v7a*release.apk' | head -n 1)
+          ARM64_SOURCE=$(find "$APK_DIR" -maxdepth 1 -type f -name '*mobile*release.apk' | head -n 1)
+          ARM64_TARGET="$APK_DIR/LinPlayer-Android-Mobile-v$VERSION-arm64-v8a.apk"
 
-          if [ -z "$ARM64_SOURCE" ] || [ -z "$ARMEABI_SOURCE" ]; then
-            echo "Expected mobile split APKs not found in $APK_DIR"
+          if [ -z "$ARM64_SOURCE" ] || [ ! -f "$ARM64_SOURCE" ]; then
+            echo "Expected mobile arm64 APK not found in $APK_DIR"
             ls -lah "$APK_DIR" || true
             exit 1
           fi
 
-          cp "$ARM64_SOURCE" "$APK_DIR/app-arm64-v8a-release.apk"
-          cp "$ARMEABI_SOURCE" "$APK_DIR/app-armeabi-v7a-release.apk"
+          cp "$ARM64_SOURCE" "$ARM64_TARGET"
+          ls -lh "$ARM64_TARGET"
 
-      - name: Upload arm64-v8a APK
+      - name: Upload Android Mobile APK
         uses: actions/upload-artifact@v4
         with:
-          name: release-android-arm64-v8a
-          path: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-          retention-days: 30
-
-      - name: Upload armeabi-v7a APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-android-armeabi-v7a
-          path: build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+          name: release-android-mobile-arm64-v8a
+          path: build/app/outputs/flutter-apk/LinPlayer-Android-Mobile-v*.apk
           retention-days: 30
 
       - name: Upload build logs
@@ -179,7 +174,7 @@ jobs:
   # Android TV 构建
   # ============================================================
   build-android-tv:
-    name: Build Android TV APK
+    name: Build Android TV APK (armeabi-v7a)
     runs-on: ubuntu-latest
     needs: [prepare, analyze]
 
@@ -237,27 +232,29 @@ jobs:
             fi
           done
 
-      - name: Build Android TV Release APK
+      - name: Build Android TV Release APK (armeabi-v7a)
         env:
           DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
           DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
+          ORG_GRADLE_PROJECT_linplayerTargetAbis: armeabi-v7a
         run: |
           $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "platforms;android-36" 2>/dev/null || true
 
           CLEAN_ID=$(printf '%s' "$DANDANPLAY_APP_ID" | tr -d '\r\n')
           CLEAN_SECRET=$(printf '%s' "$DANDANPLAY_APP_SECRET" | tr -d '\r\n')
+          VERSION="${{ needs.prepare.outputs.version }}"
 
-          # Build the dedicated TV variant and keep a stable artifact name for publishing.
+          # Android TV release only needs the 32-bit build.
           flutter build apk --release \
             --flavor tv \
-            --target-platform android-arm,android-arm64 \
+            --target-platform android-arm \
             --dart-define=FLAVOR=tv \
             --dart-define=DANDANPLAY_APP_ID="$CLEAN_ID" \
             --dart-define=DANDANPLAY_APP_SECRET="$CLEAN_SECRET"
 
           TV_APK_DIR="build/app/outputs/flutter-apk"
           TV_APK_SOURCE=$(find "$TV_APK_DIR" -maxdepth 1 -type f -name '*tv*release.apk' | head -n 1)
-          TV_APK_TARGET="$TV_APK_DIR/linplayer-tv.apk"
+          TV_APK_TARGET="$TV_APK_DIR/LinPlayer-Android-TV-v$VERSION-armeabi-v7a.apk"
 
           if [ -z "$TV_APK_SOURCE" ] || [ ! -f "$TV_APK_SOURCE" ]; then
             echo "Expected TV APK not found in $TV_APK_DIR"
@@ -266,12 +263,13 @@ jobs:
           fi
 
           cp "$TV_APK_SOURCE" "$TV_APK_TARGET"
+          ls -lh "$TV_APK_TARGET"
 
       - name: Upload Android TV APK
         uses: actions/upload-artifact@v4
         with:
-          name: release-android-tv
-          path: build/app/outputs/flutter-apk/linplayer-tv.apk
+          name: release-android-tv-armeabi-v7a
+          path: build/app/outputs/flutter-apk/LinPlayer-Android-TV-v*.apk
           retention-days: 30
 
       - name: Upload build logs
@@ -407,7 +405,27 @@ jobs:
             exit 1
           fi
 
-          OUTPUT_NAME="LinPlayer-tvOS-v$VERSION-unsigned"
+          INFO_PLIST="$APP_PATH/Info.plist"
+          if [ ! -f "$INFO_PLIST" ]; then
+            echo "tvOS app bundle is missing Info.plist"
+            find "$APP_PATH" -maxdepth 2 -type f | sort || true
+            exit 1
+          fi
+
+          EXECUTABLE_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$INFO_PLIST")
+          EXECUTABLE_PATH="$APP_PATH/$EXECUTABLE_NAME"
+          if [ ! -f "$EXECUTABLE_PATH" ]; then
+            echo "tvOS app bundle is missing executable: $EXECUTABLE_NAME"
+            find "$APP_PATH" -maxdepth 2 -type f | sort || true
+            exit 1
+          fi
+
+          echo "tvOS bundle size:"
+          du -sh "$APP_PATH"
+          echo "tvOS executable size:"
+          ls -lh "$EXECUTABLE_PATH"
+
+          OUTPUT_NAME="LinPlayer-AppleTV-v$VERSION-unsigned-app"
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$OUTPUT_NAME.zip"
 
           echo "Created: $OUTPUT_NAME.zip"
@@ -416,8 +434,8 @@ jobs:
       - name: Upload tvOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-tvos
-          path: LinPlayer-tvOS-*.zip
+          name: release-apple-tv
+          path: LinPlayer-AppleTV-*.zip
           retention-days: 30
 
       - name: Upload build logs
