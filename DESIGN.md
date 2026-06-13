@@ -1,865 +1,562 @@
-# LinPlayer 设计文档
+---
+version: alpha
+name: Apple-design-analysis
+description: A photography-first interface that turns marketing into a museum gallery. Edge-to-edge product tiles alternate light and dark canvases, framed by SF Pro Display headlines with negative letter-spacing and a single Action Blue (#0066cc) interactive color. UI chrome recedes so the product can speak — no decorative gradients, no shadows on chrome, only the one signature drop-shadow under product imagery resting on a surface.
 
-> 本文档记录 LinPlayer 项目的完整设计决策树，按依赖顺序展开。从架构选型到每个页面的交互细节，一层层推进。
->
-> 状态：**手机端完整 ✓** | PC 端 🚧 | TV 端 🚧 | Apple 端计划复用 Flutter 代码线
+colors:
+  primary: "#0066cc"
+  primary-focus: "#0071e3"
+  primary-on-dark: "#2997ff"
+  ink: "#1d1d1f"
+  body: "#1d1d1f"
+  body-on-dark: "#ffffff"
+  body-muted: "#cccccc"
+  ink-muted-80: "#333333"
+  ink-muted-48: "#7a7a7a"
+  divider-soft: "#f0f0f0"
+  hairline: "#e0e0e0"
+  canvas: "#ffffff"
+  canvas-parchment: "#f5f5f7"
+  surface-pearl: "#fafafc"
+  surface-tile-1: "#272729"
+  surface-tile-2: "#2a2a2c"
+  surface-tile-3: "#252527"
+  surface-black: "#000000"
+  surface-chip-translucent: "#d2d2d7"
+  on-primary: "#ffffff"
+  on-dark: "#ffffff"
 
+typography:
+  hero-display:
+    fontFamily: "SF Pro Display, system-ui, -apple-system, sans-serif"
+    fontSize: 56px
+    fontWeight: 600
+    lineHeight: 1.07
+    letterSpacing: -0.28px
+  display-lg:
+    fontFamily: "SF Pro Display, system-ui, -apple-system, sans-serif"
+    fontSize: 40px
+    fontWeight: 600
+    lineHeight: 1.1
+    letterSpacing: 0
+  display-md:
+    fontFamily: "SF Pro Text, system-ui, -apple-system, sans-serif"
+    fontSize: 34px
+    fontWeight: 600
+    lineHeight: 1.47
+    letterSpacing: -0.374px
+  lead:
+    fontFamily: "SF Pro Display, system-ui, -apple-system, sans-serif"
+    fontSize: 28px
+    fontWeight: 400
+    lineHeight: 1.14
+    letterSpacing: 0.196px
+  lead-airy:
+    fontFamily: "SF Pro Text, system-ui, -apple-system, sans-serif"
+    fontSize: 24px
+    fontWeight: 300
+    lineHeight: 1.5
+    letterSpacing: 0
+  tagline:
+    fontFamily: "SF Pro Display, system-ui, -apple-system, sans-serif"
+    fontSize: 21px
+    fontWeight: 600
+    lineHeight: 1.19
+    letterSpacing: 0.231px
+  body-strong:
+    fontFamily: "SF Pro Text, system-ui, -apple-system, sans-serif"
+    fontSize: 17px
+    fontWeight: 600
+    lineHeight: 1.24
+    letterSpacing: -0.374px
+  body:
+    fontFamily: "SF Pro Text, system-ui, -apple-system, sans-serif"
+    fontSize: 17px
+    fontWeight: 400
+    lineHeight: 1.47
+    letterSpacing: -0.374px
+  dense-link:
+    fontFamily: "SF Pro Text, system-ui, -apple-system, sans-serif"
+    fontSize: 17px
+    fontWeight: 400
+    lineHeight: 2.41
+    letterSpacing: 0
+  caption:
+    fontFamily: "SF Pro Text, system-ui, -apple-system, sans-serif"
+    fontSize: 14px
+    fontWeight: 400
+    lineHeight: 1.43
+    letterSpacing: -0.224px
+  caption-strong:
+    fontFamily: "SF Pro Text, system-ui, -apple-system, sans-serif"
+    fontSize: 14px
+    fontWeight: 600
+    lineHeight: 1.29
+    letterSpacing: -0.224px
+  button-large:
+    fontFamily: "SF Pro Text, system-ui, -apple-system, sans-serif"
+    fontSize: 18px
+    fontWeight: 300
+    lineHeight: 1.0
+    letterSpacing: 0
+  button-utility:
+    fontFamily: "SF Pro Text, system-ui, -apple-system, sans-serif"
+    fontSize: 14px
+    fontWeight: 400
+    lineHeight: 1.29
+    letterSpacing: -0.224px
+  fine-print:
+    fontFamily: "SF Pro Text, system-ui, -apple-system, sans-serif"
+    fontSize: 12px
+    fontWeight: 400
+    lineHeight: 1.0
+    letterSpacing: -0.12px
+  micro-legal:
+    fontFamily: "SF Pro Text, system-ui, -apple-system, sans-serif"
+    fontSize: 10px
+    fontWeight: 400
+    lineHeight: 1.3
+    letterSpacing: -0.08px
+  nav-link:
+    fontFamily: "SF Pro Text, system-ui, -apple-system, sans-serif"
+    fontSize: 12px
+    fontWeight: 400
+    lineHeight: 1.0
+    letterSpacing: -0.12px
+
+rounded:
+  none: 0px
+  xs: 5px
+  sm: 8px
+  md: 11px
+  lg: 18px
+  pill: 9999px
+  full: 9999px
+
+spacing:
+  xxs: 4px
+  xs: 8px
+  sm: 12px
+  md: 17px
+  lg: 24px
+  xl: 32px
+  xxl: 48px
+  section: 80px
+
+components:
+  button-primary:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.on-primary}"
+    typography: "{typography.body}"
+    rounded: "{rounded.pill}"
+    padding: 11px 22px
+  button-primary-focus:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.on-primary}"
+    rounded: "{rounded.pill}"
+  button-primary-active:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.on-primary}"
+    rounded: "{rounded.pill}"
+  button-secondary-pill:
+    backgroundColor: "{colors.canvas}"
+    textColor: "{colors.primary}"
+    typography: "{typography.body}"
+    rounded: "{rounded.pill}"
+    padding: 11px 22px
+  button-dark-utility:
+    backgroundColor: "{colors.ink}"
+    textColor: "{colors.on-dark}"
+    typography: "{typography.button-utility}"
+    rounded: "{rounded.sm}"
+    padding: 8px 15px
+  button-pearl-capsule:
+    backgroundColor: "{colors.surface-pearl}"
+    textColor: "{colors.ink-muted-80}"
+    typography: "{typography.caption}"
+    rounded: "{rounded.md}"
+    padding: 8px 14px
+  button-store-hero:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.on-primary}"
+    typography: "{typography.button-large}"
+    rounded: "{rounded.pill}"
+    padding: 14px 28px
+  button-icon-circular:
+    backgroundColor: "{colors.surface-chip-translucent}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.full}"
+    size: 44px
+  text-link:
+    backgroundColor: transparent
+    textColor: "{colors.primary}"
+    typography: "{typography.body}"
+  text-link-on-dark:
+    backgroundColor: transparent
+    textColor: "{colors.primary-on-dark}"
+    typography: "{typography.body}"
+  global-nav:
+    backgroundColor: "{colors.surface-black}"
+    textColor: "{colors.on-dark}"
+    typography: "{typography.nav-link}"
+    height: 44px
+  sub-nav-frosted:
+    backgroundColor: "{colors.canvas-parchment}"
+    textColor: "{colors.ink}"
+    typography: "{typography.tagline}"
+    height: 52px
+  product-tile-light:
+    backgroundColor: "{colors.canvas}"
+    textColor: "{colors.ink}"
+    typography: "{typography.display-lg}"
+    rounded: "{rounded.none}"
+    padding: 80px
+  product-tile-parchment:
+    backgroundColor: "{colors.canvas-parchment}"
+    textColor: "{colors.ink}"
+    typography: "{typography.display-lg}"
+    rounded: "{rounded.none}"
+    padding: 80px
+  product-tile-dark:
+    backgroundColor: "{colors.surface-tile-1}"
+    textColor: "{colors.on-dark}"
+    typography: "{typography.display-lg}"
+    rounded: "{rounded.none}"
+    padding: 80px
+  product-tile-dark-2:
+    backgroundColor: "{colors.surface-tile-2}"
+    textColor: "{colors.on-dark}"
+    rounded: "{rounded.none}"
+  product-tile-dark-3:
+    backgroundColor: "{colors.surface-tile-3}"
+    textColor: "{colors.on-dark}"
+    rounded: "{rounded.none}"
+  store-utility-card:
+    backgroundColor: "{colors.canvas}"
+    textColor: "{colors.ink}"
+    typography: "{typography.body-strong}"
+    rounded: "{rounded.lg}"
+    padding: 24px
+  configurator-option-chip:
+    backgroundColor: "{colors.canvas}"
+    textColor: "{colors.ink}"
+    typography: "{typography.caption}"
+    rounded: "{rounded.pill}"
+    padding: 12px 16px
+  configurator-option-chip-selected:
+    backgroundColor: "{colors.canvas}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.pill}"
+  search-input:
+    backgroundColor: "{colors.canvas}"
+    textColor: "{colors.ink}"
+    typography: "{typography.body}"
+    rounded: "{rounded.pill}"
+    padding: 12px 20px
+    height: 44px
+  floating-sticky-bar:
+    backgroundColor: "{colors.canvas-parchment}"
+    textColor: "{colors.ink}"
+    typography: "{typography.body}"
+    height: 64px
+    padding: 12px 32px
+  environment-quote-card:
+    backgroundColor: "{colors.surface-tile-1}"
+    textColor: "{colors.on-dark}"
+    typography: "{typography.display-lg}"
+    rounded: "{rounded.none}"
+    padding: 80px
+  footer:
+    backgroundColor: "{colors.canvas-parchment}"
+    textColor: "{colors.ink-muted-80}"
+    typography: "{typography.fine-print}"
+    padding: 64px
 ---
 
-## 一、项目总览
-
-### 1.1 定位
-
-聚焦播放体验的 Emby 第三方客户端。只做播放剧/电影及相关功能，不做媒体库管理等管理功能。
-
-### 1.2 技术栈
-
-| 技术栈 | 覆盖平台 | 播放内核 |
-|--------|---------|---------|
-| **Flutter + Dart** | Android（手机）、Android TV、Windows、Linux、iOS、macOS、tvOS（规划中） | mpv（默认）+ ExoPlayer（Android 备用） |
-
-当前以 Flutter 单代码线长期演进，不再规划独立的 Swift/SwiftUI 实现。
-
-### 1.3 项目结构
-
-#### 当前仓库
-
-```
-linplayer/
-├── lib/
-│   ├── core/                   # API、Provider、播放器服务、工具
-│   ├── ui/                     # 移动端页面与通用组件
-│   ├── desktop/                # 桌面端页面与桌面专属交互
-│   └── routes/                 # 路由与应用入口
-├── android/                    # Android 原生桥接与播放器插件
-├── windows/                    # Windows Runner 与构建脚本
-└── assets/                     # 着色器、图标与静态资源
-```
-
----
-
-## 二、架构决策树
-
-```
-平台范围
-└─ Flutter: Android / Android TV / Windows / Linux / iOS / macOS / tvOS
-
-├─ 代码复用
-│  ├─ 单代码线长期维护
-│  └─ 按平台 UI 与平台桥接分层，而不是按语言拆仓库
-
-├─ 功能范围
-│  ├─ V1：播放 + 浏览 + 搜索 + 弹幕 + 代理(TV) + 更新检查 + 备份
-│  └─ V2：插件系统、聚合外部源、WebDAV、Bangumi/TMDB 独立页
-
-├─ 播放内核策略
-│  ├─ 用户自主选择，无自动降级
-│  ├─ 默认 mpv（全平台）
-│  ├─ Android 可选 ExoPlayer
-│  └─ Apple 端沿用 Flutter 播放抽象，按能力补齐平台桥接
-│
-├─ Flutter 侧技术选型
-│  ├─ 状态管理：Riverpod
-│  ├─ 路由：GoRouter
-│  ├─ 网络：Dio（拦截器链：Auth → Retry → Log）
-│  ├─ 持久化：shared_preferences（当前）+ 预留后续结构化存储扩展点
-│  ├─ 图片加载：extended_image（支持自定义 Header 注 Token）
-│  ├─ 日志：自定义 AppLogger
-│  ├─ i18n：Flutter Localizations（当前）
-│  ├─ 弹幕渲染：CustomPainter + Canvas 绘制
-│  ├─ 视频渲染：Flutter Texture widget + TextureRegistry + mpv 离屏 FBO
-│  └─ 代理：内置 mihomo 二进制（TV 端专属）
-│
-├─ 全局基础设施
-│  ├─ 错误架构：sealed class(AppError) / enum AppError: LocalizedError
-│  ├─ 日志输出：三层（用户提示 / 应用日志 / 结构化错误）
-│  ├─ 设计系统：Radix Colors 色板 + 4px 基准间距 + Major Third 字号比例
-│  ├─ 字体：全平台原生字体
-│  ├─ 深浅模式：所有平台强制双模式
-│  ├─ 认证：单服务器单例 Dio，Token 自动重登录一次，失败则报错误码
-│  ├─ 视频缓存：mpv 内置缓存为主 + 轻量下一集预加载
-│  ├─ 图片缓存：磁盘缓存（extended_image / Kingfisher 内置）
-│  └─ 域名同步：emby_ext_domains 默认启用
-│
-├─ Emby API 范围
-│  ├─ ✅ 认证、用户、首页、媒体库、项详情、搜索、播放、播放上报、图片
-│  ├─ ✅ 收藏、会话、系统信息
-│  └─ ❌ 媒体库管理、用户管理、离线同步、LiveTV
-│
-├─ 弹幕系统
-│  ├─ DandanPlay（A: 标题模糊匹配 + C: 手动选池 兜底）
-│  ├─ danmu_api (huangxd-)
-│  ├─ misaka_danmu_server
-│  └─ 屏蔽词：DandanPlay XML 格式（x=uid 按用户屏蔽 + t=关键词 按文本屏蔽）
-│
-├─ 分发渠道
-│  ├─ GitHub Release 直发（主力）
-│  ├─ App Store / TestFlight（iOS/macOS/tvOS）
-│  └─ CI/CD：Flutter → GitHub Actions
-│
-├─ 最低系统版本
-│  ├─ Android: API 24+
-│  ├─ Windows: 10 build 1809+
-│  ├─ Linux: Ubuntu 20.04+
-│  ├─ iOS: 16.0+
-│  ├─ macOS: 13.0+
-│  └─ tvOS: 16.0+
-│
-└─ URL Scheme: linplayer://add-server?url=xxx&name=xxx（自定义 scheme，无 Universal Link）
-```
-
----
-
-## 三、手机端 UI 设计
-
-> 统一策略：所有平台沿用 Flutter 设计语言与组件抽象，再按平台补充交互细节。
-
-### 3.1 设计 Tokens
-
-```
-品牌色: #5B8DEF (靛蓝)
-深色模式: 品牌色亮阶做前景，暗阶做背景
-浅色模式: 品牌色暗阶做前景，亮阶做背景
-间距基准: 4px 等比 (4, 8, 12, 16, 24, 32, 48, 64)
-字号比例: Major Third 1.25x (12, 14, 16, 18, 20, 24, 28, 32, 40, 48)
-圆角: 4, 8, 12, 16, 24
-```
-
-### 3.2 页面地图
-
-```
-[首次启动]
-    └─→ 服务器页（空列表 + 搜索按钮 + 添加按钮 + 下载按钮）
-          │
-          └─→ 添加服务器页
-          │      ├─ 手动输入：URL + 路径 + 用户名 + 密码
-          │      ├─ 批量解析：粘贴分享文本，解析多线路
-          │      ├─ 导入配置（JSON 格式，本软件导出）
-          │      └─ 成功 → 直接跳转首页
-          │         失败 → Toast 显示错误码（401/403/502 等）
-          │
-          └───→ 服务器页（已有服务器后）
-              ├─ 切换视图：条形 / 矩形
-              ├─ 搜索服务器
-              ├─ 更多菜单：编辑信息/重新登录/服务器线路/修改图标/修改备注
-              ├─ 长按拖拽排序
-              └─ 点击服务器 → 进入首页
-
-[底部 Tab]
-    ├─── 服务器（服务器列表页）
-    ├─── 聚合搜索（搜索页）
-    └─── 设置（设置主页 → 子页面）
-
-[首页]（顶部栏 + 内容区）
-    ├─ 顶部栏：左侧 [服务器图标+名称] | 右侧 [媒体库按钮] [搜索按钮]
-    ├─ 内容区纵向滚动：
-    │   ├─ 随机推荐（8 个，手动+自动轮播，封面占 60%）
-    │   ├─ 继续观看（横向宽卡片滑条，2 个可见，不显已看完）
-    │   ├─ 媒体库栏（封面滑条，2.2 个可见）
-    │   └─ 各媒体库最近更新（条目滑条，4.1 个可见，最多 20 个）
-    │
-    ├───→ 媒体库页（一行两个媒体库封面按钮）
-    │       └─ 媒体库详情页
-    │           ├─ 筛选栏：加入日期/标题/首映日期/官方评级/评分（升/降）
-    │           └─ 内容网格/列表
-    │
-    └───→ 剧/电影详情页
-```
-
----
-
-### 3.3 服务器页
-
-```
-┌──────────────────────────────┐
-│  [搜索按钮]      [下载] [添加]│  ← 顶部栏
-├──────────────────────────────┤
-│  ┌────────────────────────┐  │
-│  │ [服务器图标]  服务器名称  │  │  ← 条形模式（默认）
-│  │              服务器备注  │  │
-│  │                   [···] │  │     更多 → 编辑/重登/线路/图标/备注
-│  └────────────────────────┘  │
-│  ┌────────────────────────┐  │
-│  │ [服务器图标]  服务器名称  │  │
-│  │              服务器备注  │  │
-│  │                   [···] │  │
-│  └────────────────────────┘  │
-│          ...（长按拖拽排序）   │
-├──────────────────────────────┤
-│   [服务器]  [聚合搜索]  [设置] │  ← 圆角底部 Tab，选中态有背景色，淡入淡出切换
-└──────────────────────────────┘
-```
-
-**更多菜单（[···] ）：**
-
-```
-┌────────────┐
-│ 编辑信息    │  → 编辑服务器名称/IP/端口等基本信息
-│ 重新登录    │  → 清除当前 Token，弹出登录页重新认证
-│ 服务器线路  │  → 查看/添加/删除/备注线路 URL
-│ 修改图标    │  → 进入图标选择页
-│ 修改备注    │  → 编辑服务器备注文本
-└────────────┘
-```
-
-#### 3.3.1 服务器线路管理
-
-```
-┌──────────────────────────────┐
-│  ← 返回      服务器线路       │  ← 服务器名称显示在标题下方
-├──────────────────────────────┤
-│  ┌────────────────────────┐  │
-│  │ 线路名                  │  │  ← 当前选中线路高亮
-│  │ https://example1.com   │  │     点击切换活跃线路
-│  │ 备注：主线路            │  │
-│  │              [编辑] [删除]│
-│  ├────────────────────────┤  │
-│  │ 线路名2                 │  │
-│  │ https://example2.com   │  │     非活跃线路
-│  │ 备注：备用线路          │  │
-│  │              [编辑] [删除]│
-│  └────────────────────────┘  │
-│                              │
-│        [+ 添加线路]           │  ← 弹出输入框：名称+URL+备注
-└──────────────────────────────┘
-```
-
-- 每个服务器可有多条线路 URL，用于负载均衡/多入口
-- 批量解析分享文本后自动添加多条线路
-- 选中线路 = 当前活跃线路，用于后续 API 请求
-
-#### 3.3.2 重新登录
-
-点击"重新登录"→ 清除该服务器的 Token → 弹出登录框（用户名+密码）→ 调用 `/Users/AuthenticateByName` → 成功刷新 Token，失败 Toast 错误码。
-
-#### 3.3.3 图标选择页
-
-```
-┌──────────────────────────────┐
-│  ← 返回        图标选择       │
-├──────────────────────────────┤
-│  来源 Tab：本地图片 | 网络图标库 │
-├──────────────────────────────┤
-│  网络图标库列表：              │
-│  ┌────────────────────────┐  │
-│  │ Zzzの方形Emby图标...    │  │  ← 默认库
-│  ├────────────────────────┤  │
-│  │ [+ 添加网络图标库]      │  │  ← 输入 JSON URL
-│  └────────────────────────┘  │
-├──────────────────────────────┤
-│  选中库的图标网格：            │
-│  ┌────┐ ┌────┐ ┌────┐      │
-│  │图标│ │图标│ │图标│ ...  │
-│  │名称│ │名称│ │名称│      │
-│  └────┘ └────┘ └────┘      │
-└──────────────────────────────┘
-```
-
-**图标库 JSON 格式**（默认库：`https://juhe.greentea520.xyz/share/78aspf.json`）：
-
-```json
-{
-  "name": "Zzzの方形Emby图标 & Zzzの圆形Emby图标 & Zzzの透明Emby图标",
-  "icons": [
-    {"name": "SaturDay.Lite", "url": "https://cdn.picui.cn/vip/2026/01/04/695959d7a1e28.png"},
-    {"name": "Shrek", "url": "https://cdn.picui.cn/vip/2026/01/04/69595a04ad8ca.png"}
-  ],
-  "updated_at": "2026-05-17T09:30:38.899Z",
-  "rev": "73d292784da6f252e2066da8b17c823d..."
-}
-```
-
-#### 3.3.4 添加服务器页
-
-```
-┌──────────────────────────────┐
-│  ← 返回        添加服务器     │
-├──────────────────────────────┤
-│  服务器地址    [https://...]  │
-│  路径          [/emby]       │
-│  用户名        [________]    │
-│  密码          [________]    │
-│                              │
-│  [   批量解析   ] [  导入  ]  │
-│                              │
-│  ── 或批量解析结果 ──         │
-│  ┌────────────────────────┐  │
-│  │ 线路名  [链接]          │  │
-│  │ https://example1.com   │  │
-│  ├────────────────────────┤  │
-│  │ 线路名  [链接]          │  │
-│  │ https://example2.com   │  │
-│  └────────────────────────┘  │
-└──────────────────────────────┘
-```
-
-**分享文本解析示例**（支持多格式）：
-
-```
-输入：
-▎↓目前线路 & 用户密码：xxxxxxxx
-
-XXX线路: https://example3.com
-XXXX线路: https://example2.com
-XX线路: https://example1.com
-端口: XXXXXX
-
-· 🎬 在线 | 4 人
-· 🌏 [2026-04-06 16:01:07]
-
-解析结果：
-  - XXX线路: https://example3.com:XXXXXX
-  - XXXX线路: https://example2.com:XXXXXX
-  - XX线路: https://example1.com:XXXXXX
-```
-
-- 链接按钮 = 保存 + 登录验证一步完成
-- 401 → 自动重登录一次，失败则 Toast 显示错误码让用户手动登录
-- 网络层错误（超时/TLS等）→ 提示用户检查网络
-- 成功后直接跳转首页
-
-**URL Scheme 跳转添加：**
-
-```
-linplayer://add-server?url=https://xxx.com&name=线路名
-```
-
----
-
-### 3.4 首页
-
-```
-┌──────────────────────────────┐
-│ [▣ 服务器名]     [媒体库][搜索]│  ← 顶部栏
-├──────────────────────────────┤
-│ ╔═════════════════════════╗  │
-│ ║                         ║  │
-│ ║    随机推荐封面          ║  │  ← 占 60% 屏幕高度
-│ ║    (裁剪不缩放)          ║  │
-│ ║                         ║  │
-│ ║  标题                   ║  │     自动+手动轮播，8 个
-│ ║  ★ 8.5 标签1 标签2 ...  ║  │     固定从第一个开始
-│ ╚═════════════════════════╝  │     封面取色做背景渐变
-│  ·   ·   ·   ·   ·   ·   ·  │  ← 轮播指示点
-├──────────────────────────────┤
-│ 继续观看              查看更多│
-│ ┌──────────┐  ┌──────────┐  │  ← 横向宽卡片滑条
-│ │封面  标题 │  │封面  标题 │  │     默认 2 个可见
-│ │     进度条│  │   [新集]  │  │     左右滑动全览
-│ │     S3E5  │  │     50%   │  │     不含已看完
-│ └──────────┘  └──────────┘  │
-├──────────────────────────────┤
-│ 媒体库                       │
-│ ┌────┐ ┌────┐ ┌──         │  ← 2.2 个可见
-│ │封面│ │封面│ │封│         │     左右滑动全览
-│ │名称│ │名称│ │名│         │
-│ └────┘ └────┘ └──         │
-├──────────────────────────────┤
-│ 电影（媒体库名）              │
-│ ┌──┐ ┌──┐ ┌──┐ ┌──┐ ┌─   │  ← 4.1 个可见
-│ │封│ │封│ │封│ │封│ │封│  │     最多滑动 20 个
-│ └──┘ └──┘ └──┘ └──┘ └─   │
-├──────────────────────────────┤
-│ 剧集（媒体库名）              │
-│ ┌──┐ ┌──┐ ┌──┐ ┌──┐ ┌─   │
-│ │封│ │封│ │封│ │封│ │封│  │
-│ └──┘ └──┘ └──┘ └──┘ └─   │
-├──────────────────────────────┤
-│ ... 更多媒体库                │
-└──────────────────────────────┘
-```
-
-**随机推荐卡片样式：**
-- 封面裁剪填充（不缩放），占比 60%
-- 左下角：一行标题 + 一行评分（星星+分数）+ 标签（最多 5 个）
-- 封面底部渐变过渡到背景色（背景色取封面主色）
-- 参考 Apple TV App "Watch Now" 风格
-- 点击封面进入对应详情页
-
-**继续观看逻辑：**
-- 融合观看记录 + 下一集
-- 看完一集且无新集 → 暂时隐藏该记录
-- 出了新集 → 排到第一个展示
-- 默认展示 2 个，左右滑动全览
-- 卡片：左封面 + 右标题 + 进度条 + 集数/状态标签
-
----
-
-### 3.5 详情页（推拉过渡动画进入）
-
-#### 3.5.1 剧详情页
-
-```
-┌──────────────────────────────┐
-│  ← 返回                      │
-├──────────────────────────────┤
-│ ╔═════════════════════════╗  │
-│ ║                         ║  │  ← 封面占 30%
-│ ║    剧封面（裁剪不变形）   ║  │
-│ ║                         ║  │
-│ ║  进击的巨人              ║  │     左下角：标题+评分+标签(最多5)
-│ ║  ★ 9.1 动作 奇幻 动画   ║  │     底部渐变过渡到背景色
-│ ╚═════════════════════════╝  │     背景色取封面主色
-├──────────────────────────────┤
-│ 简介：这是一部讲述人类与...   │  ← 3行小字
-│                    [展开 ▼]  │     点击省略展开
-├──────────────────────────────┤
-│ 继续观看                     │
-│ ┌──────┐ ┌──────┐ ┌──────┐ │  ← 横滑，不含已看完
-│ │ S1E5 │ │ S1E6 │ │ S2E1 │ │
-│ │ 45%  │ │ 未看 │ │ 0%   │ │
-│ └──────┘ └──────┘ └──────┘ │
-├──────────────────────────────┤
-│ 季度选择                     │
-│ ┌────┐ ┌────┐ ┌────┐       │  ← 横滑
-│ │封面│ │封面│ │封面│       │
-│ │第一季│ │第二季│ │第三季│  │     点击进季详情页
-│ └────┘ └────┘ └────┘       │
-├──────────────────────────────┤
-│ 集数选择          [条形|矩形]│  ← 默认条形
-│ ┌────────────────────────┐  │
-│ │ [集封面]  E01 标题      │  │  ← 条形
-│ │          时长 · 大小    │  │
-│ ├────────────────────────┤  │
-│ │ [集封面]  E02 标题      │  │
-│ │          时长 · 大小    │  │
-│ └────────────────────────┘  │
-├──────────────────────────────┤
-│ 演职人员                     │
-│ ┌────┐ ┌────┐ ┌────┐       │  ← 横滑
-│ │头像│ │头像│ │头像│       │     头像 + 名字 + 职位(小字)
-│ │名字│ │名字│ │名字│       │
-│ │职位│ │职位│ │职位│       │
-│ └────┘ └────┘ └────┘       │
-└──────────────────────────────┘
-```
-
-#### 3.5.2 季详情页
-
-和剧详情页结构一致，只是封面为该季封面，季选择栏改为自己所在季高亮，集数选择为该季的集。
-
-#### 3.5.3 电影详情页 & 集详情页
-
-```
-┌──────────────────────────────┐
-│  ← 返回                      │
-├──────────────────────────────┤
-│ ╔═════════════════════════╗  │
-│ ║    电影封面（30%）       ║  │
-│ ║  标题                   ║  │
-│ ║  ★ 8.5  2024 · 2h 15m  ║  │  ← 评分下显示上映日期+时长
-│ ╚═════════════════════════╝  │
-├──────────────────────────────┤
-│ 简介：... 3行，省略可展开     │
-├──────────────────────────────┤
-│ 线路选择  [当前线路 ▼]        │  ← 下拉菜单
-│ 版本选择  [当前版本 ▼]        │  ← 下拉菜单
-│ 音频选择  [当前音轨 ▼]        │  ← 下拉菜单
-│ 字幕选择  [当前字幕 ▼]        │  ← 下拉菜单
-│ 次字幕选择[无 ▼]              │  ← 下拉菜单（双语字幕用）
-├──────────────────────────────┤
-│  [████████████████ 播放 ] [▼]│  ← 播放按钮占 5/6，更多占 1/6
-├──────────────────────────────┤
-│ 演职人员（同上）              │
-├──────────────────────────────┤
-│ 版本信息                     │
-│ ┌────────────────────────┐  │
-│ │ [视频:H264 1080p]      │  │  ← 一行一个版本
-│ │ [音频:AAC 2ch] [字幕:简中]│  │     卡片显示各流信息
-│ ├────────────────────────┤  │
-│ │ [视频:HEVC 4K HDR]     │  │
-│ │ [音频:DTS 5.1] [字幕:繁中]│
-│ └────────────────────────┘  │
-└──────────────────────────────┘
-```
-
-**更多按钮（▼）弹出菜单：**
-
-```
-┌──────────────┐
-│ 投屏          │
-│ 搜索其他播放源 │
-│ 下载          │
-│ 标记为已/未观看│
-│ 添加到喜欢    │
-└──────────────┘
-```
-
----
-
-### 3.6 媒体库详情页
-
-```
-┌──────────────────────────────┐
-│  ← 返回     媒体库名称        │
-├──────────────────────────────┤
-│ [加入日期 ↑][标题][首映日期][评级][评分]│  ← 筛选项
-│                                     ↑↓ 箭头表示升/降序
-│                                     默认升序，再点切降序
-├──────────────────────────────┤
-│ ┌────┐ ┌────┐ ┌────┐       │
-│ │封面│ │封面│ │封面│       │  ← 内容网格/列表
-│ │名称│ │名称│ │名称│       │     无限滚动加载
-│ └────┘ └────┘ └────┘       │
-│ ┌────┐ ┌────┐ ┌────┐       │
-│ │封面│ │封面│ │封面│       │
-│ └────┘ └────┘ └────┘       │
-└──────────────────────────────┘
-```
-
-五个筛选选项：加入日期、标题、首映日期、官方评级、评分。均支持升序/降序切换，默认升序。当前筛选在选项旁显示箭头指示。
-
----
-
-### 3.7 搜索页（可复用为聚合搜索）
-
-```
-┌──────────────────────────────┐
-│  ┌────────────────────────┐  │
-│  │ 🔍 搜索...         [聚合]│  │  ← 点击搜索栏后显示聚合开关
-│  └────────────────────────┘  │
-├──────────────────────────────┤
-│  搜索历史             [清除]  │
-│  · 进击的巨人                 │
-│  · 星际穿越                   │
-│  · ...                       │
-├──────────────────────────────┤
-│  热门推荐/趋势                │
-│  ┌────┐ ┌────┐ ┌────┐     │
-│  │封面│ │封面│ │封面│     │
-│  └────┘ └────┘ └────┘     │
-└──────────────────────────────┘
-```
-
-**聚合搜索结果：**
-
-```
-┌──────────────────────────────┐
-│ ──── 服务器A ────             │
-│ 结果1 | 结果2 | 结果3         │  ← 一行一个服务器
-│ ──── 服务器B ────             │
-│ 结果1 | 结果2                 │
-│ ...                          │
-└──────────────────────────────┘
-```
-
-**聚合排序优先级**（在设置页配置）：
-- 服务器名称优先（A → Z）
-- 资源大小优先
-- 集数优先（集数多先展示）
-- 资源质量优先（分辨率高先展示）
-
-**聚合开关**：未开启只搜索当前活跃服务器；开启后向所有已连接服务器发搜索请求并聚合结果。
-
----
-
-### 3.8 播放页
-
-```
-┌──────────────────────────────┐
-│ [←返回] 集标题(长→滚动) [超分] [跳过] [···]│  ← 透明上栏
-│                              │
-│  ┌──┐                        │  ← 左侧竖排：截图/锁定
-│  │截图│                       │
-│  │锁定│                       │
-│  └──┘                        │
-│                              │
-│                               ┌──┐  ← 右侧竖排：倍速条
-│                               │+ │
-│                               │1x│     上下加减号
-│                               │- │     长按线性加减速
-│                               └──┘     倍率 0.25x ~ 4x
-│                              │
-│                              │
-├──────────────────────────────┤
-│  [00:12:34] ━━━━━●━━━━━ [-05:23:10]│  ← 进度条 + 时间
-│                              │     点击时间切换 当前/剩余
-├──────────────────────────────┤
-│ [上][下] [⏪] [▶/⏸] [⏩] [弹][字][音][选]│  ← 透明下栏
-└──────────────────────────────┘
-```
-
-**下栏按钮详解：**
-
-| 位置 | 按钮 | 功能 |
-|------|------|------|
-| 最左 | 上一集 / 下一集 | 切换集 |
-| 左侧 | 快退 / 播放暂停 / 快进 | 基础播放控制 |
-| 右侧 | 弹幕设置 / 字幕 / 音轨 / 选集 | 快速设置 |
-
-**上栏按钮详解：**
-
-| 位置 | 按钮 | 说明 |
-|------|------|------|
-| 左 | 返回 | 退出播放页 |
-| 中 | 集标题 | 太长则滚动显示 |
-| 右 | 超分 | Anime4K 超分辨率，仅 mpv 内核显示 |
-| 右 | 跳过片头/片尾 | 设置跳过区间 + 模式切换 |
-| 右 | 硬解/软解切换 | 默认硬解 |
-
-**跳过片头/片尾弹窗：**
-
-```
-┌─────────────────────────────┐
-│ 跳过片头                     │
-│ 开始时间  [01:30] [📍定位]  │  ← 点击定位 = 取当前画面时间
-│ 结束时间  [03:15] [📍定位]  │
-│ ━━━━━━━━●━━━━━━            │  ← 可拖拽
-│                             │
-│ 跳过模式：[显示按钮]←→[自动跳过]│  ← 点击切换
-│ 当前：显示跳过按钮            │  ← 小字说明当前模式
-└─────────────────────────────┘
-```
-
-**更多选项（上栏 [···]）：**
-
-```
-┌──────────────┐
-│ 线路切换     │  → 选择不同线路
-│ 旋转屏幕     │  → 强制旋转（默认自动按视频比例）
-│ 定时关闭     │  → 设置倒计时
-│ 内核切换     │  → 切换 mpv/ExoPlayer
-│ 统计信息     │  → 视频/音频/网络统计
-│ 画面比例     │  → 原始/16:9/4:3/填充/裁剪/拉伸
-│ 画面裁剪     │  → 自定义裁剪
-└──────────────┘
-```
-点击选项后在屏幕右侧出现透明窗口，大小随文字适配。同时只能一个窗口打开。
-
-#### 3.8.1 字幕设置弹窗
-
-```
-┌──────────────────────────────┐
-│ 字幕轨道                      │
-│ ○ 中文简体（默认）            │
-│ ○ 中文繁體                   │     轨道列表，点击切换
-│ ○ English                   │
-│ [+ 导入字幕] [+ 在线搜索]     │
-├──────────────────────────────┤
-│ 字幕设置                      │
-│ 字体          [系统默认 ▼]    │     允许选择已安装字体
-├──────────────────────────────┤
-│ 字幕同步                      │
-│ [-] [0.0s] [+]              │     前后加减号
-│ [自定义输入] [重置]          │     自定义：直接输入正负数（秒）
-├──────────────────────────────┤
-│ 字幕大小    ━━━━●━━━━━━     │
-│ 字幕位置    ━━━━●━━━━━━     │
-└──────────────────────────────┘
-```
-
-#### 3.8.2 音频设置弹窗
-
-```
-┌──────────────────────────────┐
-│ 音频轨道                      │
-│ ○ 日语 5.1（默认）           │     轨道列表，点击切换
-│ ○ 日语 2.0                  │
-│ ○ 英语 5.1                  │
-├──────────────────────────────┤
-│ 音频同步                      │
-│ [-] [0.0s] [+]              │
-│ [自定义输入] [重置]          │
-└──────────────────────────────┘
-```
-
-#### 3.8.3 选集弹窗
-
-```
-┌──────────────────────────────┐
-│ 年度选择 [第一季 ▼] [集数 ▼] [条形|矩形]│
-├──────────────────────────────┤
-│  条形模式（默认）              │
-│ ┌────────────────────────┐  │
-│ │ [集封面]  E01 标题      │  │
-│ │          25:30 · 1.2GB │  │     封面 + 标题 + 时长+大小
-│ ├────────────────────────┤  │
-│ │ [集封面] ✓ E02 标题    │  │     ✓ = 已观看
-│ └────────────────────────┘  │
-│  矩形模式：                   │
-│ ┌──┐ ┌──┐ ┌──┐ ┌──┐       │
-│ │01│ │02│ │03│ │04│       │     只显示集数
-│ │  │ │✓ │ │  │ │  │       │     已看打勾
-│ └──┘ └──┘ └──┘ └──┘       │
-└──────────────────────────────┘
-```
-
-#### 3.8.4 交互手势
-
-| 手势 | 功能 |
-|------|------|
-| 双击左侧 | 默认快退 10s（可在设置自定义） |
-| 双击中间 | 播放/暂停（可在设置自定义） |
-| 双击右侧 | 默认快进 10s（可在设置自定义） |
-| 长按屏幕 | 临时快进（倍速可在设置自定义） |
-| 左侧上下滑 | 调节亮度 |
-| 右侧上下滑 | 调节音量 |
-
-屏幕左中右的交互行为在设置页统一管理。
-
-#### 3.8.5 状态说明
-
-| 状态 | 表现 |
-|------|------|
-| 加载中 | 画面中央显示加载圆圈 |
-| 播放失败 | 画面显示错误信息（用于调试），但不暴露播放线路 |
-| 播放完毕 | 自动下一集（设置可关），关闭后停在结尾画面 |
-| 横竖屏 | 默认按视频比例自动切换，用户可在更多菜单里强制旋转 |
-
-#### 3.8.6 画中画 (PiP)
-
-支持画中画模式，返回桌面时小窗继续播放。
-
-#### 3.8.7 锁屏播放控制
-
-锁屏上显示封面 + 进度条 + 播放/暂停控制。
-
-#### 3.8.8 播放队列
-
-隐式队列——后台自动按当前季排序，"下一集"按钮自动推进。用户不可见，不做播放列表 UI。
-
----
-
-### 3.9 设置页
-
-```
-┌──────────────────────────────┐
-│ 设置                         │
-├──────────────────────────────┤
-│ ┌──────────────────────┐     │
-│ │ 🎨 通用设置           │ →  │  ← 卡片入口
-│ └──────────────────────┘     │
-│ ┌──────────────────────┐     │
-│ │ ▶ 播放器设置          │ →  │
-│ └──────────────────────┘     │
-│ ┌──────────────────────┐     │
-│ │ 💬 弹幕设置           │ →  │
-│ └──────────────────────┘     │
-│ ┌──────────────────────┐     │
-│ │ ℹ 关于               │ →  │
-│ └──────────────────────┘     │
-│ ┌──────────────────────┐     │
-│ │ 💾 备份与恢复         │ →  │
-│ └──────────────────────┘     │
-└──────────────────────────────┘
-```
-
-#### 3.9.1 通用设置子页
-
-| 设置项 | 选项 |
-|--------|------|
-| 外观 | 深色 / 浅色 / 跟随系统 |
-| 语言 | 跟随系统 / 中文 / English / ...（i18next） |
-| 启动页 | 首页 / 上次浏览位置 |
-| 缓存管理 | 显示缓存大小 + 清除缓存按钮 |
-| 聚合搜索优先级 | 服务器名称/资源大小/集数/资源质量 |
-
-#### 3.9.2 播放器设置子页
-
-| 设置项 | 选项 |
-|--------|------|
-| 播放器内核 | 列出当前平台所有可用内核，不可用禁用并标注原因。mpv 默认 |
-| 默认播放速度 | 下拉选（0.25x ~ 4x） |
-| 快进步长 | 5s / 10s / 15s / 30s |
-| 长按快进倍速 | 2x / 3x / 4x |
-| 双击交互 | 左行为 / 中行为 / 右行为 各自配置（快进/快退/暂停/无） |
-| 硬件解码 | 开关 |
-| 后台播放 | 开关 |
-| 自动播放下一集 | 开关 |
-| 休眠定时器默认值 | 15min / 30min / 60min / 关闭 |
-
-#### 3.9.3 弹幕设置子页
-
-| 设置项 | 选项 |
-|--------|------|
-| 弹幕开关 | 全局开关 |
-| 透明度 | 滑块 0% ~ 100% |
-| 字号 | 滑块 |
-| 速度 | 滑块 |
-| 密度 | 滑块 |
-| 防遮挡区域 | 上/下占比设置 |
-| 弹幕延迟 | 秒数调节 |
-| 屏蔽词管理 | 编辑屏蔽词列表（支持 DandanPlay XML 格式） |
-
-#### 3.9.4 关于页
-
-- 应用版本号
-- 开源地址 (GitHub)
-- 检查更新按钮（GitHub Release API）
-- mpv 版本信息
-- 致谢 / 开源许可
-
-#### 3.9.5 备份与恢复
-
-- 备份：加密导出服务器配置 + 用户设置
-- 恢复：导入加密备份文件
-- 导入服务器配置：从本软件导出的 JSON 文件批量导入
-
----
-
-### 3.10 本地下载页
-
-```
-┌──────────────────────────────┐
-│ 本地下载                     │
-├──────────────────────────────┤
-│ ┌────────────────────────┐  │
-│ │ [封面] 标题             │  │  ← 按剧/电影合并
-│ │        系列名 · S1E5   │  │     时间从新到老排序
-│ └────────────────────────┘  │
-│ ┌────────────────────────┐  │
-│ │ [封面] 标题             │  │
-│ └────────────────────────┘  │
-└──────────────────────────────┘
-```
-
----
-
-## 四、附录
-
-### A. Emby API 端点速查
-
-| 功能域 | 端点 | 方法 |
-|--------|------|------|
-| 认证 | `/Users/AuthenticateByName` | POST |
-| 登出 | `/Sessions/Logout` | POST |
-| 当前用户 | `/Users/Me` | GET |
-| 继续观看 | `/Users/{UserId}/Items/Resume` | GET |
-| 媒体库列表 | `/Users/{userId}/Views` | GET |
-| 下一集 | `/Shows/NextUp` | GET |
-| 最新添加 | `/Users/{UserId}/Items/Latest` | GET |
-| 媒体项列表 | `/Users/{UserId}/Items` | GET |
-| 单项详情 | `/Items/{Id}` | GET |
-| 相似推荐 | `/Items/{Id}/Similar` | GET |
-| 筛选条件 | `/Items/Filters` | GET |
-| 季列表 | `/Shows/{Id}/Seasons` | GET |
-| 集列表 | `/Shows/{Id}/Episodes` | GET |
-| 人物参演 | `/Persons/{Name}/Items` | GET |
-| 搜索建议 | `/Search/Hints?SearchTerm=...&UserId=...` | GET |
-| 搜索 | `/Users/{UserId}/Items?SearchTerm=...` | GET |
-| 播放信息 | `/Items/{Id}/PlaybackInfo` | POST |
-| 视频流 | `/Videos/{Id}/stream` | GET |
-| 播放开始 | `/Sessions/Playing` | POST |
-| 播放进度 | `/Sessions/Playing/Progress` | POST |
-| 播放停止 | `/Sessions/Playing/Stopped` | POST |
-| 收藏 | `/Users/{UserId}/FavoriteItems/{Id}` | POST/DELETE |
-| 会话 | `/Sessions` | GET |
-| 系统信息 | `/System/Info` | GET |
-| 公开信息 | `/System/Info/Public` | GET |
-
-### B. 弹幕项目
-
-1. **DandanPlay** — 在线弹幕匹配（A: 标题模糊匹配 + C: 手动选池 兜底）
-2. **danmu_api** — https://github.com/huangxd-/danmu_api
-3. **misaka_danmu_server** — https://github.com/l429609201/misaka_danmu_server
-
-### C. Emby 辅助项目
-
-- **emby_ext_domains** — https://github.com/uhdnow/emby_ext_domains — 域名同步，默认启用
-
-### D. 待设计
-
-- [ ] PC 桌面端 UI
-- [ ] TV 端 UI
-- [ ] 全部深色模式设计 tokens 细节
-- [ ] 弹幕渲染引擎详细设计（接入三大弹幕源后再定稿）
+## Overview
+
+Apple's web presence is a masterclass in **reverent product photography framed by near-invisible UI**. Every page is a stack of edge-to-edge product "tiles" — alternating light and dark canvases, each centered on a hero headline, a one-line tagline, two tiny blue pill CTAs, and an impossibly crisp product render. Nothing competes with the product. Typography is confident but quiet; color is either pure white, an off-white parchment, or a near-black tile; interactive elements are a single, quiet blue.
+
+Density is unusually low even by contemporary SaaS standards. Each tile occupies roughly one viewport, and there is no decorative chrome — no borders, no gradients, no decorative frames, no shadows on headlines. Elevation appears only when a product image rests on a surface (a single soft `rgba(0, 0, 0, 0.22) 3px 5px 30px` drop for visual weight). The result is a catalog that feels more like a museum gallery: the wall disappears and the artifact takes over.
+
+Store and shop surfaces retain the same chassis but switch modes. The product configurator (iPhone 17 Pro, accessories grid) introduces a tight grid of white utility cards at `{rounded.lg}` (18px) radius with a thin border, paired with a persistent thin sub-nav strip. The environment page leans darker and more editorial. Across all five surfaces the typographic system, spacing rhythm, and the single blue accent are consistent — this is one design language expressed at different volumes.
+
+**Key Characteristics:**
+- Photography-first presentation; UI recedes so the product can speak.
+- Alternating full-bleed tile sections: white/parchment ↔ near-black, with the color change itself acting as the section divider.
+- Single blue accent (`{colors.primary}` — #0066cc) carries every interactive element. No second brand color exists.
+- Two button grammars: tiny blue pill CTAs (`{rounded.pill}`) and compact utility rects (`{rounded.sm}`).
+- SF Pro Display + SF Pro Text — negative letter-spacing at display sizes for the signature "Apple tight" headline feel.
+- Whisper-soft elevation used only when a product image needs to breathe — exactly one drop-shadow in the entire system.
+- Tight two-row nav: slim `{component.global-nav}` + product-specific `{component.sub-nav-frosted}` with persistent right-aligned primary CTA.
+- Section rhythm across multiple pages: light hero → dark product tile → light utility tile → dark tile → parchment footer — a predictable pulse.
+
+## Colors
+
+> **Source pages analyzed:** homepage, environment, store, iPhone 17 Pro buy page, accessories index. The color system is identical across all five surfaces; only the surface-mode mix differs.
+
+### Brand & Accent
+- **Action Blue** (`{colors.primary}` — #0066cc): The single brand-level interactive color. All text links, all blue pill CTAs ("Learn more", "Buy"), and the focus ring root. This is Apple's quiet but universal "click me" signal. Press state shifts to a slightly darker variant via the active scale transform rather than a hex change.
+- **Focus Blue** (`{colors.primary-focus}` — #0071e3): A marginally brighter sibling of Action Blue, reserved for the keyboard focus ring on buttons (`outline: 2px solid`).
+- **Sky Link Blue** (`{colors.primary-on-dark}` — #2997ff): A brighter blue used on dark surfaces for in-copy links and inline callouts, where Action Blue would disappear against the tile background.
+
+### Surface
+- **Pure White** (`{colors.canvas}` — #ffffff): The dominant canvas. Content, utility cards, store tiles, configurator grids.
+- **Parchment** (`{colors.canvas-parchment}` — #f5f5f7): The signature Apple off-white. Used for alternating light tiles, footer region, and the default page canvas in store utility sections. Just different enough from white to create rhythm.
+- **Pearl Button** (`{colors.surface-pearl}` — #fafafc): A near-white used as the fill for secondary "ghost" buttons — lighter than the parchment canvas so the button still reads as a button against `{colors.canvas-parchment}`.
+- **Near-Black Tile 1** (`{colors.surface-tile-1}` — #272729): The primary dark-tile surface on the homepage product grid.
+- **Near-Black Tile 2** (`{colors.surface-tile-2}` — #2a2a2c): A micro-step lighter — used where a dark tile sits directly above or below Tile 1 to create the faintest separation.
+- **Near-Black Tile 3** (`{colors.surface-tile-3}` — #252527): A micro-step darker — used at the bottom of the stack and in embedded video/player frames.
+- **Pure Black** (`{colors.surface-black}` — #000000): Reserved for true void — video player backgrounds, edge-to-edge photographic overlays, the global nav bar background.
+- **Translucent Chip Gray** (`{colors.surface-chip-translucent}` — #d2d2d7): The base hex of the translucent gray chip used over photography for circular control buttons. In production, applied at ~64% alpha as `rgba(210, 210, 215, 0.64)`.
+
+### Text
+- **Near-Black Ink** (`{colors.ink}` — #1d1d1f): The voice of every headline, every body paragraph, and the dark utility button's fill. Chosen instead of pure black to keep the page feeling photographic rather than printed.
+- **Body** (`{colors.body}` — #1d1d1f): Same hex as ink — Apple uses one near-black tone for all text on light surfaces.
+- **Body On Dark** (`{colors.body-on-dark}` — #ffffff): All text on dark tiles and on the global nav bar.
+- **Body Muted** (`{colors.body-muted}` — #cccccc): Secondary copy on dark tiles where pure white would be too loud.
+- **Ink Muted 80** (`{colors.ink-muted-80}` — #333333): Body text on the white Pearl Button surface — slightly softer than pure black.
+- **Ink Muted 48** (`{colors.ink-muted-48}` — #7a7a7a): Disabled button text and legal fine-print.
+
+### Hairlines & Borders
+- **Divider Soft** (`{colors.divider-soft}` — #f0f0f0): The "border" tone on secondary buttons — functions as a ring shadow rather than a hard line. In production, often applied as `rgba(0, 0, 0, 0.04)`.
+- **Hairline** (`{colors.hairline}` — #e0e0e0): The 1px hairline border on store utility cards and configurator chips.
+
+### Brand Gradient
+**No decorative gradients.** Atmospheric depth on product photography (the iPhone 17 Pro camera plate, the Apple Watch bands, AirPods reflections) is inherent to the imagery, not a CSS gradient overlay. The environment page's hero uses photographic atmosphere (mountain vista at dawn) but no gradient tokens are defined. Apple is the rare luxury-brand site with zero gradient-based design tokens.
+
+## Typography
+
+### Font Family
+- **Display**: `SF Pro Display, system-ui, -apple-system, sans-serif` — Apple's proprietary display face, optimized for sizes ≥ 19px. Defines the voice of every headline.
+- **Body / UI**: `SF Pro Text, system-ui, -apple-system, sans-serif` — the text-optimized variant used for body copy, captions, buttons, and links below 20px.
+- **OpenType features**: `font-variant-numeric: numerator` is enabled on numeric links (pricing tables, spec sheets). Display sizes rely on tight tracking rather than contextual ligatures.
+
+### Hierarchy
+
+| Token | Size | Weight | Line Height | Letter Spacing | Use |
+|---|---|---|---|---|---|
+| `{typography.hero-display}` | 56px | 600 | 1.07 | -0.28px | Hero headline; the signature "Apple tight" tracking |
+| `{typography.display-lg}` | 40px | 600 | 1.10 | 0 | Tile headlines atop every product tile |
+| `{typography.display-md}` | 34px | 600 | 1.47 | -0.374px | Section heads (SF Pro Text at display proportions) |
+| `{typography.lead}` | 28px | 400 | 1.14 | 0.196px | Product tile subcopy |
+| `{typography.lead-airy}` | 24px | 300 | 1.5 | 0 | Environment-page lead paragraphs (the rare weight 300) |
+| `{typography.tagline}` | 21px | 600 | 1.19 | 0.231px | Sub-tile tagline; sub-nav category name |
+| `{typography.body-strong}` | 17px | 600 | 1.24 | -0.374px | Inline strong emphasis |
+| `{typography.body}` | 17px | 400 | 1.47 | -0.374px | Default paragraph |
+| `{typography.dense-link}` | 17px | 400 | 2.41 | 0 | Footer / store utility link lists (relaxed leading) |
+| `{typography.caption}` | 14px | 400 | 1.43 | -0.224px | Secondary captions, button text |
+| `{typography.caption-strong}` | 14px | 600 | 1.29 | -0.224px | Emphasized captions |
+| `{typography.button-large}` | 18px | 300 | 1.0 | 0 | Store hero CTAs (the rare weight 300) |
+| `{typography.button-utility}` | 14px | 400 | 1.29 | -0.224px | Utility/nav button labels |
+| `{typography.fine-print}` | 12px | 400 | 1.0 | -0.12px | Fine-print, footer body |
+| `{typography.micro-legal}` | 10px | 400 | 1.3 | -0.08px | Micro legal disclaimers |
+| `{typography.nav-link}` | 12px | 400 | 1.0 | -0.12px | Global nav menu items |
+
+### Principles
+
+- **Negative letter-spacing at display sizes.** Every headline at 17px and up carries a slight tracking tighten (`-0.12 → -0.374px`). This produces the iconic "Apple tight" headline cadence. Never used at 12px or below.
+- **Body copy at 17px, not 16px.** Apple breaks the SaaS convention and runs paragraph text at 17px. The extra pixel gives the page an unmistakable "reading, not scanning" pace.
+- **Weight 300 is real and rare.** Used deliberately on a handful of large-size reads (`{typography.button-large}` at 18px/300 and `{typography.lead-airy}` at 24px/300). It's not an accident — it's a light-atmosphere cue reserved for moments where the content should feel airy.
+- **Weight 600, not 700, for headlines.** Apple's headlines sit at weight 600. Weight 700 is used sparingly for `{typography.tagline}` (21px) when a touch more assertion is needed.
+- **Line-height is context-specific.** Display sizes use 1.07–1.19 (tight). Body uses 1.47. Utility link stacks in the footer/store use an unusually relaxed 2.41 (`{typography.dense-link}`). The 2.41 is not a bug — it's how the footer's dense link columns breathe.
+- **Weight 500 is deliberately absent.** The ladder is 300 / 400 / 600 / 700. Mid-weight readings always use 600.
+
+### Note on Font Substitutes
+SF Pro is Apple's proprietary system font. When building off-system:
+
+- Use `system-ui, -apple-system, BlinkMacSystemFont` as the first stack entry — on macOS/iOS/Safari this resolves to the real SF Pro.
+- For non-Apple platforms, **Inter** (Google Fonts, variable) is the closest open-source equivalent. Inter at weight 600 with `font-feature-settings: "ss03"` approximates SF Pro's rounded "a" character.
+- Nudge `letter-spacing` down by `-0.01em` on display sizes to re-create the Apple tight feel; Inter's default tracking runs slightly wider than SF Pro.
+- For body text, tighten line-height by `0.03` (from 1.47 → 1.44) when substituting Inter — Inter's taller x-height needs less leading.
+
+## Layout
+
+### Spacing System
+- **Base unit:** 8px. Sub-base values (2, 4, 5, 6, 7) are used for tight typographic adjustments; structural layout snaps to 8/12/16/20/24.
+- **Tokens:** `{spacing.xxs}` 4px · `{spacing.xs}` 8px · `{spacing.sm}` 12px · `{spacing.md}` 17px · `{spacing.lg}` 24px · `{spacing.xl}` 32px · `{spacing.xxl}` 48px · `{spacing.section}` 80px.
+- **Section vertical padding:** `{spacing.section}` (80px) inside a product tile; tiles stack edge-to-edge with 0 gap (the color change provides the break).
+- **Card padding:** `{spacing.lg}` (24px) inside utility grid cards.
+- **Button padding:** 8–11px vertical, 15–22px horizontal.
+- **Universal rhythm constants:** the 17px body line-height multiplier (~25px line) and 21px tagline size show up on every analyzed page.
+
+### Grid & Container
+- **Max content width:** ~980px on text-heavy sections (environment), ~1440px on product grids (store, accessories), full-bleed for product tiles (homepage).
+- **Column patterns:** 3 to 5 column utility card grid on store/accessories; 2-column side-by-side tiles on homepage occasional sections; single-column centered stack on product tile heroes.
+- **Gutters:** 20–24px between cards in a utility grid.
+
+### Whitespace Philosophy
+Apple's whitespace is the product's pedestal. Every tile begins with at least 64px of air above its headline and 48–64px below. Product renders are never crowded; the nearest content to a product image is at least 40px away. The footer is the only area that breaks this — there, Apple goes deliberately dense to make the full information architecture visible at a glance.
+
+## Elevation & Depth
+
+| Level | Treatment | Use |
+|---|---|---|
+| Flat | No shadow, no border | Full-bleed tiles, global nav, footer, body sections |
+| Soft hairline | 1px `rgba(0, 0, 0, 0.08)` border | Utility cards, sub-nav frosted-glass separator |
+| Backdrop blur | `backdrop-filter: blur(N)` on Parchment 80% | Sub-nav and the iPhone buy floating sticky bar |
+| Product shadow | `rgba(0, 0, 0, 0.22) 3px 5px 30px 0` | Product renders resting on a surface (the only true "shadow" in the system) |
+
+**Shadow philosophy.** Apple uses **exactly one** drop-shadow, and it is applied to photographic product imagery — never to cards, never to buttons, never to text. Elevation in the UI comes from (a) surface-color change (light tile ↔ dark tile) and (b) backdrop-blur on sticky bars. The single shadow is about giving the product weight, not about UI hierarchy.
+
+### Decorative Depth
+- **Atmospheric imagery** on the environment page (photographic vista) supplies mood; no CSS gradient involved.
+- **Edge-to-edge tile alternation** creates rhythm without borders or shadows — the color change itself is the divider.
+- **Backdrop-filter blur** on `{component.sub-nav-frosted}` and `{component.floating-sticky-bar}` creates a "floating over content" effect that's functional, not decorative.
+
+## Shapes
+
+### Border Radius Scale
+
+| Token | Value | Use |
+|---|---|---|
+| `{rounded.none}` | 0px | Full-bleed product tiles (no corner rounding) |
+| `{rounded.xs}` | 5px | Inline links when styled as subtle chips (rare) |
+| `{rounded.sm}` | 8px | Dark utility buttons (Sign In, Bag), inline card imagery |
+| `{rounded.md}` | 11px | White Pearl Button capsules |
+| `{rounded.lg}` | 18px | Store utility cards, accessories grid cards |
+| `{rounded.pill}` | 9999px | Primary blue pill CTAs, sub-nav buy button, configurator option chips, search input — the signature Apple pill |
+| `{rounded.full}` | 9999px / 50% | Circular control chips floating over photography |
+
+### Photography Geometry
+- **Hero imagery**: full-bleed, 21:9 or taller on the homepage; 16:9 on environment and shop pages. Product renders are photographic-realistic, often shot on a tinted surface that becomes the tile background.
+- **Product renders**: PNG/WebP with transparency; rest on a surface tile and pick up the system shadow.
+- **Accessory grid**: square 1:1 crops at `{rounded.lg}` (18px) radius, light neutral backgrounds, product centered with 20–40px internal padding.
+- **No rounded imagery in hero tiles** — images are full-bleed rectangular. Rounding (`{rounded.sm}`, `{rounded.lg}`) appears only on inline card imagery.
+- Lazy-loading via responsive `srcset` and `sizes` across all breakpoints; CDN-optimized WebP.
+
+## Components
+
+### Top Navigation
+
+**`global-nav`** — Persistent, ultra-thin black nav bar pinned to the top of every page. Background `{colors.surface-black}`, height 44px, text `{colors.on-dark}` in `{typography.nav-link}` (12px / 400 / -0.12px tracking). Links are quiet, spaced ~20px apart, running edge-to-edge across the top. Right-aligned cluster: Search, Bag icons — always visible. On mobile, collapses to hamburger at ~834px and the Apple logo centers.
+
+**`sub-nav-frosted`** — Surface-specific nav that sticks below the global nav. Background `{colors.canvas-parchment}` at 80% opacity with backdrop-filter blur, creating a frosted-glass effect. Height 52px. Content on left: product category name ("iPhone", "Store", "Accessories") in `{typography.tagline}` (21px / 600). Content right: inline nav links in `{typography.button-utility}` (14px), ending in a persistent `{component.button-primary}` ("Buy") or a utility link.
+
+### Buttons
+
+**`button-primary`** — The signature Apple action. Background `{colors.primary}` (Action Blue #0066cc), text `{colors.on-primary}` in `{typography.body}` (SF Pro Text 17px / 400), rounded `{rounded.pill}` (full pill — capsule-shaped), padding 11px × 22px. The full-pill radius IS the brand action signal.
+- Active state: `{component.button-primary-active}` — `transform: scale(0.95)` (the system-wide micro-interaction).
+- Focus state: `{component.button-primary-focus}` — 2px solid `{colors.primary-focus}` outline.
+
+**`button-secondary-pill`** — Used as the second CTA when two blue pills appear together ("Learn more" / "Buy"). Background transparent, text `{colors.primary}`, 1px solid `{colors.primary}` border, rounded `{rounded.pill}`, padding 11px × 22px. Reads as a "ghost pill."
+
+**`button-dark-utility`** — Global nav actions (Sign In, Bag, language selector). Background `{colors.ink}` (#1d1d1f), text `{colors.on-dark}` in `{typography.button-utility}` (14px / 400 / -0.224px tracking), rounded `{rounded.sm}` (8px), padding 8px × 15px. Active state shrinks via `transform: scale(0.95)`.
+
+**`button-pearl-capsule`** — Product-card secondary button. Background `{colors.surface-pearl}` (#fafafc), text `{colors.ink-muted-80}` in `{typography.caption}` (14px), 3px solid `{colors.divider-soft}` border (functions as a soft ring rather than a visible line), rounded `{rounded.md}` (11px), padding 8px × 14px.
+
+**`button-store-hero`** — A larger primary CTA used on store hero surfaces. Same Action Blue + Paper White as `{component.button-primary}`, but with `{typography.button-large}` (18px / 300 — note the rare weight 300) and slightly more padding (14px × 28px). Used sparingly on the store landing.
+
+**`button-icon-circular`** — Floats over photography. 44 × 44px, background `{colors.surface-chip-translucent}` at ~64% alpha, icon in `{colors.ink}`, rounded `{rounded.full}`. Used for carousel controls, close buttons, and in-image controls (product image thumbnails on the iPhone buy page).
+
+**`text-link`** — Inline body links in `{colors.primary}` (Action Blue). Underlined or non-underlined per context.
+
+**`text-link-on-dark`** — Inline body links on dark tiles in `{colors.primary-on-dark}` (Sky Link Blue #2997ff) — Action Blue would disappear against `{colors.surface-tile-1}`.
+
+### Cards & Containers
+
+**`product-tile-light`** — Full-bleed light tile. Background `{colors.canvas}` (white), text `{colors.ink}`, rounded `{rounded.none}` (0 — tiles touch edges), vertical padding `{spacing.section}` (80px). Centered stack: product name in `{typography.display-lg}` (40px / 600) → one-line tagline in `{typography.lead}` (28px / 400) → two `{component.button-primary}` CTAs ("Learn more" / "Buy") → product render resting on the surface with the system shadow.
+
+**`product-tile-parchment`** — Same as `{component.product-tile-light}` but on `{colors.canvas-parchment}` (#f5f5f7). Used to break two consecutive white tiles.
+
+**`product-tile-dark`** — Full-bleed dark tile. Background `{colors.surface-tile-1}` (#272729), text `{colors.on-dark}`, rounded `{rounded.none}`, vertical padding `{spacing.section}` (80px). Same content stack as the light tile but with `{component.text-link-on-dark}` for inline copy and `{component.button-primary}` (Action Blue still works on the dark surface). Used on the homepage product grid as the alternating dark band.
+
+**`product-tile-dark-2`** — Variant on `{colors.surface-tile-2}` (#2a2a2c). Used where a dark tile sits directly above or below `{component.product-tile-dark}` to create the faintest separation through micro-step lightness change.
+
+**`product-tile-dark-3`** — Variant on `{colors.surface-tile-3}` (#252527). Used at the bottom of the stack and in embedded video/player frames.
+
+**`store-utility-card`** — Used in store grid and accessories grid. Background `{colors.canvas}` (white), 1px solid `{colors.hairline}` border, rounded `{rounded.lg}` (18px), padding `{spacing.lg}` (24px). Top: product image (1:1 crop with `{rounded.sm}` (8px) inner image radius). Below: product name in `{typography.body-strong}` (17px / 600), price in `{typography.body}` (17px / 400), and a `{component.text-link}` ("Buy" or "Learn more"). No shadow by default; product render itself carries the system product-shadow.
+
+**`configurator-option-chip`** — Pill-shaped tappable cell used in the iPhone 17 Pro buy page. Background `{colors.canvas}`, text `{colors.ink}` in `{typography.caption}`, rounded `{rounded.pill}`, padding 12px × 16px. Contains a small product thumbnail + label + price delta. Arranged in a grid of 4–5 options per row.
+
+**`configurator-option-chip-selected`** — Selected state. Border upgrades to 2px solid `{colors.primary-focus}`. Same shape, same content.
+
+**`environment-quote-card`** — A photographic-canvas hero specific to the environment page. Dark photographic backdrop (mountain vista at dawn) with `{colors.surface-tile-1}` as the fallback color, centered white-text headline in `{typography.display-lg}` (40px), small green "Apple 2030" pictographic logo above the headline, single `{component.button-primary}` below. Padding `{spacing.section}` (80px).
+
+**`floating-sticky-bar`** — Floats at the bottom of the viewport on the iPhone 17 Pro buy page during scroll. Background `{colors.canvas-parchment}` at 80% opacity with `backdrop-filter: blur(N)`, height 64px, padding 12px × 32px. Left: running price total in `{typography.body}`. Right: `{component.button-primary}` ("Add to Bag").
+
+### Inputs & Forms
+
+**`search-input`** — The accessories search input. Background `{colors.canvas}`, text `{colors.ink}` in `{typography.body}` (17px), 1px solid `rgba(0, 0, 0, 0.08)` border, rounded `{rounded.pill}` (full pill — search is also pill-shaped, matching the CTA grammar), padding 12px × 20px, height 44px. Leading icon: search glyph at 14px, muted tint.
+
+Error and validation states were not surfaced in the analyzed pages.
+
+### Footer
+
+**`footer`** — Background `{colors.canvas-parchment}` (#f5f5f7), text `{colors.ink-muted-80}`. Link columns in `{typography.dense-link}` (17px / 400 / 2.41 line-height — the relaxed leading is what makes the dense columns scannable). Column headings in `{typography.caption-strong}` (14px / 600). Legal row at the very bottom in `{typography.fine-print}` (12px / 400) with `{colors.ink-muted-48}` text. Vertical padding 64px.
+
+## Do's and Don'ts
+
+### Do
+- Use `{colors.primary}` (Action Blue #0066cc) for every interactive element — links, pill CTAs, focus signals — and nothing else. The single accent is non-negotiable.
+- Set headlines in `{typography.hero-display}` or `{typography.display-lg}` with negative letter-spacing (`-0.28 → -0.374px`) to get the signature "Apple tight" cadence.
+- Run body copy at `{typography.body}` (17px / 400 / 1.47 / -0.374px) — not 16px. The extra pixel defines the brand's reading pace.
+- Alternate `{component.product-tile-light}` (or parchment) and `{component.product-tile-dark}` for full-bleed section rhythm. The color change IS the divider.
+- Reserve `{rounded.pill}` for the primary blue CTA and any other element that should read as an "action" (configurator chips, search input, sticky bar CTA).
+- Apply the single product-shadow (`rgba(0, 0, 0, 0.22) 3px 5px 30px`) only to product renders resting on a surface — never on cards, buttons, or text.
+- Use `transform: scale(0.95)` as the active/press state on every button — it's the system-wide micro-interaction.
+- Keep the global nav `{colors.surface-black}` (true black) — it's the only place pure black appears on most pages.
+
+### Don't
+- Don't introduce a second accent color; every "click me" signal is `{colors.primary}` (Action Blue).
+- Don't add shadows to cards, buttons, or text — shadow is reserved for product imagery.
+- Don't use gradients as decorative backgrounds; atmosphere comes from photography.
+- Don't set body copy at weight 500 — Apple's ladder is 300 / 400 / 600 / 700, with 500 deliberately absent. Body is always 400; strong inline is 600; display is 600.
+- Don't round full-bleed tiles — tiles are rectangular and edge-to-edge; the color change is the divider.
+- Don't tighten line-height below 1.47 for body copy — the editorial leading is part of the brand.
+- Don't mix radii grammars — use `{rounded.sm}` for compact utility, `{rounded.lg}` for utility cards, `{rounded.pill}` for pills, and nothing in between (except the rare `{rounded.md}` Pearl Button).
+- Don't use `{colors.primary-on-dark}` (Sky Link Blue) on light surfaces — it's the dark-tile-only variant. Action Blue is for light surfaces.
+
+## Responsive Behavior
+
+### Breakpoints
+
+| Name | Width | Key Changes |
+|---|---|---|
+| Small phone | ≤ 419px | Single-column tiles; sub-nav collapses to category name + primary CTA only; hero typography drops to 28px |
+| Phone | 420–640px | Single-column stack; product renders scale to 80% of tile width; hero h1 drops to 34px |
+| Large phone | 641–735px | Tiles transition to tighter padding (48px vertical vs 80px); fine-print wraps |
+| Tablet portrait | 736–833px | Global nav collapses to hamburger; sub-nav hides category chips, keeps primary CTA |
+| Tablet landscape | 834–1023px | Global nav returns fully expanded; 3-column utility grids become 2-column |
+| Small desktop | 1024–1068px | Product tiles use 2/3 width with margin gutters; hero h1 stays at 40px |
+| Desktop | 1069–1440px | Full layout; 4–5 column store grids; 1440px content max |
+| Wide desktop | ≥ 1441px | Content locks at 1440px, margins absorb extra width |
+
+The structural breakpoints that matter for agents: 1440px (content lock), 1068px (small-desktop), 833px (tablet landscape switch), 734px (tablet portrait), 640px (phone), 480px (small phone).
+
+### Touch Targets
+- Minimum 44 × 44px. `{component.button-primary}` lands at ~44 × 100px (with the full-pill radius making the visible hit area more generous than the label suggests).
+- `{component.button-icon-circular}` is exactly 44 × 44px.
+- Global nav utility links are smaller (~32 × 80px) — they deliberately sit at a tighter target because they're precision desktop actions, and the mobile hamburger replaces them at ≤ 833px.
+
+### Collapsing Strategy
+- **Global nav**: full horizontal link row on desktop → collapses to Apple logo + hamburger + bag icon at 834px and below.
+- **Sub-nav**: category name + inline links + primary CTA → category name + primary CTA only at mobile; inline links move into a hamburger tray.
+- **Product tiles**: stack from 2-column to 1-column at 834px; vertical padding tightens from 80px → 48px at small-phone.
+- **Utility grids** (store, accessories): 5-col → 4-col (1440px) → 3-col (1068px) → 2-col (834px) → 1-col (640px).
+- **Hero typography**: `{typography.hero-display}` (56px) → `{typography.display-lg}` (40px) at 1068px → 34px at 640px → 28px at 419px.
+
+### Image Behavior
+- All product imagery uses responsive `srcset` with breakpoint-matched crops.
+- Hero photography may switch art direction at mobile (e.g., the environment page's vista crops to a taller aspect ratio on mobile, framing the subject differently).
+- Product renders maintain their 1:1 or 4:3 aspect ratios across breakpoints; only scale changes.
+- Lazy-loading is default; the above-fold hero loads eagerly.
+
+## Iteration Guide
+
+1. Focus on ONE component at a time. Reference its YAML key directly (`{component.product-tile-dark}`, `{component.search-input}`).
+2. Variants of an existing component (`-active`, `-focus`, `-2`, `-3`) live as separate entries in `components:`.
+3. Use `{token.refs}` everywhere — never inline hex.
+4. Never document hover. Default and Active/Pressed states only.
+5. Display headlines stay SF Pro Display 600 with negative letter-spacing. Body stays SF Pro Text 400 at 17px. The boundary is unbreakable.
+6. The single drop-shadow (`rgba(0, 0, 0, 0.22) 3px 5px 30px`) is reserved for product photography only.
+7. When in doubt about emphasis: alternate surface (light → dark tile) before adding chrome.
+
+## Known Gaps
+
+- Form validation and error states were not surfaced on the analyzed pages; only the neutral search input is documented.
+- The homepage's embedded video/player frame uses `{colors.surface-black}`; interior player controls are not documented (they're a platform widget, not a web-design token).
+- Some component imagery is dynamic (rotating product hero) and its specific copy varies per surface — component specs name the structure, not the rotating content.
+- Dark-mode counterparts for store and accessories utility cards were not surfaced on the analyzed pages; the system documented is the daytime/light-dominant variant Apple ships by default.
+- Atmospheric photography (environment page mountain vista) is a content asset, not a design token; the documented `{component.environment-quote-card}` describes the structural surface only.
+- The exact backdrop-filter blur radius on `{component.sub-nav-frosted}` and `{component.floating-sticky-bar}` is platform-dependent; production CSS uses `saturate(180%) blur(20px)` as a typical baseline but the value isn't formalized as a token.
