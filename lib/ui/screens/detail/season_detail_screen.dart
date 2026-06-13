@@ -88,54 +88,89 @@ class _SeasonDetailScreenState extends ConsumerState<SeasonDetailScreen> {
         if (episodes.isEmpty) {
           return const Center(child: Text('暂无集数'));
         }
+        // 预计算所有图片 URL，避免在 itemBuilder 中重复计算
+        final episodesWithImages = episodes.map((episode) {
+          return _EpisodeWithImage(
+            episode: episode,
+            imageUrls: resolveEpisodeLandscapeImageUrls(api, episode, maxWidth: 480),
+          );
+        }).toList();
+
         return ListView.builder(
           padding: const EdgeInsets.all(16),
-          itemCount: episodes.length,
+          itemCount: episodesWithImages.length,
+          itemExtent: 84.0, // 固定高度优化布局计算 (ListTile 72px + margin 12px)
           itemBuilder: (context, index) {
-            final episode = episodes[index];
-            final imageUrls = resolveEpisodeLandscapeImageUrls(
-              api,
-              episode,
-              maxWidth: 480,
-            );
-            return Card(
-              margin: const EdgeInsets.only(bottom: 12),
-              child: ListTile(
-                onTap: () => context.push('/episode/${episode.id}'),
-                leading: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    width: 100,
-                    height: 60,
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                    child: imageUrls.isNotEmpty
-                        ? MediaImage(
-                            imageUrl: imageUrls.first,
-                            imageUrls: imageUrls.length > 1
-                                ? imageUrls.sublist(1)
-                                : null,
-                            width: 100,
-                            height: 60,
-                            fit: BoxFit.cover,
-                          )
-                        : const Center(child: Icon(Icons.play_arrow)),
-                  ),
-                ),
-                title: Text('E${episode.indexNumber} ${episode.name}'),
-                subtitle: Text(
-                  episode.formattedRuntime ?? '',
-                  style: TextStyle(color: Theme.of(context).textTheme.bodySmall?.color),
-                ),
-                trailing: episode.userData?.played ?? false
-                    ? const Icon(Icons.check_circle, color: Color(0xFF5B8DEF))
-                    : null,
-              ),
+            final item = episodesWithImages[index];
+            // 使用 RepaintBoundary 隔离每个列表项的重绘
+            return RepaintBoundary(
+              child: _EpisodeListItem(item: item),
             );
           },
         );
       },
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (error, _) => Center(child: Text('错误: $error')),
+    );
+  }
+}
+
+/// 剧集数据与预计算的图片 URL
+class _EpisodeWithImage {
+  final Episode episode;
+  final List<String> imageUrls;
+
+  const _EpisodeWithImage({
+    required this.episode,
+    required this.imageUrls,
+  });
+}
+
+/// 剧集列表项
+class _EpisodeListItem extends StatelessWidget {
+  final _EpisodeWithImage item;
+
+  const _EpisodeListItem({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: ListTile(
+        onTap: () => context.push('/episode/${item.episode.id}'),
+        leading: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            width: 100,
+            height: 60,
+            color: colorScheme.surfaceContainerHighest,
+            child: item.imageUrls.isNotEmpty
+                ? MediaImage(
+                    imageUrl: item.imageUrls.first,
+                    imageUrls: item.imageUrls.length > 1
+                        ? item.imageUrls.sublist(1)
+                        : null,
+                    width: 100,
+                    height: 60,
+                    cacheWidth: 200, // 2x 显示尺寸，优化内存和解码性能
+                    cacheHeight: 120,
+                    fit: BoxFit.cover,
+                  )
+                : const Center(child: Icon(Icons.play_arrow)),
+          ),
+        ),
+        title: Text('E${item.episode.indexNumber} ${item.episode.name}'),
+        subtitle: Text(
+          item.episode.formattedRuntime ?? '',
+          style: TextStyle(color: textTheme.bodySmall?.color),
+        ),
+        trailing: item.episode.userData?.played ?? false
+            ? const Icon(Icons.check_circle, color: Color(0xFF5B8DEF))
+            : null,
+      ),
     );
   }
 }
