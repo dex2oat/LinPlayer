@@ -79,7 +79,6 @@ struct SettingsView: View {
                     }
                 }
             }
-            .scrollContentBackground(.hidden)
             .background(AppTheme.background)
         }
     }

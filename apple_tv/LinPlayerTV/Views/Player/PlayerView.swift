@@ -127,18 +127,24 @@ final class PlayerViewModel: ObservableObject {
 
     private func startProgressReporting() {
         progressTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            guard let self = self, let player = self.player, let msid = self.mediaSourceId else { return }
-            let currentTime = player.currentTime()
-            let ticks = Int(CMTimeGetSeconds(currentTime) * 10_000_000)
-            let isPaused = player.rate == 0
-            Task {
-                try? await self.apiClient.reportPlaybackProgress(
-                    itemId: self.item.id,
-                    mediaSourceId: msid,
-                    positionTicks: ticks,
-                    isPaused: isPaused
-                )
+            Task { @MainActor [weak self] in
+                await self?.reportPlaybackProgress()
             }
         }
+    }
+
+    private func reportPlaybackProgress() async {
+        guard let player, let msid = mediaSourceId else { return }
+
+        let currentTime = player.currentTime()
+        let ticks = Int(CMTimeGetSeconds(currentTime) * 10_000_000)
+        let isPaused = player.rate == 0
+
+        try? await apiClient.reportPlaybackProgress(
+            itemId: item.id,
+            mediaSourceId: msid,
+            positionTicks: ticks,
+            isPaused: isPaused
+        )
     }
 }
