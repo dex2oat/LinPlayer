@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/services/download_service.dart';
+import '../../../core/theme/app_motion.dart';
 
 /// 下载服务Provider
 final downloadServiceProvider = Provider<DownloadService>((ref) {
@@ -50,7 +51,7 @@ class _DownloadScreenState extends ConsumerState<DownloadScreen> {
               itemCount: tasks.length,
               itemBuilder: (context, index) {
                 final task = tasks[index];
-                return _DownloadItemCard(task: task);
+                return _DownloadItemCard(task: task).appEntrance(index: index);
               },
             ),
     );

@@ -5,8 +5,10 @@ import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
 import '../../../core/services/cast_service.dart';
+import '../../../core/theme/app_motion.dart';
 import '../../../core/utils/color_extractor.dart';
 import '../../../core/utils/platform_utils.dart';
+import '../../../core/widgets/app_shimmer.dart';
 import '../../screens/download/download_screen.dart';
 import '../../utils/media_helpers.dart';
 import '../../widgets/common/dynamic_background.dart';
@@ -72,7 +74,7 @@ class _SeasonDetailScreenState extends ConsumerState<SeasonDetailScreen> {
           title: Text(_seasonName ?? '季详情'),
         ),
         body: _seriesId == null
-            ? const Center(child: CircularProgressIndicator())
+            ? const AppLoadingIndicator()
             : _buildEpisodeList(api),
       ),
     );
@@ -104,12 +106,12 @@ class _SeasonDetailScreenState extends ConsumerState<SeasonDetailScreen> {
             final item = episodesWithImages[index];
             // 使用 RepaintBoundary 隔离每个列表项的重绘
             return RepaintBoundary(
-              child: _EpisodeListItem(item: item),
+              child: _EpisodeListItem(item: item).appEntrance(index: index),
             );
           },
         );
       },
-      loading: () => const Center(child: CircularProgressIndicator()),
+      loading: () => const AppLoadingIndicator(),
       error: (error, _) => Center(child: Text('错误: $error')),
     );
   }
@@ -292,7 +294,7 @@ class _EpisodeDetailScreenState extends ConsumerState<EpisodeDetailScreen> {
           ),
         ),
         loading: () => const Scaffold(
-          body: Center(child: CircularProgressIndicator()),
+          body: AppLoadingIndicator(),
         ),
         error: (error, _) => Scaffold(
           body: Center(child: Text('错误: $error')),

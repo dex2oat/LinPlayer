@@ -40,139 +40,155 @@ class _DesktopMediaCardState extends ConsumerState<DesktopMediaCard> {
   @override
   Widget build(BuildContext context) {
     final api = ref.read(apiClientProvider);
-    final imageUrls = resolveMediaItemImageUrls(api, widget.item, maxWidth: 400);
+    final imageUrls =
+        resolveMediaItemImageUrls(api, widget.item, maxWidth: 400);
     final theme = Theme.of(context);
-    final aspectRatio = widget.height != null ? widget.width / widget.height! : 2 / 3;
+    final aspectRatio =
+        widget.height != null ? widget.width / widget.height! : 2 / 3;
+    // 字重恒定，避免 hover 时 w500↔w700 触发文本 relayout；
+    // hover 反馈交给上移 + 渐显遮罩（见下方 AnimatedContainer）。
     final titleStyle = theme.textTheme.titleSmall?.copyWith(
       fontSize: widget.compact ? 13.5 : null,
       height: widget.compact ? 1.18 : 1.24,
-      fontWeight: _isHovered ? FontWeight.w700 : FontWeight.w500,
+      fontWeight: FontWeight.w600,
     );
     final metaStyle = theme.textTheme.bodySmall?.copyWith(
       fontSize: widget.compact ? 11.5 : null,
       height: 1.22,
     );
 
-    return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: widget.onTap ?? () => context.push(mediaRouteForItem(widget.item)),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.fastOutSlowIn,
-          width: widget.width,
-          transform: _isHovered
-              ? (Matrix4.identity()..translateByDouble(0.0, -4.0, 0.0, 1.0))
-              : Matrix4.identity(),
-          transformAlignment: Alignment.center,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              AspectRatio(
-                aspectRatio: aspectRatio,
-                child: ClipRRect(
-                  borderRadius: desktopPortraitCoverRadius,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      MediaImage(
-                        imageUrl: imageUrls.isNotEmpty ? imageUrls.first : null,
-                        width: widget.width,
-                        height: widget.height ?? widget.width / aspectRatio,
-                        cacheWidth: (widget.width * 2).toInt(), // 2x 显示尺寸，适配高 DPI
-                        cacheHeight: widget.height != null
-                            ? (widget.height! * 2).toInt()
-                            : ((widget.width / aspectRatio) * 2).toInt(),
-                        fit: BoxFit.cover,
-                      ),
-                      AnimatedOpacity(
-                        duration: const Duration(milliseconds: 120),
-                        opacity: _isHovered ? 1.0 : 0.0,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [
-                                Colors.transparent,
-                                Colors.black.withValues(alpha: 0.6),
-                              ],
-                            ),
-                          ),
-                          child: const Center(
-                            child: Icon(
-                              Icons.play_circle_outline,
-                              size: 48,
-                              color: Colors.white,
-                            ),
-                          ),
+    return RepaintBoundary(
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _isHovered = true),
+        onExit: (_) => setState(() => _isHovered = false),
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: widget.onTap ??
+              () => context.push(mediaRouteForItem(widget.item)),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            curve: Curves.fastOutSlowIn,
+            width: widget.width,
+            transform: _isHovered
+                ? (Matrix4.identity()..translateByDouble(0.0, -4.0, 0.0, 1.0))
+                : Matrix4.identity(),
+            transformAlignment: Alignment.center,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                AspectRatio(
+                  aspectRatio: aspectRatio,
+                  child: ClipRRect(
+                    borderRadius: desktopPortraitCoverRadius,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        MediaImage(
+                          imageUrl:
+                              imageUrls.isNotEmpty ? imageUrls.first : null,
+                          width: widget.width,
+                          height: widget.height ?? widget.width / aspectRatio,
+                          cacheWidth:
+                              (widget.width * 2).toInt(), // 2x 显示尺寸，适配高 DPI
+                          cacheHeight: widget.height != null
+                              ? (widget.height! * 2).toInt()
+                              : ((widget.width / aspectRatio) * 2).toInt(),
+                          fit: BoxFit.cover,
                         ),
-                      ),
-                      if (widget.showProgress && widget.item.progress != null)
-                        Positioned(
-                          bottom: 8,
-                          left: 8,
-                          right: 8,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(2),
-                            child: LinearProgressIndicator(
-                              value: widget.item.progress,
-                              backgroundColor: Colors.white.withValues(alpha: 0.3),
-                              valueColor: const AlwaysStoppedAnimation(Color(0xFF5B8DEF)),
-                              minHeight: 3,
-                            ),
-                          ),
-                        ),
-                      if (widget.item.communityRating != null)
-                        Positioned(
-                          top: 8,
-                          right: 8,
+                        AnimatedOpacity(
+                          duration: const Duration(milliseconds: 120),
+                          opacity: _isHovered ? 1.0 : 0.0,
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                             decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.6),
-                              borderRadius: BorderRadius.circular(4),
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  Colors.transparent,
+                                  Colors.black.withValues(alpha: 0.6),
+                                ],
+                              ),
                             ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(Icons.star, size: 12, color: Colors.amber),
-                                const SizedBox(width: 2),
-                                Text(
-                                  widget.item.communityRating!.toStringAsFixed(1),
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ],
+                            child: const Center(
+                              child: Icon(
+                                Icons.play_circle_outline,
+                                size: 48,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
                         ),
-                    ],
+                        if (widget.showProgress && widget.item.progress != null)
+                          Positioned(
+                            bottom: 8,
+                            left: 8,
+                            right: 8,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(2),
+                              child: LinearProgressIndicator(
+                                value: widget.item.progress,
+                                backgroundColor:
+                                    Colors.white.withValues(alpha: 0.3),
+                                valueColor: const AlwaysStoppedAnimation(
+                                    Color(0xFF5B8DEF)),
+                                minHeight: 3,
+                              ),
+                            ),
+                          ),
+                        if (widget.item.communityRating != null)
+                          Positioned(
+                            top: 8,
+                            right: 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.6),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.star,
+                                      size: 12, color: Colors.amber),
+                                  const SizedBox(width: 2),
+                                  Text(
+                                    widget.item.communityRating!
+                                        .toStringAsFixed(1),
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              SizedBox(height: widget.compact ? 6 : 8),
-              Text(
-                widget.item.name,
-                maxLines: widget.titleMaxLines,
-                overflow: TextOverflow.ellipsis,
-                style: titleStyle,
-              ),
-              if (widget.showMetadata &&
-                  (widget.item.productionYear != null ||
-                      widget.item.genres != null))
+                SizedBox(height: widget.compact ? 6 : 8),
                 Text(
-                  widget.item.productionYear?.toString() ?? widget.item.genres?.first ?? '',
-                  maxLines: 1,
+                  widget.item.name,
+                  maxLines: widget.titleMaxLines,
                   overflow: TextOverflow.ellipsis,
-                  style: metaStyle,
+                  style: titleStyle,
                 ),
-            ],
+                if (widget.showMetadata &&
+                    (widget.item.productionYear != null ||
+                        widget.item.genres != null))
+                  Text(
+                    widget.item.productionYear?.toString() ??
+                        widget.item.genres?.first ??
+                        '',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: metaStyle,
+                  ),
+              ],
+            ),
           ),
         ),
       ),

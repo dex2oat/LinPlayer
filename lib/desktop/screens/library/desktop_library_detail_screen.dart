@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../../core/theme/app_motion.dart';
+import '../../../core/widgets/app_shimmer.dart';
 import '../../utils/desktop_smooth_scroll.dart';
 import '../../widgets/desktop_media_card.dart';
 
@@ -136,7 +138,7 @@ class _DesktopLibraryDetailScreenState
                             item: item,
                             width: actualWidth,
                             titleMaxLines: 2,
-                          );
+                          ).appEntrance(index: index);
                         },
                         childCount: items.length,
                       ),
@@ -146,7 +148,7 @@ class _DesktopLibraryDetailScreenState
               );
             },
             loading: () => const SliverFillRemaining(
-              child: Center(child: CircularProgressIndicator()),
+              child: AppLoadingIndicator(),
             ),
             error: (_, __) => SliverFillRemaining(
               child: Center(

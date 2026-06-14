@@ -5,6 +5,8 @@ import '../../../core/api/api_interfaces.dart';
 import '../../../core/api/emby_api.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../../core/theme/app_motion.dart';
+import '../../../core/widgets/app_shimmer.dart';
 import '../../utils/media_helpers.dart';
 import '../../widgets/common/media_widgets.dart';
 
@@ -182,11 +184,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                       )
                     : null,
               ),
-            );
+            ).appEntrance(index: index);
           },
         );
       },
-      loading: () => const Center(child: CircularProgressIndicator()),
+      loading: () => const AppLoadingIndicator(),
       error: (error, _) => Center(child: Text('搜索失败: $error')),
     );
   }
@@ -214,7 +216,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       }(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
+          return const AppLoadingIndicator();
         }
         final aggregateData = snapshot.data ?? {};
         if (aggregateData.isEmpty) {

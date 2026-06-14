@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../core/theme/app_motion.dart';
 import '../theme/tv_design_tokens.dart';
 import 'tv_focusable.dart';
 
@@ -186,7 +187,7 @@ class _TvHeroBannerState extends State<TvHeroBanner> {
             ),
           ),
         ),
-        // 内容信息
+        // 内容信息（随每张轮播淡入上滑）
         Positioned(
           left: TvDesignTokens.spacingXxl,
           bottom: TvDesignTokens.spacingXxl,
@@ -265,7 +266,7 @@ class _TvHeroBannerState extends State<TvHeroBanner> {
                   ),
                 ),
             ],
-          ),
+          ).appEntrance(),
         ),
       ],
     );

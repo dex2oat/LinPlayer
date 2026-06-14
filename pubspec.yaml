@@ -46,6 +46,9 @@ dependencies:
   
   # UI增强
   cupertino_icons: ^1.0.6
+
+  # 动效（统一三端动画：入场/错峰/shimmer/淡入缩放）
+  flutter_animate: ^4.5.0
   
   # 颜色提取
   palette_generator: ^0.3.3+7

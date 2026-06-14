@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../../core/theme/app_motion.dart';
+import '../../../core/widgets/app_shimmer.dart';
 import '../../utils/media_helpers.dart';
 import '../../widgets/common/media_widgets.dart';
 
@@ -41,11 +43,11 @@ class FavoritesScreen extends ConsumerWidget {
               itemCount: items.length,
               itemBuilder: (context, index) {
                 final item = items[index];
-                return _FavoriteTile(item: item);
+                return _FavoriteTile(item: item).appEntrance(index: index);
               },
             );
           },
-          loading: () => const Center(child: CircularProgressIndicator()),
+          loading: () => const AppLoadingIndicator(),
           error: (error, _) => ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             children: [

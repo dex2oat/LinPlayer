@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/theme/app_motion.dart';
 import '../../theme/tv_design_tokens.dart';
 import '../../widgets/tv_focusable.dart';
 import '../../widgets/tv_toast.dart';
@@ -399,7 +400,7 @@ class _TvDetailScreenState extends State<TvDetailScreen> {
                 ],
               ),
             ),
-          );
+          ).appEntrance(index: index);
         }),
       ],
     );

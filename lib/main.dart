@@ -7,6 +7,7 @@ import 'package:media_kit/media_kit.dart';
 import 'app.dart';
 import 'core/providers/app_providers.dart';
 import 'core/services/cache_service.dart';
+import 'core/theme/app_motion.dart';
 import 'core/utils/platform_utils.dart';
 import 'desktop/desktop_app.dart';
 import 'desktop/window/desktop_window_chrome.dart';
@@ -14,6 +15,9 @@ import 'tv/tv_app.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 统一三端动效基线（时长/曲线），见 core/theme/app_motion.dart
+  AppMotion.applyGlobalDefaults();
 
   // media_kit 仅在非 Android 平台初始化
   // Android 使用原生 MPV (libplayer.so) 通过平台通道调用

@@ -1009,7 +1009,7 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
           },
           loading: () => const SizedBox(
             height: 120,
-            child: Center(child: CircularProgressIndicator()),
+            child: AppLoadingIndicator(),
           ),
           error: (_, __) => const SizedBox.shrink(),
         );

@@ -7,6 +7,7 @@ import '../../../core/providers/media_providers.dart';
 import '../../../core/services/cast_service.dart';
 import '../../../core/utils/color_extractor.dart';
 import '../../../core/utils/platform_utils.dart';
+import '../../../core/widgets/app_shimmer.dart';
 import '../../screens/download/download_screen.dart';
 import '../../utils/media_helpers.dart';
 import '../../widgets/common/dynamic_background.dart';
@@ -27,7 +28,7 @@ class MediaDetailScreen extends ConsumerWidget {
     return Scaffold(
       body: itemAsync.when(
         data: (item) => _DetailContent(item: item, itemId: itemId),
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => const AppLoadingIndicator(),
         error: (error, stackTrace) => _ErrorView(
           error: error,
           onRetry: () => ref.invalidate(mediaItemProvider(itemId)),
@@ -764,7 +765,7 @@ class _MoviePlaybackSection extends ConsumerWidget {
       ),
       loading: () => const Padding(
         padding: EdgeInsets.all(16),
-        child: Center(child: CircularProgressIndicator()),
+        child: AppLoadingIndicator(),
       ),
       error: (_, __) => const SizedBox.shrink(),
     );

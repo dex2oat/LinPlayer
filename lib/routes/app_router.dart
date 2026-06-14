@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../core/providers/app_providers.dart';
+import '../core/theme/app_motion.dart';
 import '../ui/screens/detail/media_detail_screen.dart';
 import '../ui/screens/detail/season_detail_screen.dart';
 import '../ui/screens/download/download_screen.dart';
@@ -211,7 +212,7 @@ CustomTransitionPage<void> _buildBranchRootPage({
       return FadeTransition(
         opacity: CurvedAnimation(
           parent: animation,
-          curve: Curves.easeOutCubic,
+          curve: AppMotion.standard,
         ),
         child: child,
       );
@@ -238,8 +239,8 @@ CustomTransitionPage<void> _buildHorizontalPage({
     transitionsBuilder: (context, animation, secondaryAnimation, child) {
       final curved = CurvedAnimation(
         parent: animation,
-        curve: Curves.easeOutCubic,
-        reverseCurve: Curves.easeInCubic,
+        curve: AppMotion.standard,
+        reverseCurve: AppMotion.reverse,
       );
       return SlideTransition(
         position: Tween<Offset>(
@@ -267,7 +268,8 @@ class _AnimatedBranchContainer extends StatefulWidget {
   final List<Widget> children;
 
   @override
-  State<_AnimatedBranchContainer> createState() => _AnimatedBranchContainerState();
+  State<_AnimatedBranchContainer> createState() =>
+      _AnimatedBranchContainerState();
 }
 
 class _AnimatedBranchContainerState extends State<_AnimatedBranchContainer> {
@@ -289,28 +291,25 @@ class _AnimatedBranchContainerState extends State<_AnimatedBranchContainer> {
       children: List<Widget>.generate(widget.children.length, (index) {
         final bool isActive = index == widget.currentIndex;
         final bool isLeaving = index == _previousIndex && !isActive;
+        // 收敛位移、去掉叠加的 AnimatedOpacity（每个分支一次 saveLayer），
+        // Tab 切换只做单层轻量滑动。
         final double targetOffset = isActive
             ? 0
             : isLeaving
-                ? (moveRight ? -0.08 : 0.08)
-                : (index > widget.currentIndex ? 0.08 : -0.08);
+                ? (moveRight ? -0.04 : 0.04)
+                : (index > widget.currentIndex ? 0.04 : -0.04);
 
         return IgnorePointer(
           ignoring: !isActive,
           child: TickerMode(
             enabled: isActive || isLeaving,
             child: AnimatedSlide(
-              duration: const Duration(milliseconds: 260),
+              duration: const Duration(milliseconds: 240),
               curve: Curves.easeOutCubic,
               offset: Offset(targetOffset, 0),
-              child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 220),
-                curve: Curves.easeOutCubic,
-                opacity: isActive ? 1 : 0,
-                child: Offstage(
-                  offstage: !isActive && !isLeaving,
-                  child: widget.children[index],
-                ),
+              child: Offstage(
+                offstage: !isActive && !isLeaving,
+                child: widget.children[index],
               ),
             ),
           ),
@@ -335,7 +334,9 @@ class MainShell extends StatefulWidget {
 }
 
 class _MainShellState extends State<MainShell> {
-  double _tabOpacity = 1.0;
+  // 性能要点：滚动时只更新 ValueNotifier，由 ValueListenableBuilder 局部重建
+  // 浮动 TabBar 的透明度，避免每个滚动事件 setState 整个 shell（含 navigationShell）。
+  final ValueNotifier<double> _tabOpacity = ValueNotifier<double>(1.0);
 
   bool get _isHomePage => widget.currentPath == '/home';
   bool get _isServerListPage => widget.currentPath == '/';
@@ -350,9 +351,7 @@ class _MainShellState extends State<MainShell> {
     if (notification is ScrollUpdateNotification) {
       final delta = notification.scrollDelta ?? 0;
       if (delta.abs() > 1.5) {
-        setState(() {
-          _tabOpacity = (_tabOpacity - delta / 150).clamp(0.0, 1.0);
-        });
+        _tabOpacity.value = (_tabOpacity.value - delta / 150).clamp(0.0, 1.0);
       }
     }
     return false;
@@ -362,10 +361,14 @@ class _MainShellState extends State<MainShell> {
   void didUpdateWidget(covariant MainShell oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.currentPath != widget.currentPath && _isServerListPage) {
-      setState(() {
-        _tabOpacity = 1.0;
-      });
+      _tabOpacity.value = 1.0;
     }
+  }
+
+  @override
+  void dispose() {
+    _tabOpacity.dispose();
+    super.dispose();
   }
 
   @override
@@ -375,7 +378,6 @@ class _MainShellState extends State<MainShell> {
     final showFloatingTabBar = _supportsFloatingTabBar && !isKeyboardVisible;
     final bottomPadding = mediaQuery.padding.bottom;
     final tabHeight = showFloatingTabBar ? 64.0 + bottomPadding : 0.0;
-    final effectiveOpacity = _isServerListPage ? 1.0 : _tabOpacity;
 
     return NotificationListener<ScrollNotification>(
       onNotification: _onScrollNotification,
@@ -394,11 +396,14 @@ class _MainShellState extends State<MainShell> {
         bottomNavigationBar: const SizedBox.shrink(),
         floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
         floatingActionButton: showFloatingTabBar
-            ? AnimatedOpacity(
-                opacity: effectiveOpacity,
-                duration: const Duration(milliseconds: 200),
+            ? ValueListenableBuilder<double>(
+                valueListenable: _tabOpacity,
                 child: _FloatingTabBar(
                   navigationShell: widget.navigationShell,
+                ),
+                builder: (context, value, child) => Opacity(
+                  opacity: _isServerListPage ? 1.0 : value,
+                  child: child,
                 ),
               )
             : null,
@@ -463,7 +468,9 @@ class _FloatingTabBar extends StatelessWidget {
         curve: Curves.easeInOut,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF5B8DEF).withValues(alpha: 0.15) : Colors.transparent,
+          color: isSelected
+              ? const Color(0xFF5B8DEF).withValues(alpha: 0.15)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
         ),
         child: Row(

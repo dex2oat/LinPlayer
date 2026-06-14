@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/theme/app_motion.dart';
 import '../theme/tv_design_tokens.dart';
 import 'tv_focusable.dart';
 import 'tv_poster_card.dart';
@@ -100,7 +101,7 @@ class TvContentRow extends StatelessWidget {
                     height: item.height ?? TvDesignTokens.posterHeight16_9,
                   ),
                 ),
-              );
+              ).appEntrance(index: index);
             },
           ),
         ),

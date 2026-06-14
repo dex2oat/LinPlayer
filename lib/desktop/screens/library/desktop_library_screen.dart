@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../../core/theme/app_motion.dart';
+import '../../../core/widgets/app_shimmer.dart';
 import '../../../ui/utils/media_helpers.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
 import '../../widgets/desktop_cover_radii.dart';
@@ -101,7 +103,8 @@ class _DesktopLibraryScreenState extends ConsumerState<DesktopLibraryScreen> {
                     delegate: SliverChildBuilderDelegate(
                       (context, index) {
                         final library = libraries[index];
-                        return _DesktopLibraryGridCard(library: library);
+                        return _DesktopLibraryGridCard(library: library)
+                            .appEntrance(index: index);
                       },
                       childCount: libraries.length,
                     ),
@@ -121,7 +124,7 @@ class _DesktopLibraryScreenState extends ConsumerState<DesktopLibraryScreen> {
               );
             },
             loading: () => const SliverFillRemaining(
-              child: Center(child: CircularProgressIndicator()),
+              child: AppLoadingIndicator(),
             ),
             error: (_, __) => const SliverFillRemaining(
               child: Center(

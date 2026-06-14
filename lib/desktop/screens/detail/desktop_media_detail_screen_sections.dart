@@ -473,12 +473,9 @@ class _EpisodesSectionState extends ConsumerState<_EpisodesSection> {
             scrollDirection: Axis.horizontal,
             itemCount: 4,
             separatorBuilder: (_, __) => SizedBox(width: 12 * scale),
-            itemBuilder: (_, __) => Container(
+            itemBuilder: (_, __) => ShimmerBox(
               width: 200 * scale,
-              decoration: BoxDecoration(
-                color: _detailPlaceholderSurface(context),
-                borderRadius: BorderRadius.circular(8 * scale),
-              ),
+              borderRadius: BorderRadius.circular(8 * scale),
             ),
           ),
         ),
@@ -882,13 +879,10 @@ class _SeasonsSectionState extends ConsumerState<_SeasonsSection> {
             physics: const ClampingScrollPhysics(),
             itemCount: count,
             separatorBuilder: (_, __) => SizedBox(width: 16 * scale),
-            itemBuilder: (_, __) => Container(
+            itemBuilder: (_, __) => ShimmerBox(
               width: cardWidth * scale,
               height: cardHeight * scale,
-              decoration: BoxDecoration(
-                color: _detailPlaceholderSurface(context),
-                borderRadius: BorderRadius.circular(8 * scale),
-              ),
+              borderRadius: BorderRadius.circular(8 * scale),
             ),
           ),
         ),
@@ -1058,14 +1052,15 @@ class _CastSection extends StatelessWidget {
       scaleFactor: scaleFactor,
       itemWidth: 90 * scaleFactor,
       itemHeight: 130 * scaleFactor,
-      children: displayPersons.map((person) {
+      children: displayPersons.asMap().entries.map((entry) {
+        final person = entry.value;
         return _PersonCard(
           person: person,
           scaleFactor: scaleFactor,
           onTap: () {
             context.push('/search?q=${Uri.encodeComponent(person.name)}');
           },
-        );
+        ).appEntrance(index: entry.key);
       }).toList(growable: false),
     );
   }
@@ -1091,15 +1086,11 @@ class _PersonCard extends StatefulWidget {
 }
 
 class _PersonCardState extends State<_PersonCard> {
-  bool _isHovered = false;
-
   @override
   Widget build(BuildContext context) {
     final scale = widget.scaleFactor;
 
     return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: widget.onTap,
@@ -1161,7 +1152,7 @@ class _PersonCardState extends State<_PersonCard> {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 14 * scale,
-                    fontWeight: _isHovered ? FontWeight.w600 : FontWeight.w400,
+                    fontWeight: FontWeight.w500,
                     color: _detailPrimaryText(context),
                   ),
                 ),
@@ -1225,13 +1216,13 @@ class _RelatedSectionState extends ConsumerState<_RelatedSection> {
           scaleFactor: scale,
           itemWidth: 160 * scale,
           itemHeight: 260 * scale,
-          children: items.map((item) {
+          children: items.asMap().entries.map((entry) {
             return DesktopMediaCard(
-              item: item,
+              item: entry.value,
               width: 160 * scale,
               height: 200 * scale,
               showProgress: false,
-            );
+            ).appEntrance(index: entry.key);
           }).toList(),
         );
       },
@@ -1264,13 +1255,10 @@ class _RelatedSectionState extends ConsumerState<_RelatedSection> {
             physics: const ClampingScrollPhysics(),
             itemCount: count,
             separatorBuilder: (_, __) => SizedBox(width: spacing * scale),
-            itemBuilder: (_, __) => Container(
+            itemBuilder: (_, __) => ShimmerBox(
               width: cardWidth * scale,
               height: cardHeight * scale,
-              decoration: BoxDecoration(
-                color: _detailPlaceholderSurface(context),
-                borderRadius: BorderRadius.circular(8 * scale),
-              ),
+              borderRadius: BorderRadius.circular(8 * scale),
             ),
           ),
         ),

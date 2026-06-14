@@ -8,6 +8,8 @@ import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
 import '../../../core/services/watch_history/watch_history_models.dart';
+import '../../../core/theme/app_motion.dart';
+import '../../../core/widgets/app_shimmer.dart';
 import '../../../ui/utils/media_helpers.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
 import '../../widgets/desktop_cover_radii.dart';
@@ -209,7 +211,7 @@ class DesktopResumeScreen extends ConsumerWidget {
                       );
                     },
                     loading: () => const Center(
-                      child: CircularProgressIndicator(),
+                      child: AppLoadingIndicator(),
                     ),
                     error: (error, _) => Center(
                       child: Text(
@@ -1108,7 +1110,7 @@ class _DesktopCarouselState extends ConsumerState<_DesktopCarousel> {
                   color: Theme.of(context).colorScheme.outline,
                   size: 36,
                 )
-              : const CircularProgressIndicator(),
+              : const AppLoadingIndicator(),
         ),
       ),
     );
@@ -1464,7 +1466,7 @@ class _DesktopContinueWatching extends ConsumerWidget {
                     compactLayout: true,
                   );
                 },
-                loading: () => const Center(child: CircularProgressIndicator()),
+                loading: () => const Center(child: AppLoadingIndicator()),
                 error: (error, _) => Center(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
@@ -1498,7 +1500,7 @@ class _DesktopContinueWatching extends ConsumerWidget {
                         visibleItems.take(visibleCount).toList(growable: false),
                   );
                 },
-                loading: () => const Center(child: CircularProgressIndicator()),
+                loading: () => const Center(child: AppLoadingIndicator()),
                 error: (error, _) => Center(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
@@ -1829,7 +1831,8 @@ class _LibrariesSection extends ConsumerWidget {
                   return Padding(
                     padding: EdgeInsets.only(
                         right: index == libraries.length - 1 ? 0 : 14),
-                    child: _DesktopLibraryCard(library: library),
+                    child: _DesktopLibraryCard(library: library)
+                        .appEntrance(index: index),
                   );
                 },
               ),
@@ -1840,7 +1843,7 @@ class _LibrariesSection extends ConsumerWidget {
       loading: () => const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
-          child: CircularProgressIndicator(),
+          child: AppLoadingIndicator(),
         ),
       ),
       error: (error, _) => Center(
@@ -1958,7 +1961,7 @@ class _LatestItemsSection extends ConsumerWidget {
       loading: () => const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
-          child: CircularProgressIndicator(),
+          child: AppLoadingIndicator(),
         ),
       ),
       error: (error, _) => Center(
@@ -2011,7 +2014,7 @@ class _LibraryLatestItems extends ConsumerWidget {
                       item: items[index],
                       width: 150,
                       height: 200,
-                    ),
+                    ).appEntrance(index: index),
                   );
                 },
               ),

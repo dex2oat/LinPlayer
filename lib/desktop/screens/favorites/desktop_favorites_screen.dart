@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../../core/theme/app_motion.dart';
+import '../../../core/widgets/app_shimmer.dart';
 import '../../utils/desktop_smooth_scroll.dart';
 import '../../widgets/desktop_media_card.dart';
 
@@ -115,7 +117,7 @@ class DesktopFavoritesScreen extends ConsumerWidget {
                             return DesktopMediaCard(
                               item: items[index],
                               width: cardWidth,
-                            );
+                            ).appEntrance(index: index);
                           },
                           childCount: items.length,
                         ),
@@ -125,7 +127,7 @@ class DesktopFavoritesScreen extends ConsumerWidget {
                 );
               },
               loading: () => const SliverFillRemaining(
-                child: Center(child: CircularProgressIndicator()),
+                child: AppLoadingIndicator(),
               ),
               error: (_, __) => SliverFillRemaining(
                 child: Center(

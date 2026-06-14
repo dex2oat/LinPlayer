@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import '../theme/tv_design_tokens.dart';
 
 /// TV 焦点包装器
@@ -60,36 +61,63 @@ class _TvFocusableState extends State<TvFocusable> {
         }
         return KeyEventResult.ignored;
       },
-      child: AnimatedContainer(
-        duration: TvDesignTokens.focusAnimationDuration,
-        curve: TvDesignTokens.focusAnimationCurve,
-        padding: widget.padding,
-        decoration: _isFocused
-            ? BoxDecoration(
-                border: Border.all(
-                  color: TvDesignTokens.focusBorder,
-                  width: TvDesignTokens.focusBorderWidth,
-                ),
-                borderRadius: BorderRadius.circular(TvDesignTokens.posterRadius),
-                boxShadow: widget.enableGlow
-                    ? [
-                        BoxShadow(
-                          color: TvDesignTokens.focusGlow,
-                          blurRadius: TvDesignTokens.focusGlowBlur,
-                          spreadRadius: 4,
+      // 性能要点：
+      // - 用单个 flutter_animate 链同时驱动 缩放 + 透明度（一个 controller），
+      //   取代原先 AnimatedContainer + AnimatedScale + AnimatedOpacity 三层；
+      // - 焦点描边/光晕的阴影是“静态”的，仅做透明度淡入淡出，绝不对 blur 做动画
+      //   （动画 blurRadius 是焦点网格掉帧的元凶）；
+      // - 外层 RepaintBoundary 把每个卡片的重绘隔离开。
+      child: RepaintBoundary(
+        child: Padding(
+          padding: widget.padding,
+          child: Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.center,
+            children: [
+              widget.child
+                  .animate(target: _isFocused ? 1 : 0)
+                  .scaleXY(
+                    begin: 1.0,
+                    end: widget.scale,
+                    duration: TvDesignTokens.focusAnimationDuration,
+                    curve: TvDesignTokens.focusAnimationCurve,
+                    alignment: Alignment.center,
+                  )
+                  .fade(
+                    begin: TvDesignTokens.nonFocusOpacity,
+                    end: 1.0,
+                    duration: TvDesignTokens.focusAnimationDuration,
+                    curve: TvDesignTokens.focusAnimationCurve,
+                  ),
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: AnimatedOpacity(
+                    duration: TvDesignTokens.focusAnimationDuration,
+                    curve: TvDesignTokens.focusAnimationCurve,
+                    opacity: _isFocused ? 1.0 : 0.0,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: TvDesignTokens.focusBorder,
+                          width: TvDesignTokens.focusBorderWidth,
                         ),
-                      ]
-                    : null,
-              )
-            : null,
-        child: AnimatedScale(
-          duration: TvDesignTokens.focusAnimationDuration,
-          curve: TvDesignTokens.focusAnimationCurve,
-          scale: _isFocused ? widget.scale : 1.0,
-          child: AnimatedOpacity(
-            duration: TvDesignTokens.focusAnimationDuration,
-            opacity: _isFocused ? 1.0 : TvDesignTokens.nonFocusOpacity,
-            child: widget.child,
+                        borderRadius:
+                            BorderRadius.circular(TvDesignTokens.posterRadius),
+                        boxShadow: widget.enableGlow
+                            ? const [
+                                BoxShadow(
+                                  color: TvDesignTokens.focusGlow,
+                                  blurRadius: TvDesignTokens.focusGlowBlur,
+                                  spreadRadius: 4,
+                                ),
+                              ]
+                            : null,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -141,7 +169,8 @@ class TvFocusableStatic extends StatelessWidget {
                       color: TvDesignTokens.focusBorder,
                       width: TvDesignTokens.focusBorderWidth,
                     ),
-                    borderRadius: BorderRadius.circular(TvDesignTokens.posterRadius),
+                    borderRadius:
+                        BorderRadius.circular(TvDesignTokens.posterRadius),
                     boxShadow: [
                       BoxShadow(
                         color: TvDesignTokens.focusGlow,

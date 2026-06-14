@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../../core/theme/app_motion.dart';
+import '../../../core/widgets/app_shimmer.dart';
 import '../../utils/desktop_smooth_scroll.dart';
 import '../../widgets/desktop_media_card.dart';
 
@@ -222,13 +224,13 @@ class _DesktopSearchScreenState extends ConsumerState<DesktopSearchScreen> {
                           width: cardWidth,
                           titleMaxLines: 2,
                           showMetadata: true,
-                        );
+                        ).appEntrance(index: index);
                       },
                     );
                   },
                 );
               },
-              loading: () => const Center(child: CircularProgressIndicator()),
+              loading: () => const AppLoadingIndicator(),
               error: (_, __) => Center(
                 child: Text(
                   '搜索失败',

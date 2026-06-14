@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../../core/theme/app_motion.dart';
+import '../../../core/widgets/app_shimmer.dart';
 import '../../widgets/common/media_widgets.dart';
 
 enum LibraryViewMode { grid, list }
@@ -154,7 +156,7 @@ class _LibrariesScreenState extends ConsumerState<LibrariesScreen> {
             );
           }
         },
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => const AppLoadingIndicator(),
         error: (error, _) => Center(child: Text('加载失败: $error')),
       ),
     );
@@ -270,7 +272,7 @@ class _GridView extends ConsumerWidget {
               ),
             ],
           ),
-        );
+        ).appEntrance(index: index);
       },
     );
   }

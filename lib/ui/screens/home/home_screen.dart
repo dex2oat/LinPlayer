@@ -4,7 +4,9 @@ import 'package:go_router/go_router.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../../core/theme/app_motion.dart';
 import '../../../core/utils/color_extractor.dart';
+import '../../../core/widgets/app_shimmer.dart';
 import '../../utils/media_helpers.dart';
 import '../../utils/image_size_helper.dart';
 import '../../widgets/common/dynamic_background.dart';
@@ -683,7 +685,7 @@ class _RandomRecommendationCarouselState extends ConsumerState<RandomRecommendat
       },
       loading: () => SizedBox(
         height: carouselHeight,
-        child: const Center(child: CircularProgressIndicator()),
+        child: const AppLoadingIndicator(),
       ),
       error: (_, __) => const SizedBox.shrink(),
     );
@@ -881,11 +883,11 @@ class ContinueWatchingSection extends ConsumerWidget {
             ),
             HorizontalList(
               height: sizePreference.height + 50, // 高度 + 标题区域
-              children: unplayedItems.map((item) {
+              children: unplayedItems.asMap().entries.map((entry) {
                 return _ContinueWatchingCard(
-                  item: item,
+                  item: entry.value,
                   sizePreference: sizePreference,
-                );
+                ).appEntrance(index: entry.key);
               }).toList(),
             ),
           ],
@@ -1283,11 +1285,11 @@ class LibrariesSection extends ConsumerWidget {
             ),
             HorizontalList(
               height: 178,
-              children: libraries.map((library) {
+              children: libraries.asMap().entries.map((entry) {
                 return SizedBox(
                   width: 168,
-                  child: _LibraryCard(library: library),
-                );
+                  child: _LibraryCard(library: entry.value),
+                ).appEntrance(index: entry.key);
               }).toList(),
             ),
           ],
@@ -1437,7 +1439,8 @@ class _LibraryLatestSection extends ConsumerWidget {
             ),
             HorizontalList(
               height: sizePreference.height + 80, // 高度 + 标题和元数据区域
-              children: items.map((item) {
+              children: items.asMap().entries.map((entry) {
+                final item = entry.value;
                 return SizedBox(
                   width: sizePreference.width,
                   child: MediaPoster(
@@ -1446,7 +1449,7 @@ class _LibraryLatestSection extends ConsumerWidget {
                     height: sizePreference.height,
                     onTap: () => context.push(mediaRouteForItem(item)),
                   ),
-                );
+                ).appEntrance(index: entry.key);
               }).toList(),
             ),
           ],

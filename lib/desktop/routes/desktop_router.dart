@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/providers/app_providers.dart';
+import '../../core/theme/app_motion.dart';
 import '../screens/detail/desktop_media_detail_screen.dart';
 import '../screens/player/desktop_player_screen.dart';
 import '../screens/search/desktop_search_screen.dart';
@@ -219,7 +220,7 @@ CustomTransitionPage<void> _buildFadePage({
       return FadeTransition(
         opacity: CurvedAnimation(
           parent: animation,
-          curve: Curves.easeOutCubic,
+          curve: AppMotion.standard,
         ),
         child: child,
       );
@@ -240,8 +241,8 @@ CustomTransitionPage<void> _buildSlidePage({
     transitionsBuilder: (context, animation, secondaryAnimation, child) {
       final curved = CurvedAnimation(
         parent: animation,
-        curve: Curves.easeOutCubic,
-        reverseCurve: Curves.easeInCubic,
+        curve: AppMotion.standard,
+        reverseCurve: AppMotion.reverse,
       );
       return SlideTransition(
         position: Tween<Offset>(

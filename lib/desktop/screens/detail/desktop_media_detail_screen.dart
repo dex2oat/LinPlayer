@@ -12,8 +12,10 @@ import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_motion.dart';
 import '../../../core/utils/color_extractor.dart';
 import '../../../core/utils/playback_url_resolver.dart';
+import '../../../core/widgets/app_shimmer.dart';
 
 import '../../../ui/utils/media_helpers.dart';
 import '../../../ui/widgets/common/media_widgets.dart';

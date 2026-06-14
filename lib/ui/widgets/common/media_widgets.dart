@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/utils/persistent_image_provider.dart';
+import '../../../core/widgets/app_shimmer.dart';
 import '../../utils/media_helpers.dart';
 
 class MediaImage extends StatelessWidget {
@@ -530,6 +531,8 @@ class _CountBadge extends StatelessWidget {
   }
 }
 
+/// 骨架占位。对外 API 不变，内部改用带 shimmer 扫光的 [ShimmerBox]，
+/// 让所有已用 Skeleton 的页面自动获得呼吸感加载动效。
 class Skeleton extends StatelessWidget {
   final double width;
   final double height;
@@ -544,13 +547,10 @@ class Skeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return ShimmerBox(
       width: width,
       height: height,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: borderRadius ?? BorderRadius.circular(12),
-      ),
+      borderRadius: borderRadius ?? BorderRadius.circular(12),
     );
   }
 }
