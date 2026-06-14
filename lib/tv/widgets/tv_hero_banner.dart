@@ -193,14 +193,7 @@ class _TvHeroBannerState extends State<TvHeroBanner> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                item.title,
-                style: const TextStyle(
-                  fontSize: TvDesignTokens.heroTitleSize,
-                  color: TvDesignTokens.textPrimary,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              _buildLogoOrTitle(item),
               if (item.subtitle != null) ...[
                 const SizedBox(height: TvDesignTokens.spacingSm),
                 Text(
@@ -278,6 +271,35 @@ class _TvHeroBannerState extends State<TvHeroBanner> {
     );
   }
 
+  /// 优先使用 Logo 艺术字图片，无 Logo 时回退到文字标题
+  Widget _buildLogoOrTitle(TvHeroItem item) {
+    if (item.logoUrl != null && item.logoUrl!.isNotEmpty) {
+      return Image.network(
+        item.logoUrl!,
+        height: 48,
+        fit: BoxFit.contain,
+        alignment: Alignment.centerLeft,
+        errorBuilder: (_, __, ___) => _buildTitleText(item.title),
+        frameBuilder: (_, child, frame, wasSynchronouslyLoaded) {
+          if (wasSynchronouslyLoaded || frame != null) return child;
+          return _buildTitleText(item.title);
+        },
+      );
+    }
+    return _buildTitleText(item.title);
+  }
+
+  Widget _buildTitleText(String title) {
+    return Text(
+      title,
+      style: const TextStyle(
+        fontSize: TvDesignTokens.heroTitleSize,
+        color: TvDesignTokens.textPrimary,
+        fontWeight: FontWeight.bold,
+      ),
+    );
+  }
+
   Widget _buildPlaceholder() {
     return Container(
       color: TvDesignTokens.surfaceElevated,
@@ -300,6 +322,7 @@ class TvHeroItem {
   final List<String>? tags;
   final VoidCallback? onPlay;
   final VoidCallback? onDetail;
+  final String? logoUrl;      // Logo 艺术字图片 URL
 
   const TvHeroItem({
     this.imageUrl,
@@ -308,5 +331,6 @@ class TvHeroItem {
     this.tags,
     this.onPlay,
     this.onDetail,
+    this.logoUrl,
   });
 }

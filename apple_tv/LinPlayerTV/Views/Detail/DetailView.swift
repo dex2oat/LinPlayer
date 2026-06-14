@@ -42,7 +42,9 @@ struct DetailView: View {
                         backdropImageTags: nil, parentThumbItemId: episode.parentThumbItemId,
                         parentThumbImageTag: episode.parentThumbImageTag,
                         parentPrimaryImageItemId: nil, parentPrimaryImageTag: nil,
-                        seriesThumbImageTag: nil, seriesPrimaryImageTag: nil, people: nil
+                        seriesThumbImageTag: nil, seriesPrimaryImageTag: nil,
+                        parentLogoItemId: nil, parentLogoImageTag: nil,
+                        people: nil
                     ),
                     apiClient: apiClient
                 )

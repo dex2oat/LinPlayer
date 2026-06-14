@@ -1234,7 +1234,7 @@ class _DesktopCarouselState extends ConsumerState<_DesktopCarousel> {
   }
 }
 
-class _CarouselInfo extends StatelessWidget {
+class _CarouselInfo extends ConsumerWidget {
   final MediaItem item;
 
   static const List<Shadow> _titleShadows = [
@@ -1253,24 +1253,14 @@ class _CarouselInfo extends StatelessWidget {
   const _CarouselInfo({required this.item});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final api = ref.read(apiClientProvider);
     final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          item.name,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: theme.textTheme.displaySmall?.copyWith(
-            fontWeight: FontWeight.w800,
-            color: Colors.white,
-            height: 0.96,
-            letterSpacing: -0.9,
-            shadows: _titleShadows,
-          ),
-        ),
+        _buildLogoOrTitle(api),
         const SizedBox(height: 8),
         Wrap(
           spacing: 10,
@@ -1308,6 +1298,44 @@ class _CarouselInfo extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+
+  /// 优先使用 Logo 艺术字图片，无 Logo 时回退到文字标题
+  Widget _buildLogoOrTitle(dynamic api) {
+    final logoUrl = (item.logoItemId != null && item.logoImageTag != null)
+        ? api.image.getLogoImageUrl(item.logoItemId!, tag: item.logoImageTag, maxWidth: 280)
+        : null;
+
+    if (logoUrl != null && logoUrl.isNotEmpty) {
+      return Image.network(
+        logoUrl,
+        height: 48,
+        fit: BoxFit.contain,
+        alignment: Alignment.centerLeft,
+        errorBuilder: (_, __, ___) => _buildTitleText(),
+        frameBuilder: (_, child, frame, wasSynchronouslyLoaded) {
+          if (wasSynchronouslyLoaded || frame != null) return child;
+          return _buildTitleText();
+        },
+      );
+    }
+    return _buildTitleText();
+  }
+
+  Widget _buildTitleText() {
+    return Text(
+      item.name,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(
+        fontSize: 28,
+        fontWeight: FontWeight.w800,
+        color: Colors.white,
+        height: 0.96,
+        letterSpacing: -0.9,
+        shadows: _titleShadows,
+      ),
     );
   }
 }

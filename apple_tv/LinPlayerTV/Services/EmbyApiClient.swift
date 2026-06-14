@@ -17,7 +17,7 @@ final class EmbyApiClient: ObservableObject {
         "ParentIndexNumber", "ImageTags", "ParentThumbItemId", "ParentThumbImageTag",
         "ParentPrimaryImageItemId", "ParentPrimaryImageTag", "SeriesThumbImageTag",
         "SeriesPrimaryImageTag", "BackdropImageTags", "ChildCount", "RecursiveItemCount",
-        "People", "CanDownload", "SupportsSync"
+        "People", "CanDownload", "SupportsSync", "ParentLogoItemId", "ParentLogoImageTag"
     ].joined(separator: ",")
 
     init(baseURL: String, accessToken: String? = nil, userId: String? = nil) {
@@ -421,6 +421,11 @@ final class EmbyApiClient: ObservableObject {
 
     func thumbImageURL(_ itemId: String, tag: String? = nil, maxWidth: Int? = nil) -> URL? {
         imageURL(itemId: itemId, imageType: "Thumb", tag: tag, maxWidth: maxWidth)
+    }
+
+    func logoImageURL(_ itemId: String, tag: String?, maxWidth: Int? = nil) -> URL? {
+        guard tag != nil else { return nil }
+        return imageURL(itemId: itemId, imageType: "Logo", tag: tag, maxWidth: maxWidth ?? 400)
     }
 }
 

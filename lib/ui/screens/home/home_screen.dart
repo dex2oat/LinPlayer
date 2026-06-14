@@ -779,17 +779,7 @@ class _CarouselItem extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  item.name,
-                  style: const TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.white,
-                    shadows: [
-                      Shadow(blurRadius: 8, color: Colors.black54),
-                    ],
-                  ),
-                ),
+                _buildLogoOrTitle(item, api),
                 const SizedBox(height: 8),
                 Row(
                   children: [
@@ -830,9 +820,43 @@ class _CarouselItem extends ConsumerWidget {
       ),
     );
   }
-}
 
-/// 继续观看区块
+  /// 优先使用 Logo 艺术字图片，无 Logo 时回退到文字标题
+  Widget _buildLogoOrTitle(MediaItem item, dynamic api) {
+    final logoUrl = (item.logoItemId != null && item.logoImageTag != null)
+        ? api.image.getLogoImageUrl(item.logoItemId!, tag: item.logoImageTag, maxWidth: 280)
+        : null;
+
+    if (logoUrl != null && logoUrl.isNotEmpty) {
+      return Image.network(
+        logoUrl,
+        height: 48,
+        fit: BoxFit.contain,
+        alignment: Alignment.centerLeft,
+        errorBuilder: (_, __, ___) => _buildTitleText(item.name),
+        frameBuilder: (_, child, frame, wasSynchronouslyLoaded) {
+          if (wasSynchronouslyLoaded || frame != null) return child;
+          return _buildTitleText(item.name);
+        },
+      );
+    }
+    return _buildTitleText(item.name);
+  }
+
+  Widget _buildTitleText(String title) {
+    return Text(
+      title,
+      style: const TextStyle(
+        fontSize: 28,
+        fontWeight: FontWeight.w800,
+        color: Colors.white,
+        shadows: [
+          Shadow(blurRadius: 8, color: Colors.black54),
+        ],
+      ),
+    );
+  }
+}
 class ContinueWatchingSection extends ConsumerWidget {
   const ContinueWatchingSection({super.key});
   

@@ -25,10 +25,7 @@ struct HeroBanner: View {
                 )
 
                 VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
-                    Text(item.name)
-                        .font(.system(size: AppTheme.FontSize.title1, weight: .bold))
-                        .foregroundColor(.white)
-                        .lineLimit(2)
+                    logoOrTitle(for: item)
 
                     HStack(spacing: AppTheme.Spacing.md) {
                         if let rating = item.communityRating {
@@ -151,6 +148,36 @@ struct HeroBanner: View {
         .frame(maxWidth: .infinity)
         .frame(height: 600)
         .clipped()
+    }
+
+    /// 优先使用 Logo 艺术字图片，无 Logo 时回退到文字标题
+    @ViewBuilder
+    private func logoOrTitle(for item: MediaItem) -> some View {
+        if let logoURL = apiClient.logoImageURL(
+            item.logoItemId ?? item.id,
+            tag: item.logoImageTag
+        ) {
+            AsyncImage(url: logoURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: 300, maxHeight: 60)
+                default:
+                    titleText(item.name)
+                }
+            }
+        } else {
+            titleText(item.name)
+        }
+    }
+
+    private func titleText(_ name: String) -> some View {
+        Text(name)
+            .font(.system(size: AppTheme.FontSize.title1, weight: .bold))
+            .foregroundColor(.white)
+            .lineLimit(2)
     }
 
     private var indicators: some View {

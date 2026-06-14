@@ -105,6 +105,8 @@ struct MediaItem: Codable, Identifiable, Hashable {
     let parentPrimaryImageTag: String?
     let seriesThumbImageTag: String?
     let seriesPrimaryImageTag: String?
+    let parentLogoItemId: String?
+    let parentLogoImageTag: String?
     let people: [PersonInfo]?
 
     enum CodingKeys: String, CodingKey {
@@ -135,6 +137,8 @@ struct MediaItem: Codable, Identifiable, Hashable {
         case parentPrimaryImageTag = "ParentPrimaryImageTag"
         case seriesThumbImageTag = "SeriesThumbImageTag"
         case seriesPrimaryImageTag = "SeriesPrimaryImageTag"
+        case parentLogoItemId = "ParentLogoItemId"
+        case parentLogoImageTag = "ParentLogoImageTag"
         case people = "People"
     }
 
@@ -148,6 +152,17 @@ struct MediaItem: Codable, Identifiable, Hashable {
 
     var backdropImageTag: String? {
         backdropImageTags?.first ?? imageTags?["Backdrop"]
+    }
+
+    /// 有 Logo 的项目 ID（优先自身，否则父级）
+    var logoItemId: String? {
+        if imageTags?["Logo"] != nil { return id }
+        return parentLogoItemId
+    }
+
+    /// Logo 缓存 tag（优先自身，否则父级）
+    var logoImageTag: String? {
+        imageTags?["Logo"] ?? parentLogoImageTag
     }
 
     var formattedRuntime: String? {

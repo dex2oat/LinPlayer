@@ -335,7 +335,8 @@ class EmbyHomeApi implements HomeApi {
       'ParentIndexNumber,ImageTags,ParentThumbItemId,ParentThumbImageTag,'
       'ParentPrimaryImageItemId,ParentPrimaryImageTag,SeriesThumbImageTag,'
       'SeriesPrimaryImageTag,BackdropImageTags,ChildCount,RecursiveItemCount,'
-      'CanDownload,SupportsSync,ProviderIds,PresentationUniqueKey,Path';
+      'CanDownload,SupportsSync,ProviderIds,PresentationUniqueKey,Path,'
+      'ParentLogoItemId,ParentLogoImageTag';
 
   @override
   Future<List<MediaItem>> getResumeItems() async {
@@ -436,7 +437,8 @@ class EmbyLibraryApi implements LibraryApi {
       'ParentIndexNumber,ImageTags,ParentThumbItemId,ParentThumbImageTag,'
       'ParentPrimaryImageItemId,ParentPrimaryImageTag,SeriesThumbImageTag,'
       'SeriesPrimaryImageTag,ChildCount,RecursiveItemCount,CanDownload,SupportsSync,'
-      'ProviderIds,PresentationUniqueKey,Path';
+      'ProviderIds,PresentationUniqueKey,Path,'
+      'ParentLogoItemId,ParentLogoImageTag';
 
   @override
   Future<List<MediaItem>> getLibraryItems({
@@ -501,7 +503,8 @@ class EmbyMediaApi implements MediaApi {
       'ParentThumbImageTag,ParentPrimaryImageItemId,ParentPrimaryImageTag,'
       'SeriesThumbImageTag,SeriesPrimaryImageTag,BackdropImageTags,'
       'ChildCount,RecursiveItemCount,CanDownload,SupportsSync,ProviderIds,'
-      'PresentationUniqueKey,Path';
+      'PresentationUniqueKey,Path,'
+      'ParentLogoItemId,ParentLogoImageTag';
 
   @override
   Future<MediaItem> getItemDetails(String itemId) async {
@@ -748,7 +751,7 @@ class EmbyFavoriteApi implements FavoriteApi {
       'ParentIndexNumber,ImageTags,ParentThumbItemId,ParentThumbImageTag,'
       'ParentPrimaryImageItemId,ParentPrimaryImageTag,SeriesThumbImageTag,'
       'SeriesPrimaryImageTag,BackdropImageTags,ChildCount,RecursiveItemCount,'
-      'CanDownload,SupportsSync';
+      'CanDownload,SupportsSync,ParentLogoItemId,ParentLogoImageTag';
 
   @override
   Future<List<MediaItem>> getFavorites() async {
@@ -856,6 +859,17 @@ class EmbyImageApi implements ImageApi {
       maxWidth: maxWidth ?? 800,
       maxHeight: 450,
       format: format,
+    );
+  }
+
+  @override
+  String? getLogoImageUrl(String itemId, {String? tag, int? maxWidth}) {
+    if (tag == null || tag.isEmpty) return null;
+    return getImageUrl(
+      itemId: itemId,
+      imageTag: tag,
+      imageType: 'Logo',
+      maxWidth: maxWidth ?? 400,
     );
   }
 }
@@ -970,6 +984,8 @@ MediaItem _parseMediaItem(Map<String, dynamic> d) {
         .where((url) => url != null && url.isNotEmpty)
         .cast<String>()
         .toList(),
+    logoItemId: _extractLogoItemId(d),
+    logoImageTag: _extractLogoImageTag(d),
   );
 }
 
@@ -1000,6 +1016,25 @@ String? _extractImageTag(Map<String, dynamic> d, String type) {
   final value = tags?[type]?.toString();
   if (value == null || value.isEmpty) return null;
   return value;
+}
+
+/// 提取 Logo 项目 ID：优先使用自身，否则使用父级
+String? _extractLogoItemId(Map<String, dynamic> d) {
+  final tags = d['ImageTags'] as Map<String, dynamic>?;
+  if (tags?.containsKey('Logo') == true) {
+    return d['Id']?.toString();
+  }
+  final parentId = d['ParentLogoItemId']?.toString();
+  return (parentId != null && parentId.isNotEmpty) ? parentId : null;
+}
+
+/// 提取 Logo 缓存 tag：优先使用自身，否则使用父级
+String? _extractLogoImageTag(Map<String, dynamic> d) {
+  final tags = d['ImageTags'] as Map<String, dynamic>?;
+  final ownTag = tags?['Logo']?.toString();
+  if (ownTag != null && ownTag.isNotEmpty) return ownTag;
+  final parentTag = d['ParentLogoImageTag']?.toString();
+  return (parentTag != null && parentTag.isNotEmpty) ? parentTag : null;
 }
 
 int? _parseTicks(dynamic v) {

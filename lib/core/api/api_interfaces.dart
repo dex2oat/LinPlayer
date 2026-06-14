@@ -233,6 +233,8 @@ class MediaItem {
   final List<Person>? people;
   final bool? canDownload;
   final List<String>? remoteTrailers;
+  final String? logoItemId;      // 有 Logo 的项目 ID（自身或父级）
+  final String? logoImageTag;    // Logo 缓存 tag
 
   MediaItem({
     required this.id,
@@ -271,6 +273,8 @@ class MediaItem {
     this.people,
     this.canDownload,
     this.remoteTrailers,
+    this.logoItemId,
+    this.logoImageTag,
   });
 
   String? get formattedRuntime {
@@ -749,6 +753,9 @@ abstract class ImageApi {
   /// 获取背景图
   String getBackdropImageUrl(String itemId,
       {String? tag, int? maxWidth, String? format});
+
+  /// 获取 Logo 图片（艺术字标题）
+  String? getLogoImageUrl(String itemId, {String? tag, int? maxWidth});
 }
 
 // ==================== 弹幕相关 ====================
