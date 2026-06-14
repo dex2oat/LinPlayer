@@ -168,7 +168,12 @@ class _DetailContentState extends ConsumerState<_DetailContent> {
     final posterHeight = basePosterHeight * scaleFactor;
     final posterWidth = posterHeight * (2 / 3);
     const overlap = 48.0;
-    final heroHeight = (32.0 + posterHeight - overlap * 0.6) * scaleFactor;
+    // 顶部为返回/刷新工具栏预留的高度（按钮 40 + 上下留白），随缩放线性变化。
+    // 海报顶部 = heroHeight + overlap - posterHeight = topToolbarReserve，
+    // 因此始终落在工具栏下方，小窗时也不会遮挡按钮。
+    final topToolbarReserve = 72.0 * scaleFactor;
+    // 海报底部仍向下溢出 overlap 融入内容区；hero 高度 = 顶部预留 + 海报可见高度。
+    final heroHeight = topToolbarReserve + posterHeight - overlap;
     const contentMaxWidth = 1440.0;
 
     return Theme(

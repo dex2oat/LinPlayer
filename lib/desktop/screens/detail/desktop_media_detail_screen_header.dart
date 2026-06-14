@@ -114,31 +114,6 @@ class _HeroSection extends ConsumerWidget {
           ),
         ),
 
-        // 顶部工具栏（返回 + 刷新）
-        SafeArea(
-          child: Padding(
-            padding: EdgeInsets.all(12 * scaleFactor),
-            child: Row(
-              children: [
-                _GlassButton(
-                  icon: Icons.arrow_back,
-                  onPressed: () => context.pop(),
-                  scaleFactor: scaleFactor,
-                ),
-                SizedBox(width: 8 * scaleFactor),
-                _GlassButton(
-                  icon: Icons.refresh,
-                  onPressed: onRefresh,
-                  scaleFactor: scaleFactor,
-                ),
-                const Spacer(),
-                // 窗口控制按钮占位（右侧系统按钮区域）
-                SizedBox(width: 120 * scaleFactor),
-              ],
-            ),
-          ),
-        ),
-
         // 海报 + 信息区
         Positioned(
           bottom: -overlap,
@@ -208,9 +183,12 @@ class _HeroSection extends ConsumerWidget {
                             // 标题
                             Text(
                               item.name,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontSize: 32 * scaleFactor,
                                 fontWeight: FontWeight.w800,
+                                height: 1.15,
                                 color: titleColor,
                                 shadows: [
                                   Shadow(blurRadius: 12, color: shadowColor),
@@ -219,33 +197,40 @@ class _HeroSection extends ConsumerWidget {
                             ),
                             SizedBox(height: 10 * scaleFactor),
 
-                            // 评分 + 标签行
-                            Row(
+                            // 评分 + 标签行（用 Wrap 防止窄窗时横向溢出，自动换行）
+                            Wrap(
+                              spacing: 12 * scaleFactor,
+                              runSpacing: 8 * scaleFactor,
+                              crossAxisAlignment: WrapCrossAlignment.center,
                               children: [
-                                if (item.communityRating != null) ...[
-                                  const Icon(
-                                    Icons.star,
-                                    size: 16,
-                                    color: Colors.amber,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    item.communityRating!.toStringAsFixed(1),
-                                    style: TextStyle(
-                                      fontSize: 14 * scaleFactor,
-                                      fontWeight: FontWeight.w600,
-                                      color: titleColor,
-                                      shadows: [
-                                        Shadow(
-                                          blurRadius: 4,
-                                          color: shadowColor,
+                                if (item.communityRating != null)
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.star,
+                                        size: 16,
+                                        color: Colors.amber,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        item.communityRating!
+                                            .toStringAsFixed(1),
+                                        style: TextStyle(
+                                          fontSize: 14 * scaleFactor,
+                                          fontWeight: FontWeight.w600,
+                                          color: titleColor,
+                                          shadows: [
+                                            Shadow(
+                                              blurRadius: 4,
+                                              color: shadowColor,
+                                            ),
+                                          ],
                                         ),
-                                      ],
-                                    ),
+                                      ),
+                                    ],
                                   ),
-                                  SizedBox(width: 16 * scaleFactor),
-                                ],
-                                if (item.productionYear != null) ...[
+                                if (item.productionYear != null)
                                   Text(
                                     '${item.productionYear}',
                                     style: TextStyle(
@@ -259,10 +244,7 @@ class _HeroSection extends ConsumerWidget {
                                       ],
                                     ),
                                   ),
-                                  SizedBox(width: 12 * scaleFactor),
-                                ],
-                                if ((item.formattedRuntime ?? '')
-                                    .isNotEmpty) ...[
+                                if ((item.formattedRuntime ?? '').isNotEmpty)
                                   Text(
                                     item.formattedRuntime!,
                                     style: TextStyle(
@@ -276,34 +258,27 @@ class _HeroSection extends ConsumerWidget {
                                       ],
                                     ),
                                   ),
-                                  SizedBox(width: 12 * scaleFactor),
-                                ],
                                 ...?item.genres?.take(4).map((genre) {
-                                  return Padding(
-                                    padding: EdgeInsets.only(
-                                      right: 6 * scaleFactor,
+                                  return Container(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 8 * scaleFactor,
+                                      vertical: 3 * scaleFactor,
                                     ),
-                                    child: Container(
-                                      padding: EdgeInsets.symmetric(
-                                        horizontal: 8 * scaleFactor,
-                                        vertical: 3 * scaleFactor,
+                                    decoration: BoxDecoration(
+                                      color: chipColor,
+                                      borderRadius: BorderRadius.circular(
+                                        4 * scaleFactor,
                                       ),
-                                      decoration: BoxDecoration(
-                                        color: chipColor,
-                                        borderRadius: BorderRadius.circular(
-                                          4 * scaleFactor,
-                                        ),
-                                        border: Border.all(
-                                          color: titleColor.withValues(
-                                              alpha: 0.16),
-                                        ),
+                                      border: Border.all(
+                                        color:
+                                            titleColor.withValues(alpha: 0.16),
                                       ),
-                                      child: Text(
-                                        genre,
-                                        style: TextStyle(
-                                          fontSize: 11 * scaleFactor,
-                                          color: titleColor,
-                                        ),
+                                    ),
+                                    child: Text(
+                                      genre,
+                                      style: TextStyle(
+                                        fontSize: 11 * scaleFactor,
+                                        color: titleColor,
                                       ),
                                     ),
                                   );
@@ -317,6 +292,31 @@ class _HeroSection extends ConsumerWidget {
                   ],
                 ),
               ),
+            ),
+          ),
+        ),
+
+        // 顶部工具栏（返回 + 刷新）— 置于 Stack 顶层，保证任何缩放下都不被海报遮挡且可点击
+        SafeArea(
+          child: Padding(
+            padding: EdgeInsets.all(12 * scaleFactor),
+            child: Row(
+              children: [
+                _GlassButton(
+                  icon: Icons.arrow_back,
+                  onPressed: () => context.pop(),
+                  scaleFactor: scaleFactor,
+                ),
+                SizedBox(width: 8 * scaleFactor),
+                _GlassButton(
+                  icon: Icons.refresh,
+                  onPressed: onRefresh,
+                  scaleFactor: scaleFactor,
+                ),
+                const Spacer(),
+                // 窗口控制按钮占位（右侧系统按钮区域）
+                SizedBox(width: 120 * scaleFactor),
+              ],
             ),
           ),
         ),

@@ -187,6 +187,22 @@ Win32Window::MessageHandler(HWND hwnd,
       }
       return 0;
 
+    case WM_GETMINMAXINFO: {
+      // Enforce a minimum window size so the desktop layout does not break
+      // (button occlusion, cramped content) when shrunk too small.
+      // Logical size is converted to physical pixels using the monitor DPI.
+      auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
+      const double kMinLogicalWidth = 900.0;
+      const double kMinLogicalHeight = 600.0;
+      HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+      UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+      double scale_factor = dpi ? dpi / 96.0 : 1.0;
+      info->ptMinTrackSize.x =
+          static_cast<LONG>(kMinLogicalWidth * scale_factor);
+      info->ptMinTrackSize.y =
+          static_cast<LONG>(kMinLogicalHeight * scale_factor);
+      return 0;
+    }
     case WM_DPICHANGED: {
       auto newRectSize = reinterpret_cast<RECT*>(lparam);
       LONG newWidth = newRectSize->right - newRectSize->left;
