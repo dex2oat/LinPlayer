@@ -843,10 +843,14 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
                       stream.index != selectedSubtitle.index,
                 )
                 .toList();
-            final selectedSecondarySubtitle = _resolveSelectedStream(
-              secondaryCandidates,
-              selectedSecondarySubtitleIndex,
-            );
+            // 次字幕默认为「无」：不自动选默认轨，仅当用户显式选择时才解析，
+            // 否则会出现“明明没选却显示选了第二条字幕”的问题。
+            final selectedSecondarySubtitle =
+                selectedSecondarySubtitleIndex == null
+                    ? null
+                    : secondaryCandidates
+                        .where((s) => s.index == selectedSecondarySubtitleIndex)
+                        .firstOrNull;
             final videoStream = source.mediaStreams.firstWhere(
               (s) => s.isVideo,
               orElse: () => MediaStream(index: 0, type: 'Video'),
@@ -1079,30 +1083,34 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
     return server.lines[index].name;
   }
 
-  String _buildVideoVersionLabel(MediaSource source, MediaStream videoStream) {
-    final parts = <String>[
+  List<String> _videoVersionParts(MediaSource source, MediaStream videoStream) {
+    return <String>[
       if (videoStream.resolution.isNotEmpty) videoStream.resolution,
       if ((videoStream.videoCodec ?? '').trim().isNotEmpty)
         (videoStream.videoCodec ?? '').trim().toUpperCase(),
       if ((source.container ?? '').trim().isNotEmpty)
         source.container!.trim().toUpperCase(),
     ];
-    return parts.join(' ');
+  }
+
+  String _buildVideoVersionLabel(MediaSource source, MediaStream videoStream) {
+    return _videoVersionParts(source, videoStream).join(' ');
   }
 
   String _buildSourceDisplayName(MediaSource source, MediaStream videoStream) {
     final customName = source.name?.trim();
-    final version = _buildVideoVersionLabel(source, videoStream);
-    if (customName != null && customName.isNotEmpty && version.isNotEmpty) {
-      return '$customName · $version';
-    }
+    final parts = _videoVersionParts(source, videoStream);
     if (customName != null && customName.isNotEmpty) {
-      return customName;
+      // 只补充自定义名称里没有体现的版本信息，避免出现
+      // “1080p · 1080P H264 MKV”这种把同一版本拼两遍的情况。
+      final lower = customName.toLowerCase();
+      final extra = parts
+          .where((p) => !lower.contains(p.toLowerCase()))
+          .toList(growable: false);
+      return extra.isEmpty ? customName : '$customName · ${extra.join(' ')}';
     }
-    if (version.isNotEmpty) {
-      return version;
-    }
-    return '默认版本';
+    final version = parts.join(' ');
+    return version.isNotEmpty ? version : '默认版本';
   }
 
   String _buildSourceName(MediaSource source, MediaStream videoStream) {
@@ -1327,55 +1335,72 @@ class _OverviewSection extends StatelessWidget {
     required this.onToggle,
   });
 
+  static const int _collapsedMaxLines = 3;
+
   @override
   Widget build(BuildContext context) {
     final scale = scaleFactor;
     final primaryText = _detailPrimaryText(context).withValues(alpha: 0.92);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        AnimatedSize(
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeInOut,
-          child: Text(
-            overview,
-            maxLines: expanded ? null : 3,
-            overflow: expanded ? TextOverflow.visible : TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 14 * scale,
-              height: 1.6,
-              color: primaryText,
+    final textStyle = TextStyle(
+      fontSize: 14 * scale,
+      height: 1.6,
+      color: primaryText,
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 真正测量在给定宽度下是否超过 3 行，只有溢出时才显示“展开”。
+        final painter = TextPainter(
+          text: TextSpan(text: overview, style: textStyle),
+          maxLines: _collapsedMaxLines,
+          textDirection: Directionality.of(context),
+        )..layout(maxWidth: constraints.maxWidth);
+        final isOverflowing = painter.didExceedMaxLines;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            AnimatedSize(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeInOut,
+              child: Text(
+                overview,
+                maxLines: expanded ? null : _collapsedMaxLines,
+                overflow:
+                    expanded ? TextOverflow.visible : TextOverflow.ellipsis,
+                style: textStyle,
+              ),
             ),
-          ),
-        ),
-        if (overview.length > 100) ...[
-          SizedBox(height: 4 * scale),
-          GestureDetector(
-            onTap: onToggle,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  expanded ? '收起' : '展开',
-                  style: TextStyle(
-                    fontSize: 13 * scale,
-                    color: accentColor,
-                  ),
+            if (isOverflowing) ...[
+              SizedBox(height: 4 * scale),
+              GestureDetector(
+                onTap: onToggle,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      expanded ? '收起' : '展开',
+                      style: TextStyle(
+                        fontSize: 13 * scale,
+                        color: accentColor,
+                      ),
+                    ),
+                    AnimatedRotation(
+                      turns: expanded ? 0.5 : 0,
+                      duration: const Duration(milliseconds: 200),
+                      child: Icon(
+                        Icons.keyboard_arrow_down,
+                        size: 16 * scale,
+                        color: accentColor,
+                      ),
+                    ),
+                  ],
                 ),
-                AnimatedRotation(
-                  turns: expanded ? 0.5 : 0,
-                  duration: const Duration(milliseconds: 200),
-                  child: Icon(
-                    Icons.keyboard_arrow_down,
-                    size: 16 * scale,
-                    color: accentColor,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ],
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 }

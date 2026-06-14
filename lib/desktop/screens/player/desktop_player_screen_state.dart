@@ -84,6 +84,14 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
         _hasUserTouchedSubtitleSelection = true;
         unawaited(_onSubtitleSelectionChanged(prev, next));
       });
+      ref.listenManual(secondarySubtitleTrackProvider, (prev, next) {
+        if (_initializingPlayer ||
+            _suppressTrackSelectionListeners ||
+            prev == next) {
+          return;
+        }
+        unawaited(_onSecondarySubtitleSelectionChanged(next));
+      });
       ref.listenManual(subtitleDelayProvider, (prev, next) {
         if (prev != next) {
           unawaited(_playerService.setSubtitleDelay(next));
@@ -387,18 +395,20 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
       if (selectedSubtitleIndex != null) {
         await _applyInitialSubtitleTrack(
             subtitleStreams, selectedSubtitleIndex);
-        return;
-      }
-
-      if (_hasUserTouchedSubtitleSelection) {
+      } else if (_hasUserTouchedSubtitleSelection) {
         AppLogger().i(
           'DesktopPlayer',
           '用户已手动处理字幕选择，跳过默认字幕自动挂载',
         );
-        return;
+      } else {
+        await _applyPreferredSubtitleTrack(subtitleStreams);
       }
 
-      await _applyPreferredSubtitleTrack(subtitleStreams);
+      // 起播后应用用户在详情页选择的次字幕（次字幕默认为「无」，不自动挂载）
+      final selectedSecondaryIndex = ref.read(secondarySubtitleTrackProvider);
+      if (selectedSecondaryIndex != null) {
+        await _onSecondarySubtitleSelectionChanged(selectedSecondaryIndex);
+      }
     } catch (e, stackTrace) {
       AppLogger().eWithStack(
         'DesktopPlayer',
@@ -472,6 +482,80 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
     int selectedIndex,
   ) async {
     await _onSubtitleSelectionChanged(null, selectedIndex);
+  }
+
+  /// 应用次字幕（MPV `secondary-sid`）。次字幕默认为「无」。
+  /// 内封轨道直接按 trackId 设置，外挂字幕下载后加载；图形字幕(PGS/SUP)不支持。
+  Future<void> _onSecondarySubtitleSelectionChanged(int? next) async {
+    if (_currentMediaSource == null) {
+      return;
+    }
+    if (next == null) {
+      await _playerService.deselectSecondarySubtitle();
+      return;
+    }
+
+    final coreType = _playerService.coreType;
+    if (coreType != PlayerCoreType.mpv &&
+        coreType != PlayerCoreType.nativeMpv) {
+      AppLogger().w('DesktopPlayer', '次字幕仅支持 MPV 内核，当前内核: $coreType');
+      return;
+    }
+
+    final subtitleStreams = _subtitleStreamsFromCurrentSource();
+    final target =
+        subtitleStreams.where((stream) => stream.index == next).firstOrNull;
+    if (target == null) {
+      return;
+    }
+
+    final codec = (target.codec ?? '').toLowerCase();
+    final targetTitle = target.displayTitle ?? target.title;
+    final isExternal = target.isExternal == true;
+    final kind = SubtitleTrackMatcher.classifyKind(
+      codec: target.codec,
+      title: targetTitle,
+    );
+    if (kind == SubtitleKind.bitmap) {
+      AppLogger().w('DesktopPlayer', '图形字幕(PGS/SUP)暂不支持作为次字幕: index=$next');
+      return;
+    }
+
+    try {
+      if (!isExternal) {
+        var trackId = _matchSubtitleTrackId(
+          subtitleStreams,
+          target.language,
+          targetTitle,
+          target.codec,
+          target.index,
+        );
+        if (trackId == null || trackId.isEmpty) {
+          trackId = await _waitForInternalSubtitleTrackId(
+            subtitleStreams,
+            target,
+            targetTitle,
+          );
+        }
+        if (trackId != null && trackId.isNotEmpty) {
+          await _playerService.selectSecondarySubtitleTrack(trackId);
+          AppLogger().i('DesktopPlayer', '内封次字幕已设置: trackId=$trackId');
+          return;
+        }
+        AppLogger().w('DesktopPlayer', '未匹配到内封次字幕轨道，回退外挂加载: index=$next');
+      }
+
+      final file = await _prepareExternalSubtitleFile(
+        target,
+        codec,
+        title: targetTitle,
+        kind: kind,
+      );
+      await _playerService.loadSecondarySubtitle(file.path);
+      AppLogger().i('DesktopPlayer', '外挂次字幕加载成功: ${file.path}');
+    } catch (e, stackTrace) {
+      AppLogger().eWithStack('DesktopPlayer', '加载次字幕失败', e, stackTrace);
+    }
   }
 
   Future<void> _applyPreferredSubtitleTrack(

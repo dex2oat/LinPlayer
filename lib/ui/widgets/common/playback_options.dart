@@ -11,18 +11,22 @@ class PlaybackOptions extends ConsumerWidget {
 
   const PlaybackOptions({super.key, required this.itemId, required this.info});
 
-  MediaSource? _resolveMediaSource(PlaybackInfo info, String? selectedSourceId) {
+  MediaSource? _resolveMediaSource(
+      PlaybackInfo info, String? selectedSourceId) {
     if (info.mediaSources.isEmpty) {
       return null;
     }
     if (selectedSourceId == null || selectedSourceId.isEmpty) {
       return info.mediaSources.firstOrNull;
     }
-    return info.mediaSources.where((source) => source.id == selectedSourceId).firstOrNull ??
+    return info.mediaSources
+            .where((source) => source.id == selectedSourceId)
+            .firstOrNull ??
         info.mediaSources.firstOrNull;
   }
 
-  MediaStream? _resolveSelectedStream(List<MediaStream> streams, int? selectedIndex) {
+  MediaStream? _resolveSelectedStream(
+      List<MediaStream> streams, int? selectedIndex) {
     if (streams.isEmpty) {
       return null;
     }
@@ -31,7 +35,9 @@ class PlaybackOptions extends ConsumerWidget {
           streams.firstOrNull;
     }
     // 先尝试精确匹配 index，找不到则回退到默认或第一个
-    return streams.where((stream) => stream.index == selectedIndex).firstOrNull ??
+    return streams
+            .where((stream) => stream.index == selectedIndex)
+            .firstOrNull ??
         streams.where((stream) => stream.isDefault == true).firstOrNull ??
         streams.firstOrNull;
   }
@@ -42,7 +48,8 @@ class PlaybackOptions extends ConsumerWidget {
     final selectedLineIndex = server?.activeLineIndex ?? 0;
     final selectedAudioIndex = ref.watch(audioTrackProvider);
     final selectedSubtitleIndex = ref.watch(subtitleTrackProvider);
-    final selectedSecondarySubtitleIndex = ref.watch(secondarySubtitleTrackProvider);
+    final selectedSecondarySubtitleIndex =
+        ref.watch(secondarySubtitleTrackProvider);
     final selectedSourceId = ref.watch(selectedMediaSourceProvider);
 
     final mediaSource = _resolveMediaSource(info, selectedSourceId);
@@ -57,21 +64,27 @@ class PlaybackOptions extends ConsumerWidget {
       });
     }
 
-    final audioStreams = mediaSource.mediaStreams.where((s) => s.isAudio).toList();
-    final subtitleStreams = mediaSource.mediaStreams.where((s) => s.isSubtitle).toList();
+    final audioStreams =
+        mediaSource.mediaStreams.where((s) => s.isAudio).toList();
+    final subtitleStreams =
+        mediaSource.mediaStreams.where((s) => s.isSubtitle).toList();
 
-    final selectedAudio = _resolveSelectedStream(audioStreams, selectedAudioIndex);
+    final selectedAudio =
+        _resolveSelectedStream(audioStreams, selectedAudioIndex);
 
     final selectedSubtitle =
         _resolveSelectedStream(subtitleStreams, selectedSubtitleIndex);
 
-    final availableSecondarySubs = subtitleStreams.where((s) =>
-      selectedSubtitle == null || s.index != selectedSubtitle.index
-    ).toList();
-    final selectedSecondarySubtitle = _resolveSelectedStream(
-      availableSecondarySubs,
-      selectedSecondarySubtitleIndex,
-    );
+    final availableSecondarySubs = subtitleStreams
+        .where((s) =>
+            selectedSubtitle == null || s.index != selectedSubtitle.index)
+        .toList();
+    // 次字幕默认为「无」：未显式选择时不回退到默认轨，避免误显示“已选第二条字幕”。
+    final selectedSecondarySubtitle = selectedSecondarySubtitleIndex == null
+        ? null
+        : availableSecondarySubs
+            .where((s) => s.index == selectedSecondarySubtitleIndex)
+            .firstOrNull;
     if (selectedAudioIndex == null && selectedAudio?.index != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (ref.read(audioTrackProvider) == null) {
@@ -82,7 +95,8 @@ class PlaybackOptions extends ConsumerWidget {
     if (selectedSubtitleIndex == null && selectedSubtitle?.index != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (ref.read(subtitleTrackProvider) == null) {
-          ref.read(subtitleTrackProvider.notifier).state = selectedSubtitle!.index;
+          ref.read(subtitleTrackProvider.notifier).state =
+              selectedSubtitle!.index;
         }
       });
     }
@@ -109,25 +123,29 @@ class PlaybackOptions extends ConsumerWidget {
               icon: Icons.layers,
               title: '版本选择',
               value: mediaSource.name ?? '默认',
-              onTap: () => _showSourceSelector(context, ref, info, mediaSource.id),
+              onTap: () =>
+                  _showSourceSelector(context, ref, info, mediaSource.id),
             ),
           _buildDropdownTile(
             context,
             icon: Icons.audiotrack,
             title: '音频选择',
             value: selectedAudio?.displayTitle ?? '默认音轨',
-            onTap: () => _showStreamSelector(context, ref, audioStreams, 'Audio'),
+            onTap: () =>
+                _showStreamSelector(context, ref, audioStreams, 'Audio'),
           ),
           Consumer(
             builder: (context, ref, _) {
               final selectedSubtitleIndex = ref.watch(subtitleTrackProvider);
-              final selectedSubtitle = _resolveSelectedStream(subtitleStreams, selectedSubtitleIndex);
+              final selectedSubtitle = _resolveSelectedStream(
+                  subtitleStreams, selectedSubtitleIndex);
               return _buildDropdownTile(
                 context,
                 icon: Icons.subtitles,
                 title: '字幕选择',
                 value: selectedSubtitle?.displayTitle ?? '无字幕',
-                onTap: () => _showStreamSelector(context, ref, subtitleStreams, 'Subtitle'),
+                onTap: () => _showStreamSelector(
+                    context, ref, subtitleStreams, 'Subtitle'),
               );
             },
           ),
@@ -136,7 +154,8 @@ class PlaybackOptions extends ConsumerWidget {
             icon: Icons.subtitles_outlined,
             title: '次字幕选择',
             value: selectedSecondarySubtitle?.displayTitle ?? '无',
-            onTap: () => _showSecondarySubtitleSelector(context, ref, availableSecondarySubs),
+            onTap: () => _showSecondarySubtitleSelector(
+                context, ref, availableSecondarySubs),
           ),
         ],
       ),
@@ -172,13 +191,20 @@ class PlaybackOptions extends ConsumerWidget {
                         ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
                         : null,
                     onTap: () {
-                      ref.read(serverListProvider.notifier).setActiveLine(currentServer.id, idx);
-                      final updatedServer = ref.read(serverListProvider).firstWhere((s) => s.id == currentServer.id);
-                      ref.read(currentServerProvider.notifier).state = updatedServer;
-                      ref.read(selectedMediaSourceProvider.notifier).state = null;
+                      ref
+                          .read(serverListProvider.notifier)
+                          .setActiveLine(currentServer.id, idx);
+                      final updatedServer = ref
+                          .read(serverListProvider)
+                          .firstWhere((s) => s.id == currentServer.id);
+                      ref.read(currentServerProvider.notifier).state =
+                          updatedServer;
+                      ref.read(selectedMediaSourceProvider.notifier).state =
+                          null;
                       ref.read(audioTrackProvider.notifier).state = null;
                       ref.read(subtitleTrackProvider.notifier).state = null;
-                      ref.read(secondarySubtitleTrackProvider.notifier).state = null;
+                      ref.read(secondarySubtitleTrackProvider.notifier).state =
+                          null;
                       ref.invalidate(playbackInfoProvider(itemId));
                       Navigator.pop(ctx);
                     },
@@ -192,12 +218,14 @@ class PlaybackOptions extends ConsumerWidget {
     );
   }
 
-  void _showSourceSelector(BuildContext context, WidgetRef ref, PlaybackInfo info, String currentSourceId) {
+  void _showSourceSelector(BuildContext context, WidgetRef ref,
+      PlaybackInfo info, String currentSourceId) {
     showModalBottomSheet(
       context: context,
       builder: (ctx) => Consumer(
         builder: (context, ref, _) {
-          final selectedSourceId = ref.watch(selectedMediaSourceProvider) ?? currentSourceId;
+          final selectedSourceId =
+              ref.watch(selectedMediaSourceProvider) ?? currentSourceId;
           return SafeArea(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -218,10 +246,12 @@ class PlaybackOptions extends ConsumerWidget {
                         ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
                         : null,
                     onTap: () {
-                      ref.read(selectedMediaSourceProvider.notifier).state = source.id;
+                      ref.read(selectedMediaSourceProvider.notifier).state =
+                          source.id;
                       ref.read(audioTrackProvider.notifier).state = null;
                       ref.read(subtitleTrackProvider.notifier).state = null;
-                      ref.read(secondarySubtitleTrackProvider.notifier).state = null;
+                      ref.read(secondarySubtitleTrackProvider.notifier).state =
+                          null;
                       Navigator.pop(ctx);
                     },
                   );
@@ -234,7 +264,8 @@ class PlaybackOptions extends ConsumerWidget {
     );
   }
 
-  void _showStreamSelector(BuildContext context, WidgetRef ref, List<MediaStream> streams, String type) {
+  void _showStreamSelector(BuildContext context, WidgetRef ref,
+      List<MediaStream> streams, String type) {
     showModalBottomSheet(
       context: context,
       builder: (ctx) => Consumer(
@@ -253,7 +284,8 @@ class PlaybackOptions extends ConsumerWidget {
                     children: [
                       Text(
                         type == 'Audio' ? '选择音频轨道' : '选择字幕轨道',
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                        style: const TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.w700),
                       ),
                       const Spacer(),
                       IconButton(
@@ -271,17 +303,23 @@ class PlaybackOptions extends ConsumerWidget {
                     final isSelected = currentIndex == stream.index;
                     return ListTile(
                       title: Text(stream.readableLabel(siblings: streams)),
-                      subtitle: stream.codec != null ? Text('编码: ${stream.codec}') : null,
+                      subtitle: stream.codec != null
+                          ? Text('编码: ${stream.codec}')
+                          : null,
                       trailing: isSelected
                           ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
                           : null,
                       onTap: () {
                         if (type == 'Audio') {
-                          ref.read(audioTrackProvider.notifier).state = stream.index;
+                          ref.read(audioTrackProvider.notifier).state =
+                              stream.index;
                         } else {
-                          ref.read(subtitleTrackProvider.notifier).state = stream.index;
+                          ref.read(subtitleTrackProvider.notifier).state =
+                              stream.index;
                           if (secondaryIndex == stream.index) {
-                            ref.read(secondarySubtitleTrackProvider.notifier).state = null;
+                            ref
+                                .read(secondarySubtitleTrackProvider.notifier)
+                                .state = null;
                           }
                         }
                         Navigator.pop(ctx);
@@ -296,7 +334,8 @@ class PlaybackOptions extends ConsumerWidget {
     );
   }
 
-  void _showSecondarySubtitleSelector(BuildContext context, WidgetRef ref, List<MediaStream> streams) {
+  void _showSecondarySubtitleSelector(
+      BuildContext context, WidgetRef ref, List<MediaStream> streams) {
     showModalBottomSheet(
       context: context,
       builder: (ctx) => Consumer(
@@ -312,7 +351,8 @@ class PlaybackOptions extends ConsumerWidget {
                     children: [
                       const Text(
                         '选择次字幕轨道',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                        style: TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.w700),
                       ),
                       const Spacer(),
                       IconButton(
@@ -329,7 +369,8 @@ class PlaybackOptions extends ConsumerWidget {
                       ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
                       : null,
                   onTap: () {
-                    ref.read(secondarySubtitleTrackProvider.notifier).state = null;
+                    ref.read(secondarySubtitleTrackProvider.notifier).state =
+                        null;
                     Navigator.pop(ctx);
                   },
                 ),
@@ -341,12 +382,16 @@ class PlaybackOptions extends ConsumerWidget {
                     final isSelected = secondaryIndex == stream.index;
                     return ListTile(
                       title: Text(stream.readableLabel(siblings: streams)),
-                      subtitle: stream.codec != null ? Text('编码: ${stream.codec}') : null,
+                      subtitle: stream.codec != null
+                          ? Text('编码: ${stream.codec}')
+                          : null,
                       trailing: isSelected
                           ? const Icon(Icons.check, color: Color(0xFF5B8DEF))
                           : null,
                       onTap: () {
-                        ref.read(secondarySubtitleTrackProvider.notifier).state = stream.index;
+                        ref
+                            .read(secondarySubtitleTrackProvider.notifier)
+                            .state = stream.index;
                         Navigator.pop(ctx);
                       },
                     );
