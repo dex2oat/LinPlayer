@@ -1152,6 +1152,18 @@ class _DesktopCarouselState extends ConsumerState<_DesktopCarousel> {
       _currentItemId ??= item.id;
     }
 
+    // 同步预热 Logo 艺术字（走 Image.network 内存缓存），避免滑到该页才加载。
+    final logoUrl = (item.logoItemId != null && item.logoImageTag != null)
+        ? ref.read(apiClientProvider).image.getLogoImageUrl(
+              item.logoItemId!,
+              tag: item.logoImageTag,
+              maxWidth: 280,
+            )
+        : null;
+    if (logoUrl != null && logoUrl.isNotEmpty && context.mounted) {
+      precacheImage(NetworkImage(logoUrl), context).catchError((_) {});
+    }
+
     await warmPersistentImageCache(context, candidates);
   }
 
@@ -1304,7 +1316,8 @@ class _CarouselInfo extends ConsumerWidget {
   /// 优先使用 Logo 艺术字图片，无 Logo 时回退到文字标题
   Widget _buildLogoOrTitle(dynamic api) {
     final logoUrl = (item.logoItemId != null && item.logoImageTag != null)
-        ? api.image.getLogoImageUrl(item.logoItemId!, tag: item.logoImageTag, maxWidth: 280)
+        ? api.image.getLogoImageUrl(item.logoItemId!,
+            tag: item.logoImageTag, maxWidth: 280)
         : null;
 
     if (logoUrl != null && logoUrl.isNotEmpty) {

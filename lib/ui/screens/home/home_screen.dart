@@ -13,7 +13,7 @@ import '../../widgets/common/dynamic_background.dart';
 import '../../widgets/common/media_widgets.dart';
 
 /// 首页构建性能优化
-/// 
+///
 /// 减少首次构建开销的策略：
 /// 1. 使用 RepaintBoundary 隔离复杂区域的重绘
 /// 2. 延迟加载非首屏内容（通过 Visibility 或 Future.delayed）
@@ -22,7 +22,7 @@ import '../../widgets/common/media_widgets.dart';
 /// 首页
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
-  
+
   @override
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
@@ -80,55 +80,56 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   Widget build(BuildContext context) {
     super.build(context);
     final currentServer = ref.watch(currentServerProvider);
-    final hideDailyRecommendations = ref.watch(hideDailyRecommendationsProvider);
+    final hideDailyRecommendations =
+        ref.watch(hideDailyRecommendationsProvider);
     final recommendationsAsync = ref.watch(randomRecommendationsProvider);
     return Scaffold(
       backgroundColor: _backgroundColor,
       body: DynamicBackground(
         backgroundColor: _backgroundColor,
         child: Stack(
-            children: [
-              CustomScrollView(
-                controller: _scrollController,
-                slivers: [
-                  // 随机推荐轮播（可被隐藏）- 直接顶到最上方
-                  if (!hideDailyRecommendations)
-                    SliverToBoxAdapter(
-                      child: RandomRecommendationCarousel(
-                        onColorChanged: _onBackgroundColorChanged,
-                      ),
+          children: [
+            CustomScrollView(
+              controller: _scrollController,
+              slivers: [
+                // 随机推荐轮播（可被隐藏）- 直接顶到最上方
+                if (!hideDailyRecommendations)
+                  SliverToBoxAdapter(
+                    child: RandomRecommendationCarousel(
+                      onColorChanged: _onBackgroundColorChanged,
                     ),
+                  ),
 
-                  // 继续观看
-                  const SliverToBoxAdapter(child: ContinueWatchingSection()),
+                // 继续观看
+                const SliverToBoxAdapter(child: ContinueWatchingSection()),
 
-                  // 媒体库
-                  const SliverToBoxAdapter(child: LibrariesSection()),
+                // 媒体库
+                const SliverToBoxAdapter(child: LibrariesSection()),
 
-                  // 各媒体库最新内容
-                  const SliverToBoxAdapter(child: LatestItemsSections()),
+                // 各媒体库最新内容
+                const SliverToBoxAdapter(child: LatestItemsSections()),
 
-                  const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
-                ],
-              ),
-              // 顶部栏（悬浮，透明背景）
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: AnimatedOpacity(
-                  opacity: _appBarOpacity,
-                  duration: const Duration(milliseconds: 150),
-                  child: _HomeAppBar(
-                    serverName: currentServer?.name ?? '服务器',
-                    backgroundImage: recommendationsAsync.when(
-                      data: (items) => items.isNotEmpty ? items.first : null,
-                      loading: () => null,
-                      error: (_, __) => null,
-                    ),
+                const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
+              ],
+            ),
+            // 顶部栏（悬浮，透明背景）
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: AnimatedOpacity(
+                opacity: _appBarOpacity,
+                duration: const Duration(milliseconds: 150),
+                child: _HomeAppBar(
+                  serverName: currentServer?.name ?? '服务器',
+                  backgroundImage: recommendationsAsync.when(
+                    data: (items) => items.isNotEmpty ? items.first : null,
+                    loading: () => null,
+                    error: (_, __) => null,
                   ),
                 ),
               ),
+            ),
           ],
         ),
       ),
@@ -203,7 +204,8 @@ class _ServerSelectorOverlayState extends State<_ServerSelectorOverlay>
     final maxTextWidth = widget.servers
         .map((s) => s.name.length * 16.0) // 估计每个字符16px
         .reduce((a, b) => a > b ? a : b);
-    final containerWidth = (56 + maxTextWidth + 48).clamp(180.0, widget.screenWidth * 0.7);
+    final containerWidth =
+        (56 + maxTextWidth + 48).clamp(180.0, widget.screenWidth * 0.7);
 
     return GestureDetector(
       onTap: _dismiss,
@@ -226,7 +228,8 @@ class _ServerSelectorOverlayState extends State<_ServerSelectorOverlay>
                   opacity: _fadeAnimation,
                   child: Consumer(
                     builder: (context, ref, _) {
-                      final currentServerId = ref.watch(currentServerProvider)?.id;
+                      final currentServerId =
+                          ref.watch(currentServerProvider)?.id;
                       return Container(
                         width: containerWidth,
                         decoration: const BoxDecoration(
@@ -247,30 +250,40 @@ class _ServerSelectorOverlayState extends State<_ServerSelectorOverlay>
                                   borderRadius: BorderRadius.circular(12),
                                   onTap: () {
                                     _dismiss();
-                                    Future.delayed(const Duration(milliseconds: 150), () {
-                                      ref.read(currentServerProvider.notifier).state = server;
+                                    Future.delayed(
+                                        const Duration(milliseconds: 150), () {
+                                      ref
+                                          .read(currentServerProvider.notifier)
+                                          .state = server;
                                       if (server.authToken != null) {
-                                        ref.read(authStateProvider.notifier).state = AuthState.authenticated;
+                                        ref
+                                            .read(authStateProvider.notifier)
+                                            .state = AuthState.authenticated;
                                       }
                                       ref.invalidate(librariesProvider);
                                       ref.invalidate(resumeItemsProvider);
-                                      ref.invalidate(randomRecommendationsProvider);
+                                      ref.invalidate(
+                                          randomRecommendationsProvider);
                                     });
                                   },
                                   child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 12, vertical: 10),
                                     child: Row(
                                       children: [
                                         Container(
                                           width: 32,
                                           height: 32,
                                           decoration: BoxDecoration(
-                                            color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
-                                            borderRadius: BorderRadius.circular(8),
+                                            color: const Color(0xFF5B8DEF)
+                                                .withValues(alpha: 0.1),
+                                            borderRadius:
+                                                BorderRadius.circular(8),
                                           ),
                                           child: server.iconUrl != null
                                               ? ClipRRect(
-                                                  borderRadius: BorderRadius.circular(8),
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
                                                   child: MediaImage(
                                                     imageUrl: server.iconUrl,
                                                     width: 32,
@@ -351,7 +364,8 @@ class _HomeAppBarState extends ConsumerState<_HomeAppBar> {
 
     _hideServerMenu();
 
-    final renderBox = _serverButtonKey.currentContext?.findRenderObject() as RenderBox?;
+    final renderBox =
+        _serverButtonKey.currentContext?.findRenderObject() as RenderBox?;
     if (renderBox == null) return;
 
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
@@ -426,7 +440,8 @@ class _HomeAppBarState extends ConsumerState<_HomeAppBar> {
                                 fit: BoxFit.cover,
                               ),
                             )
-                          : const Icon(Icons.dns, size: 18, color: Color(0xFF5B8DEF)),
+                          : const Icon(Icons.dns,
+                              size: 18, color: Color(0xFF5B8DEF)),
                     ),
                     const SizedBox(width: 8),
                     Text(
@@ -437,7 +452,8 @@ class _HomeAppBarState extends ConsumerState<_HomeAppBar> {
                       ),
                     ),
                     const SizedBox(width: 4),
-                    const Icon(Icons.keyboard_arrow_down, size: 20, color: Colors.grey),
+                    const Icon(Icons.keyboard_arrow_down,
+                        size: 20, color: Colors.grey),
                   ],
                 ),
               ),
@@ -471,10 +487,12 @@ class RandomRecommendationCarousel extends ConsumerStatefulWidget {
   const RandomRecommendationCarousel({super.key, this.onColorChanged});
 
   @override
-  ConsumerState<RandomRecommendationCarousel> createState() => _RandomRecommendationCarouselState();
+  ConsumerState<RandomRecommendationCarousel> createState() =>
+      _RandomRecommendationCarouselState();
 }
 
-class _RandomRecommendationCarouselState extends ConsumerState<RandomRecommendationCarousel> {
+class _RandomRecommendationCarouselState
+    extends ConsumerState<RandomRecommendationCarousel> {
   PageController? _pageController;
   int _currentPage = 0;
   Color _dominantColor = Colors.transparent;
@@ -511,12 +529,11 @@ class _RandomRecommendationCarouselState extends ConsumerState<RandomRecommendat
       if (!mounted || sessionId != _colorPrefetchToken) return;
 
       final item = items[index];
+      // 后台预热相邻页的背景图 + Logo 艺术字，避免滑到该页才加载导致的“不同步”。
+      _precacheCarouselImages(item);
       if (!_colorCache.containsKey(item.id)) {
-        final imageUrl = item.backdropImageTag != null
-            ? api.image.getBackdropImageUrl(item.id, tag: item.backdropImageTag, maxWidth: 400)
-            : item.primaryImageTag != null
-                ? api.image.getPrimaryImageUrl(item.id, tag: item.primaryImageTag, maxWidth: 400)
-                : null;
+        // 用与展示一致的背景图取色，避免色彩与画面不匹配。
+        final imageUrl = _carouselBackgroundUrl(api, item);
 
         if (imageUrl != null) {
           await _extractColorForItem(item.id, imageUrl, sessionId);
@@ -545,6 +562,25 @@ class _RandomRecommendationCarouselState extends ConsumerState<RandomRecommendat
     addIndex(centerIndex + 1);
     addIndex(centerIndex - 1);
     return indexes;
+  }
+
+  /// 预热轮播图片：背景图写入磁盘缓存、Logo 写入内存图缓存，
+  /// 让相邻页在滑到之前就准备好，消除“跳到该页才加载”的不同步。
+  void _precacheCarouselImages(MediaItem item) {
+    if (!mounted) return;
+    final api = ref.read(apiClientProvider);
+
+    final bgUrl = _carouselBackgroundUrl(api, item);
+    if (bgUrl != null) {
+      // 与 _CarouselItem 的 MediaImage 同源（PersistentNetworkImageProvider）
+      warmPersistentImageCache(context, [bgUrl]);
+    }
+
+    final logoUrl = _carouselLogoUrl(api, item);
+    if (logoUrl != null && logoUrl.isNotEmpty) {
+      // Logo 走 Image.network，预热 Flutter 内存图缓存
+      precacheImage(NetworkImage(logoUrl), context).catchError((_) {});
+    }
   }
 
   Future<void> _extractColorForItem(
@@ -692,6 +728,38 @@ class _RandomRecommendationCarouselState extends ConsumerState<RandomRecommendat
   }
 }
 
+/// 轮播背景图 URL（优先真正的 Backdrop，回退封面）。
+/// 渲染与预加载共用同一函数，确保预热的 URL 与实际请求完全一致。
+String? _carouselBackgroundUrl(ApiClientFactory api, MediaItem item) {
+  if (item.backdropImageTag != null) {
+    return api.image.getBackdropImageUrl(
+      item.backdropItemId ?? item.id,
+      tag: item.backdropImageTag,
+      maxWidth: 720,
+    );
+  }
+  if (item.primaryImageTag != null) {
+    return api.image.getPrimaryImageUrl(
+      item.id,
+      tag: item.primaryImageTag,
+      maxWidth: 720,
+    );
+  }
+  return null;
+}
+
+/// 轮播 Logo 艺术字 URL。
+String? _carouselLogoUrl(ApiClientFactory api, MediaItem item) {
+  if (item.logoItemId != null && item.logoImageTag != null) {
+    return api.image.getLogoImageUrl(
+      item.logoItemId!,
+      tag: item.logoImageTag,
+      maxWidth: 280,
+    );
+  }
+  return null;
+}
+
 class _CarouselItem extends ConsumerWidget {
   final MediaItem item;
   final VoidCallback onTap;
@@ -708,12 +776,7 @@ class _CarouselItem extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final api = ref.read(apiClientProvider);
-    // 降低轮播图图片分辨率以减少内存占用
-    final imageUrl = item.backdropImageTag != null
-        ? api.image.getBackdropImageUrl(item.id, tag: item.backdropImageTag, maxWidth: 400)
-        : item.primaryImageTag != null
-            ? api.image.getPrimaryImageUrl(item.id, tag: item.primaryImageTag, maxWidth: 400)
-            : null;
+    final imageUrl = _carouselBackgroundUrl(api, item);
 
     return GestureDetector(
       onTap: onTap,
@@ -794,25 +857,29 @@ class _CarouselItem extends ConsumerWidget {
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
                           color: Colors.white,
-                          shadows: [Shadow(blurRadius: 4, color: Colors.black54)],
+                          shadows: [
+                            Shadow(blurRadius: 4, color: Colors.black54)
+                          ],
                         ),
                       ),
                       const SizedBox(width: 12),
                     ],
                     ...?item.genres?.take(5).map((genre) => Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          genre,
-                          style: const TextStyle(fontSize: 12, color: Colors.white),
-                        ),
-                      ),
-                    )),
+                          padding: const EdgeInsets.only(right: 6),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              genre,
+                              style: const TextStyle(
+                                  fontSize: 12, color: Colors.white),
+                            ),
+                          ),
+                        )),
                   ],
                 ),
               ],
@@ -824,10 +891,8 @@ class _CarouselItem extends ConsumerWidget {
   }
 
   /// 优先使用 Logo 艺术字图片，无 Logo 时回退到文字标题
-  Widget _buildLogoOrTitle(MediaItem item, dynamic api) {
-    final logoUrl = (item.logoItemId != null && item.logoImageTag != null)
-        ? api.image.getLogoImageUrl(item.logoItemId!, tag: item.logoImageTag, maxWidth: 280)
-        : null;
+  Widget _buildLogoOrTitle(MediaItem item, ApiClientFactory api) {
+    final logoUrl = _carouselLogoUrl(api, item);
 
     if (logoUrl != null && logoUrl.isNotEmpty) {
       return Image.network(
@@ -859,9 +924,10 @@ class _CarouselItem extends ConsumerWidget {
     );
   }
 }
+
 class ContinueWatchingSection extends ConsumerWidget {
   const ContinueWatchingSection({super.key});
-  
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final resumeAsync = ref.watch(resumeItemsProvider);
@@ -872,7 +938,8 @@ class ContinueWatchingSection extends ConsumerWidget {
 
         // 智能分析图片尺寸偏好
         final sizePreference = ImageSizeHelper.analyzeForResumeSection(items);
-        final unplayedItems = items.where((item) => !(item.userData?.played ?? false)).toList();
+        final unplayedItems =
+            items.where((item) => !(item.userData?.played ?? false)).toList();
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -925,7 +992,8 @@ class ContinueWatchingSection extends ConsumerWidget {
                         children: [
                           const Text(
                             '继续观看',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                            style: TextStyle(
+                                fontSize: 18, fontWeight: FontWeight.w700),
                           ),
                           const Spacer(),
                           IconButton(
@@ -940,7 +1008,8 @@ class ContinueWatchingSection extends ConsumerWidget {
                       child: GridView.builder(
                         controller: scrollController,
                         padding: const EdgeInsets.all(16),
-                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: 2,
                           childAspectRatio: 1.5,
                           crossAxisSpacing: 12,
@@ -989,9 +1058,10 @@ class _ContinueWatchingCard extends ConsumerWidget {
     );
 
     final isEpisode = item.type == 'Episode';
-    final seasonEpisodeText = isEpisode && item.parentIndexNumber != null && item.indexNumber != null
-        ? 'S${item.parentIndexNumber}E${item.indexNumber}'
-        : null;
+    final seasonEpisodeText =
+        isEpisode && item.parentIndexNumber != null && item.indexNumber != null
+            ? 'S${item.parentIndexNumber}E${item.indexNumber}'
+            : null;
 
     return GestureDetector(
       onTap: () {
@@ -1013,7 +1083,8 @@ class _ContinueWatchingCard extends ConsumerWidget {
                   children: [
                     MediaImage(
                       imageUrl: imageUrls.isNotEmpty ? imageUrls.first : null,
-                      imageUrls: imageUrls.length > 1 ? imageUrls.sublist(1) : null,
+                      imageUrls:
+                          imageUrls.length > 1 ? imageUrls.sublist(1) : null,
                       width: sizePreference.width,
                       height: sizePreference.height,
                       cacheWidth: (sizePreference.width * 2).toInt(),
@@ -1050,8 +1121,10 @@ class _ContinueWatchingCard extends ConsumerWidget {
                           borderRadius: BorderRadius.circular(2),
                           child: LinearProgressIndicator(
                             value: item.progress,
-                            backgroundColor: Colors.white.withValues(alpha: 0.3),
-                            valueColor: const AlwaysStoppedAnimation(Color(0xFF5B8DEF)),
+                            backgroundColor:
+                                Colors.white.withValues(alpha: 0.3),
+                            valueColor:
+                                const AlwaysStoppedAnimation(Color(0xFF5B8DEF)),
                             minHeight: 3,
                           ),
                         ),
@@ -1327,7 +1400,8 @@ class _LibraryCard extends ConsumerWidget {
             child: imageUrls.isNotEmpty
                 ? MediaImage(
                     imageUrl: imageUrls.first,
-                    imageUrls: imageUrls.length > 1 ? imageUrls.sublist(1) : null,
+                    imageUrls:
+                        imageUrls.length > 1 ? imageUrls.sublist(1) : null,
                     width: 168,
                     height: 124,
                     fit: BoxFit.cover,
@@ -1364,11 +1438,11 @@ class _LibraryCard extends ConsumerWidget {
 /// 各媒体库最新内容区块
 class LatestItemsSections extends ConsumerWidget {
   const LatestItemsSections({super.key});
-  
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final librariesAsync = ref.watch(librariesProvider);
-    
+
     return librariesAsync.when(
       data: (libraries) {
         return Column(
@@ -1385,9 +1459,9 @@ class LatestItemsSections extends ConsumerWidget {
 
 class _LibraryLatestSection extends ConsumerWidget {
   final Library library;
-  
+
   const _LibraryLatestSection({required this.library});
-  
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final latestAsync = ref.watch(latestItemsProvider(library.id));

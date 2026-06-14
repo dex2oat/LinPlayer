@@ -336,7 +336,8 @@ class EmbyHomeApi implements HomeApi {
       'ParentPrimaryImageItemId,ParentPrimaryImageTag,SeriesThumbImageTag,'
       'SeriesPrimaryImageTag,BackdropImageTags,ChildCount,RecursiveItemCount,'
       'CanDownload,SupportsSync,ProviderIds,PresentationUniqueKey,Path,'
-      'ParentLogoItemId,ParentLogoImageTag';
+      'ParentLogoItemId,ParentLogoImageTag,'
+      'BackdropImageTags,ParentBackdropItemId,ParentBackdropImageTags';
 
   @override
   Future<List<MediaItem>> getResumeItems() async {
@@ -438,7 +439,8 @@ class EmbyLibraryApi implements LibraryApi {
       'ParentPrimaryImageItemId,ParentPrimaryImageTag,SeriesThumbImageTag,'
       'SeriesPrimaryImageTag,ChildCount,RecursiveItemCount,CanDownload,SupportsSync,'
       'ProviderIds,PresentationUniqueKey,Path,'
-      'ParentLogoItemId,ParentLogoImageTag';
+      'ParentLogoItemId,ParentLogoImageTag,'
+      'BackdropImageTags,ParentBackdropItemId,ParentBackdropImageTags';
 
   @override
   Future<List<MediaItem>> getLibraryItems({
@@ -504,7 +506,8 @@ class EmbyMediaApi implements MediaApi {
       'SeriesThumbImageTag,SeriesPrimaryImageTag,BackdropImageTags,'
       'ChildCount,RecursiveItemCount,CanDownload,SupportsSync,ProviderIds,'
       'PresentationUniqueKey,Path,'
-      'ParentLogoItemId,ParentLogoImageTag';
+      'ParentLogoItemId,ParentLogoImageTag,'
+      'BackdropImageTags,ParentBackdropItemId,ParentBackdropImageTags';
 
   @override
   Future<MediaItem> getItemDetails(String itemId) async {
@@ -852,12 +855,13 @@ class EmbyImageApi implements ImageApi {
   @override
   String getBackdropImageUrl(String itemId,
       {String? tag, int? maxWidth, String? format}) {
+    // 不再强制 maxHeight:450（会把全屏背景图压成低清导致发虚）；
+    // 由调用方传入的 maxWidth 决定清晰度，未传时给一个适合背景的默认值。
     return getImageUrl(
       itemId: itemId,
       imageTag: tag,
       imageType: 'Backdrop',
-      maxWidth: maxWidth ?? 800,
-      maxHeight: 450,
+      maxWidth: maxWidth ?? 1280,
       format: format,
     );
   }
@@ -930,6 +934,7 @@ MediaItem _parseMediaItem(Map<String, dynamic> d) {
   final people = (d['People'] as List<dynamic>?)
       ?.map((e) => _parsePersonFromItem(e as Map<String, dynamic>))
       .toList();
+  final backdrop = _extractBackdrop(d);
   return MediaItem(
     id: d['Id']?.toString() ?? '',
     name: d['Name'] ?? '',
@@ -940,7 +945,8 @@ MediaItem _parseMediaItem(Map<String, dynamic> d) {
     overview: d['Overview']?.toString(),
     primaryImageTag: _extractImageTag(d, 'Primary'),
     thumbImageTag: _extractImageTag(d, 'Thumb'),
-    backdropImageTag: _extractImageTag(d, 'Backdrop'),
+    backdropImageTag: backdrop?.tag,
+    backdropItemId: backdrop?.itemId,
     communityRating: (d['CommunityRating'] as num?)?.toDouble(),
     officialRating: d['OfficialRating']?.toString(),
     premiereDate: _parseDate(d['PremiereDate']),
@@ -1016,6 +1022,46 @@ String? _extractImageTag(Map<String, dynamic> d, String type) {
   final value = tags?[type]?.toString();
   if (value == null || value.isEmpty) return null;
   return value;
+}
+
+/// 背景图（Backdrop）来源。
+///
+/// Emby 的背景图**不在** `ImageTags` 里，而在独立的 `BackdropImageTags` 数组；
+/// 剧集/季等自身没有背景图时，Emby 通过 `ParentBackdropImageTags` +
+/// `ParentBackdropItemId` 提供父级（剧集）的背景图。
+/// 之前误读 `ImageTags['Backdrop']` 导致背景图恒为 null、详情页退回封面图。
+class _BackdropRef {
+  final String tag;
+  final String itemId;
+  const _BackdropRef(this.tag, this.itemId);
+}
+
+_BackdropRef? _extractBackdrop(Map<String, dynamic> d) {
+  String? firstTag(dynamic list) {
+    if (list is List) {
+      for (final e in list) {
+        final tag = e?.toString();
+        if (tag != null && tag.isNotEmpty) return tag;
+      }
+    }
+    return null;
+  }
+
+  // 自身背景图
+  final ownTag = firstTag(d['BackdropImageTags']);
+  final ownId = d['Id']?.toString();
+  if (ownTag != null && ownId != null && ownId.isNotEmpty) {
+    return _BackdropRef(ownTag, ownId);
+  }
+
+  // 回退：父级（剧集）背景图
+  final parentTag = firstTag(d['ParentBackdropImageTags']);
+  final parentId = d['ParentBackdropItemId']?.toString();
+  if (parentTag != null && parentId != null && parentId.isNotEmpty) {
+    return _BackdropRef(parentTag, parentId);
+  }
+
+  return null;
 }
 
 /// 提取 Logo 项目 ID：优先使用自身，否则使用父级

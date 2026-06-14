@@ -18,9 +18,7 @@ Color readableTextColorForBackground(Color background) {
 }
 
 Color readableSecondaryTextColorForBackground(Color background) {
-  return background.computeLuminance() < 0.32
-      ? Colors.white70
-      : Colors.black54;
+  return background.computeLuminance() < 0.32 ? Colors.white70 : Colors.black54;
 }
 
 List<String> resolveLibraryImageUrls(
@@ -54,7 +52,7 @@ List<String> resolveMediaItemImageUrls(
       ),
     if (preferWideImage && item.backdropImageTag != null)
       api.image.getBackdropImageUrl(
-        item.id,
+        item.backdropItemId ?? item.id,
         tag: item.backdropImageTag,
         maxWidth: maxWidth,
       ),
@@ -107,7 +105,7 @@ List<String> resolveMediaItemImageUrls(
       ),
     if (!preferWideImage && item.backdropImageTag != null)
       api.image.getBackdropImageUrl(
-        item.id,
+        item.backdropItemId ?? item.id,
         tag: item.backdropImageTag,
         maxWidth: maxWidth,
       ),
@@ -122,7 +120,7 @@ List<String> resolveMediaItemLandscapeImageUrls(
   return _dedupeUrls([
     if (item.backdropImageTag != null)
       api.image.getBackdropImageUrl(
-        item.id,
+        item.backdropItemId ?? item.id,
         tag: item.backdropImageTag,
         maxWidth: maxWidth,
       ),
@@ -179,7 +177,7 @@ List<String> resolveMediaItemBannerImageUrls(
   return _dedupeUrls([
     if (item.backdropImageTag != null)
       api.image.getBackdropImageUrl(
-        item.id,
+        item.backdropItemId ?? item.id,
         tag: item.backdropImageTag,
         maxWidth: maxWidth,
       ),
@@ -367,7 +365,8 @@ List<String> resolveEpisodeImageUrls(
         tag: episode.thumbImageTag,
         maxWidth: maxWidth,
       ),
-    if (episode.parentThumbItemId != null && episode.parentThumbImageTag != null)
+    if (episode.parentThumbItemId != null &&
+        episode.parentThumbImageTag != null)
       api.image.getThumbImageUrl(
         episode.parentThumbItemId!,
         tag: episode.parentThumbImageTag,
@@ -413,7 +412,8 @@ List<String> resolveEpisodeLandscapeImageUrls(
         tag: episode.thumbImageTag,
         maxWidth: maxWidth,
       ),
-    if (episode.parentThumbItemId != null && episode.parentThumbImageTag != null)
+    if (episode.parentThumbItemId != null &&
+        episode.parentThumbImageTag != null)
       api.image.getThumbImageUrl(
         episode.parentThumbItemId!,
         tag: episode.parentThumbImageTag,

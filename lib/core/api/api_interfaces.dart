@@ -207,6 +207,9 @@ class MediaItem {
   final String? primaryImageTag;
   final String? thumbImageTag;
   final String? backdropImageTag;
+  // 背景图所属的项目 ID：可能是自身，也可能是父级/剧集（剧集/季无自身背景时回退父级）。
+  // 取背景图 URL 时用它而不是 id，否则会 404 退回封面图。
+  final String? backdropItemId;
   final double? communityRating;
   final String? officialRating;
   final DateTime? premiereDate;
@@ -233,8 +236,8 @@ class MediaItem {
   final List<Person>? people;
   final bool? canDownload;
   final List<String>? remoteTrailers;
-  final String? logoItemId;      // 有 Logo 的项目 ID（自身或父级）
-  final String? logoImageTag;    // Logo 缓存 tag
+  final String? logoItemId; // 有 Logo 的项目 ID（自身或父级）
+  final String? logoImageTag; // Logo 缓存 tag
 
   MediaItem({
     required this.id,
@@ -247,6 +250,7 @@ class MediaItem {
     this.primaryImageTag,
     this.thumbImageTag,
     this.backdropImageTag,
+    this.backdropItemId,
     this.communityRating,
     this.officialRating,
     this.premiereDate,
