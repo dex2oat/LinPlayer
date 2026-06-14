@@ -329,11 +329,17 @@ class MpvPlayerPlugin(
 
             // Load the video
             if (videoUrl.isNotEmpty()) {
-                MPVLib.command(arrayOf("loadfile", videoUrl, "replace"))
-                // Seek to start position after loadfile
+                // 续播：在 loadfile 之前通过 start 属性指定起始位置，让 mpv 在加载时
+                // 直接定位到续播点。旧做法是 loadfile 之后立刻发 seek，但 loadfile 是
+                // 异步的，文件尚未解封装完成时 seek 会落空被丢弃，导致"时不时从头播放"。
+                // 用 start 选项可彻底消除该竞态，且不会出现先闪一下片头的问题。
                 if (startPositionMs > 0) {
-                    MPVLib.command(arrayOf("seek", "${startPositionMs / 1000}", "absolute"))
+                    MPVLib.setPropertyString("start", "${startPositionMs / 1000.0}")
+                    android.util.Log.i(TAG, "Resume playback from ${startPositionMs / 1000.0}s")
+                } else {
+                    MPVLib.setPropertyString("start", "none")
                 }
+                MPVLib.command(arrayOf("loadfile", videoUrl, "replace"))
                 val voMode = if (useGpuNext) "gpu-next" else "gpu"
                 android.util.Log.i(TAG, "Loading video, SurfaceTexture/$voMode")
             } else {

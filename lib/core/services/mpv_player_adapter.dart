@@ -152,10 +152,36 @@ class MpvPlayerAdapter implements PlayerAdapter {
     // underlying player state and Flutter Video widget stay in sync.
     // Network edge cases are handled one layer above via playback URL
     // fallback instead of bypassing Player.open here.
+    final resumePosition =
+        (startPosition != null && startPosition > Duration.zero)
+            ? startPosition
+            : null;
+
+    // 续播：优先通过 mpv 的 start 选项让加载时直接定位到续播点，
+    // 避免 open 之后再 seek 的竞态（慢速/网络源下 seek 可能落空导致从头播放）。
+    final np = _nativePlayer;
+    if (resumePosition != null && np != null) {
+      final seconds = resumePosition.inMilliseconds / 1000.0;
+      try {
+        await np.setProperty('start', '$seconds');
+      } catch (_) {
+        // start 设置失败时继续走兜底 seek 流程。
+      }
+    }
+
     final media = Media(videoUrl);
     await _player!.open(media, play: false);
-    if (startPosition != null && startPosition > Duration.zero) {
-      await _applyStartupSeek(startPosition);
+
+    if (resumePosition != null) {
+      // 兜底校正：部分协议/解码路径下 start 选项可能不生效，再用重试 seek 落位。
+      await _applyStartupSeek(resumePosition);
+    }
+
+    // 复位 start，避免 start 选项影响后续可能的加载（防御性处理）。
+    if (resumePosition != null && np != null) {
+      try {
+        await np.setProperty('start', 'none');
+      } catch (_) {}
     }
   }
 
