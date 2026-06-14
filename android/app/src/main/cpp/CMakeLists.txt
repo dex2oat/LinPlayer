@@ -4,9 +4,23 @@ project("linplayer_native")
 find_library(log-lib log)
 
 # ============================================================================
+# JNI 初始化桥接层
+# 在 JNI_OnLoad 中注册 JavaVM，确保 mpv 视频输出能访问 JVM
+# 必须在 libmpv.so 和 libplayer.so 之前加载
+# ============================================================================
+
+add_library(mpv_init_jni SHARED
+    mpv_init_jni.cpp
+)
+
+target_link_libraries(mpv_init_jni
+    ${log-lib}
+)
+
+target_compile_features(mpv_init_jni PUBLIC cxx_std_17)
+
+# ============================================================================
 # libass JNI 桥接层
-# 用于 ExoPlayer 内封/外挂 ASS 字幕的 libass 特效渲染
-# 动态加载 libass.so (独立库) 或 libmpv.so (media_kit 内置)
 # ============================================================================
 
 add_library(linass_jni SHARED
@@ -18,9 +32,4 @@ target_link_libraries(linass_jni
     dl
 )
 
-# 确保 C++17 标准
 target_compile_features(linass_jni PUBLIC cxx_std_17)
-
-# 如果需要在未来添加其他原生模块，可以在此继续添加
-# add_library(my_module SHARED my_module.cpp)
-# target_link_libraries(my_module ${log-lib})

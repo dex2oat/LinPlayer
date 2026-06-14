@@ -60,6 +60,8 @@ abstract class PlayerAdapter {
     bool useLibass = false,
     bool hardwareDecoding = true,
     String? preferredSubtitleLanguage,
+    int? surfaceViewId,  // Optional: for gpu-next rendering on Android
+    bool useGpuNext = false,  // Optional: gpu-next rendering mode
   });
 
   /// 加载外部字幕文件（通过 libass）

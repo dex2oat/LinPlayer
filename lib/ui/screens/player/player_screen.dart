@@ -17,6 +17,7 @@ import '../../utils/media_helpers.dart';
 import '../../../core/services/video_player_service.dart';
 import '../../../core/services/mpv_player_adapter.dart';
 import '../../../core/services/exo_player_adapter.dart';
+import '../../../core/services/native_mpv_player_adapter.dart';
 import '../../../core/services/app_logger.dart';
 import '../../../core/services/subtitle_processor.dart';
 import '../../../core/utils/playback_url_resolver.dart';

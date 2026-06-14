@@ -8,11 +8,13 @@ import 'app_logger.dart';
 import 'player_adapter.dart';
 import 'exo_player_adapter.dart';
 import 'mpv_player_adapter.dart';
+import 'native_mpv_player_adapter.dart';
 
 /// 播放器内核类型
 enum PlayerCoreType {
-  exoPlayer, // ExoPlayer（Android 原生）
-  mpv, // MPV（libmpv FFI）
+  exoPlayer,  // ExoPlayer（Android 原生）
+  mpv,        // MPV（libmpv FFI，桌面/iOS）
+  nativeMpv,  // MPV 原生 JNI（Android 专用，通过平台通道调用）
 }
 
 /// 视频播放器服务
@@ -42,6 +44,8 @@ class VideoPlayerService extends ChangeNotifier {
   int _startupRetryCount = 0;
   String? _selectedSubtitleTrackId;
   String? _selectedAudioTrackId;
+  int? _surfaceViewId;  // For gpu-next rendering on Android
+  bool _useGpuNext = false;  // gpu-next rendering mode
 
   Timer? _progressTimer;
   Timer? _hideControlsTimer;
@@ -144,6 +148,8 @@ class VideoPlayerService extends ChangeNotifier {
         return ExoPlayerAdapter();
       case PlayerCoreType.mpv:
         return MpvPlayerAdapter();
+      case PlayerCoreType.nativeMpv:
+        return NativeMpvPlayerAdapter();
     }
   }
 
@@ -206,6 +212,7 @@ class VideoPlayerService extends ChangeNotifier {
     required Duration? startPosition,
     required bool hardwareDecoding,
     required String? preferredSubtitleLanguage,
+    bool useGpuNext = false,
   }) async {
     await _adapter!.initialize(
       videoUrl: videoUrl,
@@ -214,7 +221,10 @@ class VideoPlayerService extends ChangeNotifier {
       useLibass: _lastUseLibass,
       hardwareDecoding: hardwareDecoding,
       preferredSubtitleLanguage: preferredSubtitleLanguage,
+      surfaceViewId: _surfaceViewId,  // Pass for gpu-next rendering
+      useGpuNext: useGpuNext,
     );
+    _logger.i('VideoPlayerService', '适配器初始化完成, surfaceViewId=$_surfaceViewId');
     if (!(_adapter?.isInitialized ?? false) || (_adapter?.hasError ?? false)) {
       throw StateError(_adapter?.errorMessage ?? '播放器初始化失败');
     }
@@ -414,6 +424,8 @@ class VideoPlayerService extends ChangeNotifier {
     bool startWithSoftwareDecoding = false,
     String? fallbackReason,
     String? preferredSubtitleLanguage,
+    int? surfaceViewId,  // For gpu-next rendering on Android
+    bool useGpuNext = false,  // gpu-next rendering mode
   }) async {
     _currentItemId = itemId;
     _mediaSourceId = mediaSourceId ?? itemId;
@@ -436,6 +448,8 @@ class VideoPlayerService extends ChangeNotifier {
     _startupRetryCount = 0;
     _selectedSubtitleTrackId = null;
     _selectedAudioTrackId = null;
+    _surfaceViewId = surfaceViewId;  // Store for gpu-next rendering
+    _useGpuNext = useGpuNext;  // Store gpu-next rendering mode
     _setPendingPlayingState(null, notify: false);
 
     if (coreType != null) {
@@ -454,6 +468,7 @@ class VideoPlayerService extends ChangeNotifier {
         startPosition: startPosition,
         hardwareDecoding: desiredHardwareDecoding,
         preferredSubtitleLanguage: preferredSubtitleLanguage,
+        useGpuNext: _useGpuNext,
       );
     } catch (error, stackTrace) {
       final fallbackActivated = await _tryActivateFallbackUrl(

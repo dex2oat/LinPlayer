@@ -6,6 +6,7 @@ import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/media_providers.dart';
 import '../../../core/utils/color_extractor.dart';
 import '../../utils/media_helpers.dart';
+import '../../utils/image_size_helper.dart';
 import '../../widgets/common/dynamic_background.dart';
 import '../../widgets/common/media_widgets.dart';
 
@@ -838,11 +839,15 @@ class ContinueWatchingSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final resumeAsync = ref.watch(resumeItemsProvider);
-    
+
     return resumeAsync.when(
       data: (items) {
         if (items.isEmpty) return const SizedBox.shrink();
-        
+
+        // 智能分析图片尺寸偏好
+        final sizePreference = ImageSizeHelper.analyzeForResumeSection(items);
+        final unplayedItems = items.where((item) => !(item.userData?.played ?? false)).toList();
+
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -851,9 +856,12 @@ class ContinueWatchingSection extends ConsumerWidget {
               onMoreTap: () => _showContinueWatchingSheet(context, ref),
             ),
             HorizontalList(
-              height: 140,
-              children: items.where((item) => !(item.userData?.played ?? false)).map((item) {
-                return _ContinueWatchingCard(item: item);
+              height: sizePreference.height + 50, // 高度 + 标题区域
+              children: unplayedItems.map((item) {
+                return _ContinueWatchingCard(
+                  item: item,
+                  sizePreference: sizePreference,
+                );
               }).toList(),
             ),
           ],
@@ -869,6 +877,10 @@ class ContinueWatchingSection extends ConsumerWidget {
     resumeAsync.when(
       data: (items) {
         if (items.isEmpty) return;
+
+        // 智能分析图片尺寸偏好
+        final sizePreference = ImageSizeHelper.analyzeForResumeSection(items);
+
         showModalBottomSheet(
           context: context,
           isScrollControlled: true,
@@ -911,7 +923,10 @@ class ContinueWatchingSection extends ConsumerWidget {
                         itemCount: items.length,
                         itemBuilder: (context, index) {
                           final item = items[index];
-                          return _ContinueWatchingCard(item: item);
+                          return _ContinueWatchingCard(
+                            item: item,
+                            sizePreference: sizePreference,
+                          );
                         },
                       ),
                     ),
@@ -930,8 +945,12 @@ class ContinueWatchingSection extends ConsumerWidget {
 
 class _ContinueWatchingCard extends ConsumerWidget {
   final MediaItem item;
+  final ImageSizePreference sizePreference;
 
-  const _ContinueWatchingCard({required this.item});
+  const _ContinueWatchingCard({
+    required this.item,
+    required this.sizePreference,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -954,13 +973,13 @@ class _ContinueWatchingCard extends ConsumerWidget {
       },
       onLongPress: () => _showLongPressMenu(context, ref),
       child: SizedBox(
-        width: 160,
+        width: sizePreference.width,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 封面图 + 进度条（横向16:9，保持原始比例）
+            // 封面图 + 进度条（使用智能统一的纵横比）
             AspectRatio(
-              aspectRatio: 16 / 9,
+              aspectRatio: sizePreference.aspectRatio,
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
                 child: Stack(
@@ -969,9 +988,11 @@ class _ContinueWatchingCard extends ConsumerWidget {
                     MediaImage(
                       imageUrl: imageUrls.isNotEmpty ? imageUrls.first : null,
                       imageUrls: imageUrls.length > 1 ? imageUrls.sublist(1) : null,
-                      width: 160,
-                      height: 90,
-                      fit: BoxFit.contain,
+                      width: sizePreference.width,
+                      height: sizePreference.height,
+                      cacheWidth: (sizePreference.width * 2).toInt(),
+                      cacheHeight: (sizePreference.height * 2).toInt(),
+                      fit: BoxFit.cover, // 使用 cover 填满容器
                     ),
                     // 底部渐变（增强进度条可读性）
                     if (item.progress != null)
@@ -1344,11 +1365,14 @@ class _LibraryLatestSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final latestAsync = ref.watch(latestItemsProvider(library.id));
-    
+
     return latestAsync.when(
       data: (items) {
         if (items.isEmpty) return const SizedBox.shrink();
-        
+
+        // 智能分析图片尺寸偏好
+        final sizePreference = ImageSizeHelper.analyzeForLatestSection(items);
+
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1388,14 +1412,14 @@ class _LibraryLatestSection extends ConsumerWidget {
               ),
             ),
             HorizontalList(
-              height: 240,
+              height: sizePreference.height + 80, // 高度 + 标题和元数据区域
               children: items.map((item) {
                 return SizedBox(
-                  width: 120,
+                  width: sizePreference.width,
                   child: MediaPoster(
                     item: item,
-                    width: 120,
-                    height: 160,
+                    width: sizePreference.width,
+                    height: sizePreference.height,
                     onTap: () => context.push(mediaRouteForItem(item)),
                   ),
                 );

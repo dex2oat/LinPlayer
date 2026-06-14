@@ -4,7 +4,11 @@ import '../api/api_interfaces.dart';
 import '../utils/platform_utils.dart';
 import 'app_preferences.dart';
 
-String get defaultPlayerCoreKey => isDesktopPlatform ? 'mpv' : 'exoPlayer';
+String get defaultPlayerCoreKey {
+  if (isDesktopPlatform) return 'mpv';
+  // Android 默认使用原生 MPV（通过 libplayer.so + 平台通道）
+  return 'nativeMpv';
+}
 
 String normalizePlayerCore(String? value) {
   switch (value) {
@@ -14,6 +18,8 @@ String normalizePlayerCore(String? value) {
     case 'exoPlayer':
     case 'video_player':
       return 'exoPlayer';
+    case 'nativeMpv':
+      return 'nativeMpv';
     default:
       return defaultPlayerCoreKey;
   }
@@ -291,6 +297,17 @@ final externalMpvPathProvider =
     readValue: (prefs) => prefs.getString('linplayer_external_mpv_path'),
     writeValue: (prefs, value) async {
       await prefs.setString('linplayer_external_mpv_path', value);
+    },
+  );
+});
+
+final gpuNextEnabledProvider =
+    StateNotifierProvider<PreferenceNotifier<bool>, bool>((ref) {
+  return PreferenceNotifier<bool>(
+    defaultValue: false,
+    readValue: (prefs) => prefs.getBool('linplayer_gpu_next_enabled'),
+    writeValue: (prefs, value) async {
+      await prefs.setBool('linplayer_gpu_next_enabled', value);
     },
   );
 });

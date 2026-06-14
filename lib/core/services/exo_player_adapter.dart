@@ -107,6 +107,8 @@ class ExoPlayerAdapter implements PlayerAdapter {
     bool useLibass = false,
     bool hardwareDecoding = true,
     String? preferredSubtitleLanguage,
+    int? surfaceViewId,  // Not used by ExoPlayer, only for native mpv
+    bool useGpuNext = false,  // Not used by ExoPlayer, only for native mpv
   }) async {
     _logger.i('ExoPlayer', '开始初始化 - videoUrl=$videoUrl');
     try {

@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
@@ -10,7 +11,12 @@ import 'tv/tv_app.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  MediaKit.ensureInitialized();
+
+  // media_kit 仅在非 Android 平台初始化
+  // Android 使用原生 MPV (libplayer.so) 通过平台通道调用
+  if (!Platform.isAndroid) {
+    MediaKit.ensureInitialized();
+  }
 
   await initializeAppPreferences();
 

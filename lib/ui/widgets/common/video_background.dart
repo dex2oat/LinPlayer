@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -54,6 +55,14 @@ class _VideoBackgroundState extends State<VideoBackground> {
   }
 
   Future<void> _initPlayer() async {
+    // Android 使用原生 MPV，不初始化 media_kit
+    if (Platform.isAndroid) {
+      if (mounted && !_isDisposed) {
+        setState(() => _hasError = true);
+      }
+      return;
+    }
+
     try {
       final player = Player();
       final controller = VideoController(player);
