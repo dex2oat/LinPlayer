@@ -38,14 +38,18 @@ class MpvPlayerPlugin(
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        android.util.Log.d(TAG, "onMethodCall: ${call.method}, players=${players.keys}")
         when (call.method) {
             "createPlayer" -> {
                 val videoUrl = call.argument<String>("videoUrl") ?: ""
-                val startPositionMs = call.argument<Int>("startPositionMs") ?: 0
+                val startPositionMs = call.argument<Number>("startPositionMs")?.toInt() ?: 0
                 val dolbyVisionFix = call.argument<Boolean>("dolbyVisionFix") ?: false
                 val preferredSubtitleLanguage = call.argument<String>("preferredSubtitleLanguage")
                 val hardwareDecoding = call.argument<Boolean>("hardwareDecoding") ?: true
-                createPlayer(videoUrl, startPositionMs, hardwareDecoding, result)
+                // Dart 传过来的 int 在 Android 端可能是 Long，用 Number 兼容
+                val surfaceViewId = call.argument<Number>("surfaceViewId")?.toInt()
+                val useGpuNext = call.argument<Boolean>("useGpuNext") ?: false
+                createPlayer(videoUrl, startPositionMs, hardwareDecoding, surfaceViewId, useGpuNext, result)
             }
             "play" -> {
                 val playerId = call.argument<String>("playerId") ?: ""
@@ -59,7 +63,7 @@ class MpvPlayerPlugin(
             }
             "seekTo" -> {
                 val playerId = call.argument<String>("playerId") ?: ""
-                val positionMs = call.argument<Int>("positionMs") ?: 0
+                val positionMs = call.argument<Number>("positionMs")?.toInt() ?: 0
                 getPlayer(playerId)?.seekTo(positionMs)
                 result.success(true)
             }
@@ -229,123 +233,173 @@ class MpvPlayerPlugin(
         videoUrl: String,
         startPositionMs: Int,
         hardwareDecoding: Boolean,
+        surfaceViewId: Int?,
+        useGpuNext: Boolean,
         result: MethodChannel.Result
     ) {
-        mainHandler.post {
-            // MPVLib is a singleton — only one mpv context can exist at a time.
-            // Dispose any existing player first.
-            if (players.isNotEmpty()) {
-                android.util.Log.w(TAG, "createPlayer: disposing existing player(s)")
-                players.values.forEach { it.release() }
-                players.clear()
-            }
+        // Always use SurfaceTexture (no SurfaceView polling needed)
+        mainHandler.post { createPlayerOnMainThread(videoUrl, startPositionMs, hardwareDecoding, useGpuNext, result) }
+    }
 
-            var surfaceTextureEntry: TextureRegistry.SurfaceTextureEntry? = null
-            try {
-                val playerId = UUID.randomUUID().toString()
+    private fun createPlayerOnMainThread(
+        videoUrl: String,
+        startPositionMs: Int,
+        hardwareDecoding: Boolean,
+        useGpuNext: Boolean,
+        result: MethodChannel.Result
+    ) {
+        // MPVLib is a singleton — only one mpv context can exist at a time.
+        // Dispose any existing player first.
+        if (players.isNotEmpty()) {
+            android.util.Log.w(TAG, "createPlayer: disposing existing player(s)")
+            players.values.forEach { it.release() }
+            players.clear()
+        }
 
-                // Ensure JavaVM is registered with ffmpeg BEFORE mpv uses it.
-                // mpv_init_jni's JNI_OnLoad caches the VM; this calls av_jni_set_java_vm.
-                MpvInitBridge.ensureJavaVmRegistered()
+        var surfaceTextureEntry: TextureRegistry.SurfaceTextureEntry? = null
+        try {
+            val playerId = UUID.randomUUID().toString()
 
-                // Create Flutter texture + surface for video output
-                surfaceTextureEntry = textureRegistry.createSurfaceTexture()
-                val surfaceTexture = surfaceTextureEntry.surfaceTexture()
-                val surface = Surface(surfaceTexture)
+            // Ensure JavaVM is registered with ffmpeg BEFORE mpv uses it.
+            MpvInitBridge.ensureJavaVmRegistered()
 
-                // Create mpv context
-                MPVLib.create(context)
+            // Always use SurfaceTexture for both gpu and gpu-next modes
+            surfaceTextureEntry = textureRegistry.createSurfaceTexture()
+            val surfaceTexture = surfaceTextureEntry.surfaceTexture()
+            val surface = Surface(surfaceTexture)
 
-                // Set mpv options (must be before init)
-                setMpvOptions(hardwareDecoding)
+            // Create mpv context
+            MPVLib.create(context)
 
-                // Initialize mpv (registers JavaVM, starts event thread)
-                MPVLib.init()
+            // Set mpv options (must be before init)
+            android.util.Log.i(TAG, "Setting mpv options: hardwareDecoding=$hardwareDecoding, useGpuNext=$useGpuNext")
+            setMpvOptions(hardwareDecoding, useGpuNext = useGpuNext)
 
-                // Set initial surface size using screen dimensions (landscape orientation)
-                val dm = context.resources.displayMetrics
-                val screenW = if (dm.widthPixels > dm.heightPixels) dm.widthPixels else dm.heightPixels
-                val screenH = if (dm.widthPixels > dm.heightPixels) dm.heightPixels else dm.widthPixels
-                surfaceTexture.setDefaultBufferSize(screenW, screenH)
+            // Initialize mpv (registers JavaVM, starts event thread)
+            MPVLib.init()
 
-                // Attach surface AFTER init so JavaVM is already registered.
-                // This sets mpv's "wid" option for video output.
-                MPVLib.attachSurface(surface)
+            // Set initial surface size using screen dimensions (landscape orientation)
+            val dm = context.resources.displayMetrics
+            val screenW = if (dm.widthPixels > dm.heightPixels) dm.widthPixels else dm.heightPixels
+            val screenH = if (dm.widthPixels > dm.heightPixels) dm.heightPixels else dm.widthPixels
 
-                // Notify mpv of initial render target dimensions
-                MPVLib.setPropertyString("android-surface-size", "${screenW}x${screenH}")
+            surfaceTextureEntry.surfaceTexture().setDefaultBufferSize(screenW, screenH)
+            MPVLib.attachSurface(surface)
 
-                // Enable video output
-                MPVLib.setPropertyBoolean("force-window", true)
+            // Notify mpv of initial render target dimensions
+            MPVLib.setPropertyString("android-surface-size", "${screenW}x${screenH}")
 
-                // Set up EventChannel
-                val eventChannel = EventChannel(
-                    binaryMessenger,
-                    "$METHOD_CHANNEL/events/$playerId"
-                )
+            // Enable video output
+            MPVLib.setPropertyBoolean("force-window", true)
 
-                val mpvTexture = MpvTexture(surfaceTextureEntry)
-                val instance = MpvPlayerInstance(
-                    playerId = playerId,
-                    context = context,
-                    surface = surface,
-                    mpvTexture = mpvTexture,
-                    eventChannel = eventChannel,
-                    mainHandler = mainHandler
-                )
+            // Set up EventChannel
+            val eventChannel = EventChannel(
+                binaryMessenger,
+                "$METHOD_CHANNEL/events/$playerId"
+            )
 
-                // Register observer
-                MPVLib.addObserver(instance)
+            val mpvTexture = MpvTexture(surfaceTextureEntry)
+            val instance = MpvPlayerInstance(
+                playerId = playerId,
+                context = context,
+                surface = surface,
+                mpvTexture = mpvTexture,
+                eventChannel = eventChannel,
+                mainHandler = mainHandler
+            )
 
-                // Observe key properties
-                MPVLib.observeProperty("time-pos", MPVLib.MpvFormat.DOUBLE)
-                MPVLib.observeProperty("duration", MPVLib.MpvFormat.DOUBLE)
-                MPVLib.observeProperty("pause", MPVLib.MpvFormat.FLAG)
-                MPVLib.observeProperty("paused-for-cache", MPVLib.MpvFormat.FLAG)
-                MPVLib.observeProperty("eof-reached", MPVLib.MpvFormat.FLAG)
-                MPVLib.observeProperty("idle-active", MPVLib.MpvFormat.FLAG)
-                MPVLib.observeProperty("speed", MPVLib.MpvFormat.DOUBLE)
-                MPVLib.observeProperty("volume", MPVLib.MpvFormat.DOUBLE)
-                MPVLib.observeProperty("track-list", MPVLib.MpvFormat.NODE)
-                MPVLib.observeProperty("video-params/w", MPVLib.MpvFormat.INT64)
-                MPVLib.observeProperty("video-params/h", MPVLib.MpvFormat.INT64)
-                MPVLib.observeProperty("hwdec-current", MPVLib.MpvFormat.STRING)
+            // Register observer
+            MPVLib.addObserver(instance)
 
-                players[playerId] = instance
+            // Observe key properties
+            MPVLib.observeProperty("time-pos", MPVLib.MpvFormat.DOUBLE)
+            MPVLib.observeProperty("duration", MPVLib.MpvFormat.DOUBLE)
+            MPVLib.observeProperty("pause", MPVLib.MpvFormat.FLAG)
+            MPVLib.observeProperty("paused-for-cache", MPVLib.MpvFormat.FLAG)
+            MPVLib.observeProperty("eof-reached", MPVLib.MpvFormat.FLAG)
+            MPVLib.observeProperty("idle-active", MPVLib.MpvFormat.FLAG)
+            MPVLib.observeProperty("speed", MPVLib.MpvFormat.DOUBLE)
+            MPVLib.observeProperty("volume", MPVLib.MpvFormat.DOUBLE)
+            MPVLib.observeProperty("track-list", MPVLib.MpvFormat.NODE)
+            MPVLib.observeProperty("video-params/w", MPVLib.MpvFormat.INT64)
+            MPVLib.observeProperty("video-params/h", MPVLib.MpvFormat.INT64)
+            MPVLib.observeProperty("hwdec-current", MPVLib.MpvFormat.STRING)
 
-                // Load the video
-                if (videoUrl.isNotEmpty()) {
-                    val cmd = if (startPositionMs > 0) {
-                        arrayOf("loadfile", videoUrl, "replace",
-                            "start=${startPositionMs / 1000.0}")
-                    } else {
-                        arrayOf("loadfile", videoUrl)
-                    }
-                    android.util.Log.i(TAG, "loadfile command: ${cmd.joinToString(" ")}")
-                    MPVLib.command(cmd)
-                } else {
-                    android.util.Log.w(TAG, "videoUrl is empty, not loading")
+            players[playerId] = instance
+
+            // Load the video
+            if (videoUrl.isNotEmpty()) {
+                MPVLib.command(arrayOf("loadfile", videoUrl, "replace"))
+                // Seek to start position after loadfile
+                if (startPositionMs > 0) {
+                    MPVLib.command(arrayOf("seek", "${startPositionMs / 1000}", "absolute"))
                 }
-
-                result.success(mapOf(
-                    "playerId" to playerId,
-                    "textureId" to surfaceTextureEntry.id()
-                ))
-            } catch (e: Exception) {
-                android.util.Log.e(TAG, "createPlayer failed", e)
-                // Clean up native resources on failure
-                try { MPVLib.destroy() } catch (_: Exception) {}
-                surfaceTextureEntry?.release()
-                result.error("CREATE_ERROR", e.message, null)
+                val voMode = if (useGpuNext) "gpu-next" else "gpu"
+                android.util.Log.i(TAG, "Loading video, SurfaceTexture/$voMode")
+            } else {
+                android.util.Log.w(TAG, "videoUrl is empty, not loading")
             }
+
+            // Return result with texture info
+            val resultMap = mutableMapOf<String, Any>(
+                "playerId" to playerId,
+                "textureId" to surfaceTextureEntry.id()
+            )
+            android.util.Log.i(TAG, "Created player with SurfaceTexture (textureId=${surfaceTextureEntry.id()})")
+            result.success(resultMap)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "createPlayer failed", e)
+            try { MPVLib.destroy() } catch (_: Exception) {}
+            surfaceTextureEntry?.release()
+            result.error("CREATE_ERROR", e.message, null)
         }
     }
 
-    private fun setMpvOptions(hardwareDecoding: Boolean) {
-        // Video output
-        MPVLib.setOptionString("vo", "gpu")
-        MPVLib.setOptionString("gpu-context", "android")
-        MPVLib.setOptionString("opengl-es", "yes")
+    /**
+     * 检测设备是否支持杜比视界显示
+     */
+    private fun isDolbyVisionSupported(): Boolean {
+        return try {
+            val activity = context as? android.app.Activity ?: return false
+            val display = activity.display ?: return false
+            val hdrCapabilities = display.hdrCapabilities ?: return false
+            val supportedHdrTypes = hdrCapabilities.supportedHdrTypes
+            // Display.HdrCapabilities.DOLBY_VISION = 2
+            supportedHdrTypes.contains(2)
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "检测杜比视界支持失败: ${e.message}")
+            false
+        }
+    }
+
+    private fun setMpvOptions(hardwareDecoding: Boolean, useGpuNext: Boolean = false) {
+        // Video output - use gpu-next for better HDR/DV support when using SurfaceView
+        if (useGpuNext) {
+            MPVLib.setOptionString("vo", "gpu-next")
+            MPVLib.setOptionString("gpu-context", "android")
+            MPVLib.setOptionString("opengl-es", "yes")
+            android.util.Log.i(TAG, "Configured mpv for gpu-next rendering")
+        } else {
+            MPVLib.setOptionString("vo", "gpu")
+            MPVLib.setOptionString("gpu-context", "android")
+            MPVLib.setOptionString("opengl-es", "yes")
+            android.util.Log.i(TAG, "Configured mpv for gpu rendering")
+        }
+
+        // HDR/杜比视界设置
+        MPVLib.setOptionString("target-colorspace-hint", "yes")
+
+        if (useGpuNext) {
+            // gpu-next 模式：libplacebo 处理 DV RPU 元数据，正确映射 IPT-PQ 色空间
+            MPVLib.setOptionString("dolby-vision-mode", "auto")
+            MPVLib.setOptionString("tone-mapping", "spline")
+            MPVLib.setOptionString("hdr-compute-peak", "yes")
+            android.util.Log.i(TAG, "DV: gpu-next mode, libplacebo handles DV RPU")
+        } else {
+            // gpu 模式：不处理 DV RPU，用 video filter 去除 DV 标记避免绿屏
+            MPVLib.setOptionString("vf", "format:dolbyvision=no")
+            android.util.Log.i(TAG, "DV: gpu mode, stripping DV metadata via vf filter")
+        }
 
         // Hardware decoding
         if (hardwareDecoding) {
@@ -356,11 +410,12 @@ class MpvPlayerPlugin(
             MPVLib.setOptionString("hwdec", "no")
         }
 
-        // Audio output
+        // Audio output - 强制立体声降混，解决 TrueHD 等多声道音频无声问题
         MPVLib.setOptionString("ao", "audiotrack,opensles")
-
-        // Profile for mobile performance
-        MPVLib.setOptionString("profile", "fast")
+        MPVLib.setOptionString("audio-channels", "stereo")
+        MPVLib.setOptionString("ad-lavc-downmix", "yes")
+        MPVLib.setOptionString("af",
+            "lavfi=[pan=stereo|FL=FC+0.30*FL+0.30*BL|FR=FC+0.30*FR+0.30*BR]")
 
         // Config
         MPVLib.setOptionString("config", "yes")
@@ -372,21 +427,23 @@ class MpvPlayerPlugin(
         MPVLib.setOptionString("idle", "once")
         MPVLib.setOptionString("force-window", "no")
 
-        // Subtitles (libass is built into libmpv.so)
+        // Subtitles
         MPVLib.setOptionString("sub-visibility", "yes")
         MPVLib.setOptionString("blend-subtitles", "video")
+        MPVLib.setOptionString("sub-auto", "all")
+        MPVLib.setOptionString("sub-ass", "yes")
+        MPVLib.setOptionString("sub-codepage", "utf-8")
 
         // Cache
         MPVLib.setOptionString("demuxer-max-bytes", "64MiB")
         MPVLib.setOptionString("demuxer-max-back-bytes", "32MiB")
 
-        // TLS — mbedtls 需要自己的 CA 证书文件
+        // TLS
         val cacert = File(context.filesDir, "cacert.pem")
         if (cacert.exists()) {
             MPVLib.setOptionString("tls-verify", "yes")
             MPVLib.setOptionString("tls-ca-file", cacert.absolutePath)
         } else {
-            // 没有 CA 证书文件时禁用验证（自建服务器常见）
             MPVLib.setOptionString("tls-verify", "no")
             android.util.Log.w(TAG, "cacert.pem not found, disabling TLS verification")
         }
@@ -420,7 +477,7 @@ class MpvPlayerPlugin(
         val playerId: String,
         private val context: Context,
         private val surface: Surface,
-        private val mpvTexture: MpvTexture,
+        private val mpvTexture: MpvTexture?,  // Nullable when using SurfaceView
         private val eventChannel: EventChannel,
         private val mainHandler: Handler
     ) : MPVLib.EventObserver {
@@ -443,10 +500,12 @@ class MpvPlayerPlugin(
         // ---- Playback control ----
 
         fun play() {
+            android.util.Log.i(TAG, "play() - setting pause=false")
             MPVLib.setPropertyBoolean("pause", false)
         }
 
         fun pause() {
+            android.util.Log.i(TAG, "pause() - setting pause=true")
             MPVLib.setPropertyBoolean("pause", true)
         }
 
@@ -560,8 +619,14 @@ class MpvPlayerPlugin(
             }
 
             // Release surface and Flutter texture
-            surface.release()
-            mpvTexture.dispose()
+            // Note: When using SurfaceView, surface.release() is not needed
+            // as the SurfaceView manages its own surface lifecycle
+            try {
+                surface.release()
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "surface.release() failed (may be SurfaceView)", e)
+            }
+            mpvTexture?.dispose()
             eventSink = null
         }
 
@@ -626,6 +691,37 @@ class MpvPlayerPlugin(
                     android.util.Log.i(TAG, "FILE_LOADED — emitting tracks and duration")
                     emitEvent("buffering", false)
                     loadTracks()
+
+                    // 诊断日志：检查当前音频和字幕状态
+                    val audioCodec = MPVLib.getPropertyString("audio-codec")
+                    val audioCodecName = MPVLib.getPropertyString("audio-codec-name")
+                    val currentAid = MPVLib.getPropertyInt("aid")
+                    val currentSid = MPVLib.getPropertyInt("sid")
+                    val subVisibility = MPVLib.getPropertyBoolean("sub-visibility")
+                    val audioChannels = MPVLib.getPropertyString("audio-channels")
+                    android.util.Log.i(TAG, "FILE_LOADED diagnostics:")
+                    android.util.Log.i(TAG, "  audio-codec: $audioCodec")
+                    android.util.Log.i(TAG, "  audio-codec-name: $audioCodecName")
+                    android.util.Log.i(TAG, "  current aid: $currentAid")
+                    android.util.Log.i(TAG, "  current sid: $currentSid")
+                    android.util.Log.i(TAG, "  sub-visibility: $subVisibility")
+                    android.util.Log.i(TAG, "  audio-channels: $audioChannels")
+
+                    // 检查解码器列表
+                    val decoderList = MPVLib.getPropertyString("decoder-list")
+                    if (decoderList != null) {
+                        val hasTruehd = decoderList.contains("truehd", ignoreCase = true)
+                        val hasSubrip = decoderList.contains("subrip", ignoreCase = true)
+                        val hasSrt = decoderList.contains("srt", ignoreCase = true)
+                        val hasAss = decoderList.contains("ass", ignoreCase = true)
+                        android.util.Log.i(TAG, "  decoder-list contains truehd: $hasTruehd")
+                        android.util.Log.i(TAG, "  decoder-list contains subrip: $hasSubrip")
+                        android.util.Log.i(TAG, "  decoder-list contains srt: $hasSrt")
+                        android.util.Log.i(TAG, "  decoder-list contains ass: $hasAss")
+                        // 打印前500字符的解码器列表
+                        android.util.Log.i(TAG, "  decoder-list (first 500): ${decoderList.take(500)}")
+                    }
+
                     val dur = MPVLib.getPropertyDouble("duration")
                     if (dur != null && dur > 0) {
                         emitEvent("duration", (dur * 1000).toLong())

@@ -368,6 +368,8 @@ class MpvPlayerAdapter implements PlayerAdapter {
     bool useLibass = false,
     bool hardwareDecoding = true,
     String? preferredSubtitleLanguage,
+    int? surfaceViewId,  // Not used by media_kit, only for native mpv
+    bool useGpuNext = false,  // Not used by media_kit, only for native mpv
   }) async {
     _logger.i('MpvAdapter', '开始初始化 media_kit 内核');
     try {

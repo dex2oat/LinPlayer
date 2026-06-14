@@ -16,8 +16,14 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
   static const _channel = MethodChannel('com.linplayer/mpv');
   static final _logger = AppLogger();
 
+  // Completer for waiting on SurfaceView creation (used when gpu-next is enabled)
+  // Flag: AndroidView for gpu-next should render even before _useSurfaceView is set
+  bool _waitingForSurfaceView = false;
+
   String? _playerId;
   int? _textureId;
+  int? _surfaceViewId;  // For gpu-next rendering via SurfaceView
+  bool _useSurfaceView = false;
   EventChannel? _eventChannel;
   StreamSubscription? _eventSub;
 
@@ -108,8 +114,10 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
     bool useLibass = false,
     bool hardwareDecoding = true,
     String? preferredSubtitleLanguage,
+    int? surfaceViewId,  // Optional: for gpu-next rendering
+    bool useGpuNext = false,  // Optional: gpu-next rendering mode
   }) async {
-    _logger.i('NativeMpv', '开始初始化 - videoUrl=$videoUrl');
+    _logger.i('NativeMpv', '开始初始化 - videoUrl=$videoUrl, surfaceViewId=$surfaceViewId, useGpuNext=$useGpuNext');
     try {
       await dispose();
       _errorMessage = null;
@@ -118,22 +126,38 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
       _videoWidth = 0;
       _videoHeight = 0;
 
-      final result = await _channel.invokeMethod<Map<dynamic, dynamic>>('createPlayer', {
+      // gpu-next uses SurfaceTexture just like gpu mode.
+      // SurfaceView is not used because it creates a separate window layer
+      // that conflicts with Flutter overlay controls.
+      final params = <String, dynamic>{
         'videoUrl': videoUrl,
         'startPositionMs': startPosition?.inMilliseconds ?? 0,
         'hardwareDecoding': hardwareDecoding,
         'preferredSubtitleLanguage': preferredSubtitleLanguage,
-      });
+        'useGpuNext': useGpuNext,
+      };
+
+      final result = await _channel.invokeMethod<Map<dynamic, dynamic>>('createPlayer', params);
 
       if (result == null) {
         throw Exception('Failed to create native mpv player: result is null');
       }
 
       _playerId = result['playerId'] as String?;
-      _textureId = result['textureId'] as int?;
 
-      if (_playerId == null || _textureId == null) {
-        throw Exception('Invalid player creation result');
+      // Always use SurfaceTexture rendering
+      _textureId = result['textureId'] as int?;
+      _useSurfaceView = false;
+      _surfaceViewId = null;
+      _waitingForSurfaceView = false;
+
+      _logger.i('NativeMpv', '使用 SurfaceTexture 渲染 (textureId=$_textureId)');
+
+      if (_playerId == null) {
+        throw Exception('Invalid player creation result: missing playerId');
+      }
+      if (_textureId == null) {
+        throw Exception('Invalid player creation result: missing textureId');
       }
 
       _isInitialized = true;
@@ -157,10 +181,12 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
       }
 
       _callbacks?.onDurationChanged?.call();
-      _logger.i('NativeMpv', '初始化完成');
+      final surfaceMode = 'SurfaceTexture';
+      _logger.i('NativeMpv', '初始化完成，渲染模式: $surfaceMode');
     } catch (e, stackTrace) {
       _errorMessage = e.toString();
       _isInitialized = false;
+      _waitingForSurfaceView = false;
       _logger.eWithStack('NativeMpv', '初始化失败', e, stackTrace);
       _callbacks?.onError?.call();
     }
@@ -497,11 +523,14 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
 
   // ---- Video rendering ----
 
+  /// Build the video widget.
+  ///
+  /// Always uses Texture widget (SurfaceTexture backend) for both gpu and gpu-next modes.
+  /// SurfaceView is not used because it creates a separate window layer that conflicts
+  /// with Flutter's overlay controls.
   @override
   Widget buildVideo() {
     if (_textureId != null) {
-      // mpv renders at surface dimensions with correct aspect ratio and
-      // letterboxing internally — just display the Texture as-is
       return Texture(textureId: _textureId!);
     }
     return const Center(child: CircularProgressIndicator());
@@ -512,6 +541,7 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
   void _onEvent(dynamic event) {
     if (event is! Map) return;
     final type = event['type'] as String?;
+    _logger.d('NativeMpv', 'Event: $type');
     switch (type) {
       case 'playing':
         _isPlaying = event['value'] as bool? ?? false;
@@ -592,6 +622,19 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
       if (dur != null && dur > 0) {
         _duration = Duration(milliseconds: dur);
       }
+      // 轮询播放状态作为 EventChannel 的兜底，确保 UI 状态同步
+      final pauseStr = await _channel.invokeMethod<String>('getProperty', {
+        'playerId': _playerId,
+        'name': 'pause',
+      });
+      if (pauseStr != null) {
+        final playing = pauseStr == 'no';
+        if (_isPlaying != playing) {
+          _isPlaying = playing;
+          _logger.d('NativeMpv', '播放状态变更: playing=$playing');
+          _callbacks?.onPlayingStateChanged?.call();
+        }
+      }
     } catch (_) {}
   }
 
@@ -599,6 +642,7 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
 
   @override
   Future<void> dispose() async {
+    _logger.i('NativeMpv', '释放资源');
     _positionTimer?.cancel();
     _positionTimer = null;
     _eventSub?.cancel();
@@ -613,6 +657,8 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
     _videoWidth = 0;
     _videoHeight = 0;
     _textureId = null;
+    _surfaceViewId = null;
+    _useSurfaceView = false;
     _isInitialized = false;
     _isPlaying = false;
     _isBuffering = false;
@@ -621,5 +667,6 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
     _duration = Duration.zero;
     _tracks = [];
     _currentShaders = [];
+    _logger.i('NativeMpv', '资源已释放');
   }
 }

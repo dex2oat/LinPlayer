@@ -121,7 +121,18 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     WidgetsBinding.instance.addObserver(this);
     _playerService = VideoPlayerService();
     _playerService.addListener(_onPlayerUpdate);
-    _initializePlayer();
+
+    // Delay initialization when using nativeMpv to allow SurfaceView to be created
+    // This ensures the AndroidView is rendered before we try to use the SurfaceView
+    final coreString = normalizePlayerCore(ref.read(playerCoreProvider));
+    if (coreString == 'nativeMpv') {
+      // Use addPostFrameCallback to delay until after the first frame is built
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _initializePlayer();
+      });
+    } else {
+      _initializePlayer();
+    }
 
     // 监听播放器设置变化并下发到播放器
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -245,6 +256,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     final preferredSubtitleLanguage =
         ref.read(preferredSubtitleLanguageProvider);
 
+    // Read gpu-next setting for nativeMpv
+    final gpuNextEnabled = ref.read(gpuNextEnabledProvider);
+
+    // Generate a unique surfaceViewId for nativeMpv gpu-next rendering
+    // This ID is used to coordinate between Flutter's AndroidView and the native plugin
+    final int? surfaceViewId = coreType == PlayerCoreType.nativeMpv
+        ? DateTime.now().microsecondsSinceEpoch
+        : null;
+
     await _playerService.initialize(
       videoUrl: videoUrl,
       itemId: widget.itemId,
@@ -259,6 +279,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           selection.startsWithSoftwareDecoding && hardwareDecoding,
       fallbackReason: selection.fallbackReason,
       preferredSubtitleLanguage: preferredSubtitleLanguage,
+      surfaceViewId: surfaceViewId,  // Pass for gpu-next rendering
+      useGpuNext: gpuNextEnabled,  // Pass gpu-next rendering mode
       onStart: (info) async {
         try {
           await api.playback.reportPlaybackStart(info);
@@ -1700,7 +1722,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
   Widget _buildTopBar(MediaItem? item) {
     final coreString = normalizePlayerCore(ref.read(playerCoreProvider));
-    final isMpv = coreString == 'mpv';
+    final isMpv = coreString == 'mpv' || coreString == 'nativeMpv';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -2485,7 +2507,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           }
         },
       ),
-      if (!isDesktopPlatform)
+      if (Platform.isAndroid)
         ListTile(
           title: const Text('MPV 原生', style: TextStyle(color: Colors.white)),
           subtitle: const Text('libplayer.so 直调 libmpv，全格式/HDR/字幕',
@@ -2500,7 +2522,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
             }
           },
         ),
-      ListTile(
+      if (!Platform.isAndroid)
+        ListTile(
         title: const Text('MPV (media_kit)', style: TextStyle(color: Colors.white)),
         subtitle: const Text('libmpv FFI，全格式/HDR/高级字幕',
             style: TextStyle(fontSize: 12, color: Colors.white70)),
@@ -2534,7 +2557,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       await _playerService.seekTo(savedPosition);
     }
     if (mounted) {
-      final label = normalizePlayerCore(core) == 'mpv' ? 'MPV' : 'ExoPlayer';
+      final normalized = normalizePlayerCore(core);
+      final label = switch (normalized) {
+        'mpv' => 'MPV (media_kit)',
+        'nativeMpv' => 'MPV 原生',
+        _ => 'ExoPlayer',
+      };
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('已切换到 $label')),
       );

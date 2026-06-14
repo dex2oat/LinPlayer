@@ -21,6 +21,7 @@ class PlayerSettingsScreen extends ConsumerWidget {
     final subtitleBackground = ref.watch(subtitleBackgroundProvider);
     final mpvDolbyVisionFix = ref.watch(mpvDolbyVisionFixProvider);
     final externalMpvPath = ref.watch(externalMpvPathProvider);
+    final gpuNextEnabled = ref.watch(gpuNextEnabledProvider);
     final impellerEnabled = ref.watch(impellerEnabledProvider);
     final exoLibass = ref.watch(exoLibassProvider);
 
@@ -31,8 +32,11 @@ class PlayerSettingsScreen extends ConsumerWidget {
         children: [
           ListTile(
             title: const Text('播放器内核'),
-            subtitle: Text(
-                playerCore == 'mpv' ? 'MPV (libmpv)' : 'ExoPlayer/AVPlayer'),
+            subtitle: Text(switch (playerCore) {
+              'mpv' => 'MPV (media_kit)',
+              'nativeMpv' => 'MPV 原生',
+              _ => 'ExoPlayer/AVPlayer',
+            }),
             onTap: () => _showCoreSelector(context, ref),
           ),
 
@@ -178,6 +182,29 @@ class PlayerSettingsScreen extends ConsumerWidget {
             ),
           ],
 
+          // 原生MPV特有设置
+          if (playerCore == 'nativeMpv') ...[
+            const Divider(),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text(
+                '原生MPV 渲染设置',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey,
+                ),
+              ),
+            ),
+            SwitchListTile(
+              title: const Text('启用 gpu-next 渲染'),
+              subtitle: const Text('使用 libplacebo/gpu-next 渲染（需要 SurfaceView 支持）'),
+              value: gpuNextEnabled,
+              onChanged: (value) =>
+                  ref.read(gpuNextEnabledProvider.notifier).state = value,
+            ),
+          ],
+
           // 实验性功能
           const Divider(),
           const Padding(
@@ -251,17 +278,18 @@ class PlayerSettingsScreen extends ConsumerWidget {
         subtitle: Text('轻量稳定，适合大多数场景'),
         value: 'exoPlayer',
       ),
-      if (!isDesktopPlatform)
+      if (Platform.isAndroid)
         const RadioListTile<String>(
           title: Text('MPV 原生'),
           subtitle: Text('通过 libplayer.so 直接调用 libmpv，支持 HDR/着色器/PGS/SUP'),
           value: 'nativeMpv',
         ),
-      const RadioListTile<String>(
-        title: Text('MPV (media_kit)'),
-        subtitle: Text('libmpv FFI，支持 HDR/着色器/PGS/SUP'),
-        value: 'mpv',
-      ),
+      if (!Platform.isAndroid)
+        const RadioListTile<String>(
+          title: Text('MPV (media_kit)'),
+          subtitle: Text('libmpv FFI，支持 HDR/着色器/PGS/SUP'),
+          value: 'mpv',
+        ),
     ];
 
     showDialog(

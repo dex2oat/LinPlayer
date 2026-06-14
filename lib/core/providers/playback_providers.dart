@@ -281,6 +281,17 @@ final externalMpvPathProvider =
   );
 });
 
+final gpuNextEnabledProvider =
+    StateNotifierProvider<PreferenceNotifier<bool>, bool>((ref) {
+  return PreferenceNotifier<bool>(
+    defaultValue: false,
+    readValue: (prefs) => prefs.getBool('linplayer_gpu_next_enabled'),
+    writeValue: (prefs, value) async {
+      await prefs.setBool('linplayer_gpu_next_enabled', value);
+    },
+  );
+});
+
 final impellerEnabledProvider =
     StateNotifierProvider<PreferenceNotifier<bool>, bool>((ref) {
   return PreferenceNotifier<bool>(

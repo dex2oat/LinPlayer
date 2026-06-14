@@ -14,6 +14,12 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // 注册 MpvSurfaceView 平台视图工厂（用于 gpu-next 渲染）
+        flutterEngine.platformViewsController.registry.registerViewFactory(
+            "com.linplayer/mpv_surface",
+            MpvSurfaceViewFactory()
+        )
+
         // 注册 ExoPlayer 插件（v2 - 支持字幕轨道）
         exoPlayerPlugin = ExoPlayerPlugin(
             this,
