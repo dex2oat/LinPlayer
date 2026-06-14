@@ -301,6 +301,8 @@ class MediaPoster extends ConsumerWidget {
                 imageUrls: imageUrls.length > 1 ? imageUrls.sublist(1) : null,
                 width: double.infinity,
                 height: double.infinity,
+                cacheWidth: width.isFinite ? (width * 2).toInt() : 640, // 2x 显示尺寸
+                cacheHeight: height.isFinite ? (height * 2).toInt() : 960,
                 fit: BoxFit.contain,
                 heroTag: heroTag,
               ),

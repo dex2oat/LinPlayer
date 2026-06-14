@@ -81,6 +81,10 @@ class _DesktopMediaCardState extends ConsumerState<DesktopMediaCard> {
                         imageUrl: imageUrls.isNotEmpty ? imageUrls.first : null,
                         width: widget.width,
                         height: widget.height ?? widget.width / aspectRatio,
+                        cacheWidth: (widget.width * 2).toInt(), // 2x 显示尺寸，适配高 DPI
+                        cacheHeight: widget.height != null
+                            ? (widget.height! * 2).toInt()
+                            : ((widget.width / aspectRatio) * 2).toInt(),
                         fit: BoxFit.cover,
                       ),
                       AnimatedOpacity(
