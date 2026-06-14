@@ -11,6 +11,10 @@ String get defaultPlayerCoreKey {
 }
 
 String normalizePlayerCore(String? value) {
+  // 桌面端（Windows/Linux/macOS）只有 media_kit(mpv) 内核；
+  // ExoPlayer / 原生 MPV 都是移动端（平台通道）专属，桌面无此实现。
+  // 因此桌面统一归一到 mpv，避免历史/误存的值导致播放器初始化失败。
+  if (isDesktopPlatform) return 'mpv';
   switch (value) {
     case 'mpv':
     case 'media_kit':

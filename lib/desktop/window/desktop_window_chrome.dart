@@ -51,11 +51,15 @@ class AppTitleBar extends StatefulWidget {
   final String title;
   final Color? backgroundColor;
 
+  /// 标题栏起始处的控件（如侧边栏汉堡按钮）。macOS 上排在交通灯之后。
+  final Widget? leading;
+
   const AppTitleBar({
     super.key,
     required this.brightness,
     this.title = 'LinPlayer',
     this.backgroundColor,
+    this.leading,
   });
 
   @override
@@ -111,6 +115,7 @@ class _AppTitleBarState extends State<AppTitleBar> with WindowListener {
       children: [
         if (isMac) ...[
           const SizedBox(width: _macTrafficLightInset),
+          if (widget.leading != null) widget.leading!,
           Expanded(
             child: Center(
               child: Text(widget.title, style: titleStyle),
@@ -118,7 +123,12 @@ class _AppTitleBarState extends State<AppTitleBar> with WindowListener {
           ),
           const SizedBox(width: _macTrafficLightInset),
         ] else ...[
-          const SizedBox(width: 14),
+          if (widget.leading != null) ...[
+            const SizedBox(width: 4),
+            widget.leading!,
+            const SizedBox(width: 4),
+          ] else
+            const SizedBox(width: 14),
           Text(widget.title, style: titleStyle),
           const Spacer(),
           _CaptionButton(

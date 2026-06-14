@@ -33,62 +33,90 @@ final desktopRouterProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
-      // 主壳路由 - 带侧边栏
-      ShellRoute(
-        builder: (context, state, child) {
-          return DesktopShell(child: child);
+      // 主壳路由 - 带侧边栏。
+      // 用 StatefulShellRoute.indexedStack：每个一级 Tab 是独立分支，切换时
+      // 用 IndexedStack 保活，不重建页面、不重新拉取数据/解码图片 → 切换即时、
+      // 海报不再“刷新”。详情/播放等全屏页仍是壳外的顶级路由。
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, navigationShell) {
+          return DesktopShell(navigationShell: navigationShell);
         },
-        routes: [
-          GoRoute(
-            path: '/',
-            pageBuilder: (context, state) => _buildFadePage(
-              child: const DesktopHomeScreen(),
-              state: state,
-            ),
-          ),
-          GoRoute(
-            path: resumeRoutePath,
-            pageBuilder: (context, state) => _buildFadePage(
-              child: const DesktopResumeScreen(),
-              state: state,
-            ),
-          ),
-          GoRoute(
-            path: '/libraries',
-            pageBuilder: (context, state) => _buildFadePage(
-              child: const DesktopLibraryScreen(),
-              state: state,
-            ),
-          ),
-          GoRoute(
-            path: '/library/:id',
-            pageBuilder: (context, state) => _buildFadePage(
-              child: DesktopLibraryDetailScreen(
-                libraryId: state.pathParameters['id']!,
+        branches: [
+          // 分支 0：首页（含续播页）
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/',
+                pageBuilder: (context, state) => _buildFadePage(
+                  child: const DesktopHomeScreen(),
+                  state: state,
+                ),
               ),
-              state: state,
-            ),
+              GoRoute(
+                path: resumeRoutePath,
+                pageBuilder: (context, state) => _buildFadePage(
+                  child: const DesktopResumeScreen(),
+                  state: state,
+                ),
+              ),
+            ],
           ),
-          GoRoute(
-            path: '/servers',
-            pageBuilder: (context, state) => _buildFadePage(
-              child: const DesktopServerScreen(),
-              state: state,
-            ),
+          // 分支 1：媒体库（含库详情）
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/libraries',
+                pageBuilder: (context, state) => _buildFadePage(
+                  child: const DesktopLibraryScreen(),
+                  state: state,
+                ),
+              ),
+              GoRoute(
+                path: '/library/:id',
+                pageBuilder: (context, state) => _buildFadePage(
+                  child: DesktopLibraryDetailScreen(
+                    libraryId: state.pathParameters['id']!,
+                  ),
+                  state: state,
+                ),
+              ),
+            ],
           ),
-          GoRoute(
-            path: '/favorites',
-            pageBuilder: (context, state) => _buildFadePage(
-              child: const DesktopFavoritesScreen(),
-              state: state,
-            ),
+          // 分支 2：收藏
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/favorites',
+                pageBuilder: (context, state) => _buildFadePage(
+                  child: const DesktopFavoritesScreen(),
+                  state: state,
+                ),
+              ),
+            ],
           ),
-          GoRoute(
-            path: '/settings',
-            pageBuilder: (context, state) => _buildFadePage(
-              child: const SettingsScreen(),
-              state: state,
-            ),
+          // 分支 3：服务器
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/servers',
+                pageBuilder: (context, state) => _buildFadePage(
+                  child: const DesktopServerScreen(),
+                  state: state,
+                ),
+              ),
+            ],
+          ),
+          // 分支 4：设置
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/settings',
+                pageBuilder: (context, state) => _buildFadePage(
+                  child: const SettingsScreen(),
+                  state: state,
+                ),
+              ),
+            ],
           ),
         ],
       ),

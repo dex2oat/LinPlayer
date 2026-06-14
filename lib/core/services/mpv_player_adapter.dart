@@ -10,6 +10,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'player_adapter.dart';
 import 'app_logger.dart';
+import 'cache_service.dart';
 import 'mpv_config_manager.dart';
 import 'subtitle_track_matcher.dart';
 import 'subtitle_processor.dart';
@@ -510,21 +511,31 @@ class MpvPlayerAdapter implements PlayerAdapter {
           await np.setProperty('hwdec', hardwareDecoding ? 'auto-safe' : 'no');
           await _applyShaderList(_glslShaders);
           if (_isHttpUrl(videoUrl)) {
+            // 视频播放缓存：写到磁盘而非内存，避免大缓冲吃满 RAM 导致卡顿/OOM。
+            // 缓冲总量由用户设置（300MB–8GB）控制，按 3:1 分给前向/回退。
+            final cacheMaxMB = await CacheService.getVideoCacheMaxSizeMB();
+            final totalBytes = cacheMaxMB * 1024 * 1024;
+            final forwardBytes = (totalBytes * 3) ~/ 4;
+            final backBytes = totalBytes ~/ 4;
+            final cacheDir = await CacheService.videoStreamCacheDirPath;
+
             await np.setProperty('cache', 'yes');
+            // 关键：缓存落盘，不占内存。
+            await np.setProperty('cache-on-disk', 'yes');
+            await np.setProperty('cache-dir', cacheDir);
             await np.setProperty('cache-pause', 'yes');
             // Don't block startup on an aggressive initial cache fill.
             // We still keep pause-on-underflow for mid-playback stability.
             await np.setProperty('cache-pause-wait', '2.5');
             await np.setProperty('cache-pause-initial', 'no');
             await np.setProperty('cache-secs', '300');
-            await np.setProperty('demuxer-max-bytes', '536870912');
-            await np.setProperty('demuxer-max-back-bytes', '268435456');
+            await np.setProperty('demuxer-max-bytes', '$forwardBytes');
+            await np.setProperty('demuxer-max-back-bytes', '$backBytes');
             await np.setProperty('demuxer-readahead-secs', '180');
             await np.setProperty('demuxer-seekable-cache', 'yes');
             await np.setProperty('demuxer-cache-wait', 'no');
             await np.setProperty('network-timeout', '20');
             await np.setProperty('stream-buffer-size', '33554432');
-            await np.setProperty('cache-on-disk', 'no');
             await np.setProperty('interpolation', 'no');
             await np.setProperty('prefetch-playlist', 'no');
             await np.setProperty('vd-lavc-threads', '0');

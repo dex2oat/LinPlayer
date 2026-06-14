@@ -7,21 +7,23 @@ import '../../core/providers/app_providers.dart';
 import 'desktop_nav_model.dart';
 
 const double _kSidebarWidth = 220;
+const double _kSidebarCollapsedWidth = 68;
 
 /// macOS 外壳：使用 macos_ui 主题令牌构建的原生风格侧边栏。
 ///
 /// 不使用 [MacosWindow]（它会接管整窗，与本应用的全屏路由冲突），而是以
 /// [MacosTheme] 的颜色/强调色还原 AppKit 侧边栏观感：半透明背景、圆角选中态。
+/// 内容为 [StatefulNavigationShell]（indexedStack，保活）。
 class MacosDesktopShell extends ConsumerWidget {
-  final Widget child;
+  final StatefulNavigationShell navigationShell;
 
-  const MacosDesktopShell({super.key, required this.child});
+  const MacosDesktopShell({super.key, required this.navigationShell});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = MacosTheme.of(context);
-    final currentPath = GoRouterState.of(context).uri.path;
-    final selectedIndex = desktopSelectedNavIndex(currentPath);
+    final collapsed = ref.watch(sidebarCollapsedProvider);
+    final selectedIndex = navigationShell.currentIndex;
     final isDark = theme.brightness == Brightness.dark;
 
     final sidebarColor = isDark
@@ -33,7 +35,7 @@ class MacosDesktopShell extends ConsumerWidget {
     return Row(
       children: [
         Container(
-          width: _kSidebarWidth,
+          width: collapsed ? _kSidebarCollapsedWidth : _kSidebarWidth,
           decoration: BoxDecoration(
             color: sidebarColor,
             border: Border(right: BorderSide(color: dividerColor, width: 0.5)),
@@ -53,14 +55,13 @@ class MacosDesktopShell extends ConsumerWidget {
                       selected: index == selectedIndex,
                       accent: theme.primaryColor,
                       isDark: isDark,
-                      onTap: () {
-                        if (currentPath != item.path) context.go(item.path);
-                      },
+                      collapsed: collapsed,
+                      onTap: () => navigationShell.goBranch(index),
                     );
                   },
                 ),
               ),
-              _ServerStatus(isDark: isDark),
+              if (!collapsed) _ServerStatus(isDark: isDark),
               const SizedBox(height: 12),
             ],
           ),
@@ -68,7 +69,7 @@ class MacosDesktopShell extends ConsumerWidget {
         Expanded(
           child: Container(
             color: theme.canvasColor,
-            child: child,
+            child: navigationShell,
           ),
         ),
       ],
@@ -81,6 +82,7 @@ class _MacosNavTile extends StatefulWidget {
   final bool selected;
   final Color accent;
   final bool isDark;
+  final bool collapsed;
   final VoidCallback onTap;
 
   const _MacosNavTile({
@@ -88,6 +90,7 @@ class _MacosNavTile extends StatefulWidget {
     required this.selected,
     required this.accent,
     required this.isDark,
+    required this.collapsed,
     required this.onTap,
   });
 
@@ -131,24 +134,34 @@ class _MacosNavTileState extends State<_MacosNavTile> {
               color: bg,
               borderRadius: BorderRadius.circular(7),
             ),
-            child: Row(
-              children: [
-                Icon(
-                  selected ? widget.item.selectedIcon : widget.item.icon,
-                  size: 17,
-                  color: fg,
-                ),
-                const SizedBox(width: 9),
-                Text(
-                  widget.item.label,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                    color: fg,
+            child: widget.collapsed
+                ? Tooltip(
+                    message: widget.item.label,
+                    child: Icon(
+                      selected ? widget.item.selectedIcon : widget.item.icon,
+                      size: 17,
+                      color: fg,
+                    ),
+                  )
+                : Row(
+                    children: [
+                      Icon(
+                        selected ? widget.item.selectedIcon : widget.item.icon,
+                        size: 17,
+                        color: fg,
+                      ),
+                      const SizedBox(width: 9),
+                      Text(
+                        widget.item.label,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight:
+                              selected ? FontWeight.w600 : FontWeight.w500,
+                          color: fg,
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-              ],
-            ),
           ),
         ),
       ),

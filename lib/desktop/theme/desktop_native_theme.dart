@@ -25,13 +25,23 @@ fluent.AccentColor get _brandAccent => fluent.AccentColor.swatch(const <String, 
 /// 中文导航文案需要中文字形，使用 Windows 原生中文 UI 字体 “Microsoft YaHei UI”
 /// 既符合系统观感又能正确渲染中英文。
 fluent.FluentThemeData buildFluentTheme(material.Brightness brightness) {
+  final isDark = brightness == material.Brightness.dark;
+  // 统一侧边栏与内容区背景：与 Material 内容页的 scaffoldBackgroundColor 一致，
+  // 避免导航面板与页面颜色不一致的割裂感。
+  final background =
+      isDark ? AppColors.darkBackground : AppColors.lightBackground;
   return fluent.FluentThemeData(
     brightness: brightness,
     accentColor: _brandAccent,
+    scaffoldBackgroundColor: background,
     fontFamily: 'Microsoft YaHei UI',
     visualDensity: material.VisualDensity.standard,
     focusTheme: const fluent.FocusThemeData(
       glowFactor: 0,
+    ),
+    navigationPaneTheme: fluent.NavigationPaneThemeData(
+      backgroundColor: background,
+      overlayBackgroundColor: background,
     ),
   );
 }

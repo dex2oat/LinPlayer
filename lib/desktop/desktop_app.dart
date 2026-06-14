@@ -7,6 +7,7 @@ import '../core/providers/app_providers.dart';
 import '../core/theme/app_theme.dart';
 import 'platform/desktop_ui_style.dart';
 import 'routes/desktop_router.dart';
+import 'shell/desktop_nav_model.dart';
 import 'theme/desktop_native_theme.dart';
 import 'utils/desktop_shortcuts.dart';
 import 'utils/desktop_smooth_scroll.dart';
@@ -77,7 +78,11 @@ Widget _wrapContent({
   if (addTitleBar) {
     content = Column(
       children: [
-        AppTitleBar(brightness: brightness),
+        AppTitleBar(
+          brightness: brightness,
+          backgroundColor: materialTheme.scaffoldBackgroundColor,
+          leading: _SidebarToggleButton(brightness: brightness),
+        ),
         Expanded(child: child),
       ],
     );
@@ -194,12 +199,63 @@ class _MaterialDesktopApp extends ConsumerWidget {
         return DesktopShortcutsWrapper(
           child: Column(
             children: [
-              AppTitleBar(brightness: brightness),
+              AppTitleBar(
+                brightness: brightness,
+                backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+                leading: _SidebarToggleButton(brightness: brightness),
+              ),
               Expanded(child: child!),
             ],
           ),
         );
       },
+    );
+  }
+}
+
+/// 标题栏里的侧边栏汉堡按钮：切换 [sidebarCollapsedProvider]，
+/// 三端外壳据此收起/展开侧边栏。放在标题栏可保证任何显示模式下都可点击。
+class _SidebarToggleButton extends ConsumerStatefulWidget {
+  final Brightness brightness;
+
+  const _SidebarToggleButton({required this.brightness});
+
+  @override
+  ConsumerState<_SidebarToggleButton> createState() =>
+      _SidebarToggleButtonState();
+}
+
+class _SidebarToggleButtonState extends ConsumerState<_SidebarToggleButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.brightness == Brightness.dark;
+    final fg = isDark
+        ? Colors.white.withValues(alpha: 0.85)
+        : Colors.black.withValues(alpha: 0.75);
+    final hoverBg = isDark
+        ? Colors.white.withValues(alpha: 0.10)
+        : Colors.black.withValues(alpha: 0.06);
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => ref.read(sidebarCollapsedProvider.notifier).state =
+            !ref.read(sidebarCollapsedProvider),
+        child: Container(
+          width: 34,
+          height: 28,
+          decoration: BoxDecoration(
+            color: _hovered ? hoverBg : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Icon(Icons.menu_rounded, size: 16, color: fg),
+        ),
+      ),
     );
   }
 }

@@ -93,8 +93,8 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
           ListTile(
             title: const Text('图片缓存'),
             subtitle: cacheSizeAsync.when(
-              data: (info) =>
-                  Text('已用 ${info.imageFormatted}，$imageExpiryDays天后过期'),
+              data: (info) => Text(
+                  '已用 ${info.imageFormatted} / 上限 6 GB，$imageExpiryDays 天后过期'),
               loading: () => const Text('计算中...'),
               error: (_, __) => const Text('获取失败'),
             ),
@@ -105,14 +105,14 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
           ),
           ListTile(
             title: const Text('图片缓存过期天数'),
-            subtitle: Text('$imageExpiryDays 天'),
+            subtitle: Text('$imageExpiryDays 天（超 6GB 时自动清理最旧）'),
             onTap: () => _showImageCacheExpirySelector(context),
           ),
           ListTile(
-            title: const Text('视频缓存'),
+            title: const Text('视频播放缓存'),
             subtitle: cacheSizeAsync.when(
               data: (info) => Text(
-                '已用 ${info.videoFormatted}，上限 ${videoMaxSizeMB >= 1024 ? '${(videoMaxSizeMB / 1024).toStringAsFixed(0)} GB' : '$videoMaxSizeMB MB'}',
+                '已用 ${info.videoFormatted}，上限 ${CacheService.formatSizeMB(videoMaxSizeMB)}（缓存到磁盘，不占内存）',
               ),
               loading: () => const Text('计算中...'),
               error: (_, __) => const Text('获取失败'),
@@ -123,10 +123,9 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
             ),
           ),
           ListTile(
-            title: const Text('视频缓存上限'),
-            subtitle: Text(videoMaxSizeMB >= 1024
-                ? '${(videoMaxSizeMB / 1024).toStringAsFixed(0)} GB'
-                : '$videoMaxSizeMB MB'),
+            title: const Text('视频播放缓存上限'),
+            subtitle: Text(
+                '${CacheService.formatSizeMB(videoMaxSizeMB)}（300MB – 8GB，越大越流畅但占磁盘越多）'),
             onTap: () => _showVideoCacheMaxSizeSelector(context),
           ),
           ListTile(
@@ -182,8 +181,8 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('清除视频缓存'),
-        content: const Text('确定清除所有已下载的视频？此操作不可恢复。'),
+        title: const Text('清除视频播放缓存'),
+        content: const Text('确定清除视频播放的磁盘缓存？只影响临时播放缓冲，不影响已下载的影片。'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -263,35 +262,62 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
   }
 
   void _showVideoCacheMaxSizeSelector(BuildContext context) {
-    final sizes = [256, 512, 1024, 2048, 4096, 8192];
-    final labels = sizes
-        .map((s) => s >= 1024 ? '${(s / 1024).toStringAsFixed(0)} GB' : '$s MB')
-        .toList();
-    final current = ref.read(videoCacheMaxSizeMBProvider);
+    const minMB = CacheService.videoCacheMinMB; // 300
+    const maxMB = CacheService.videoCacheMaxMB; // 8192
+    var value = ref
+        .read(videoCacheMaxSizeMBProvider)
+        .clamp(minMB, maxMB)
+        .toDouble();
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('视频缓存上限'),
-        content: RadioGroup<int>(
-          groupValue: current,
-          onChanged: (value) async {
-            if (value != null) {
-              ref.read(videoCacheMaxSizeMBProvider.notifier).state = value;
-              await CacheService.setVideoCacheMaxSizeMB(value);
-            }
-            if (ctx.mounted) {
-              Navigator.pop(ctx);
-            }
-          },
-          child: Column(
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('视频播放缓存上限'),
+          content: Column(
             mainAxisSize: MainAxisSize.min,
-            children: List.generate(
-                sizes.length,
-                (i) => RadioListTile<int>(
-                      title: Text(labels[i]),
-                      value: sizes[i],
-                    )),
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                CacheService.formatSizeMB(value.round()),
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 24, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 8),
+              Slider(
+                min: minMB.toDouble(),
+                max: maxMB.toDouble(),
+                // 约 100MB 一档
+                divisions: ((maxMB - minMB) / 100).round(),
+                value: value,
+                label: CacheService.formatSizeMB(value.round()),
+                onChanged: (v) => setLocal(() => value = v),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                child: Text(
+                  '缓存写入磁盘（不占内存）。越大缓冲越多、拖动/弱网更稳，但占用磁盘越多。',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
+            ],
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final mb = value.round();
+                ref.read(videoCacheMaxSizeMBProvider.notifier).state = mb;
+                await CacheService.setVideoCacheMaxSizeMB(mb);
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: const Text('确定'),
+            ),
+          ],
         ),
       ),
     );

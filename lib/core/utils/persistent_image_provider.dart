@@ -6,7 +6,8 @@ import 'package:http_client_helper/http_client_helper.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:path/path.dart';
-import 'package:path_provider/path_provider.dart';
+
+import '../services/cache_service.dart';
 
 /// 持久化网络图片 Provider
 /// 
@@ -76,12 +77,9 @@ class PersistentNetworkImageProvider
 
   static Future<String> get _cachePath async {
     if (_persistentCachePath != null) return _persistentCachePath!;
-    final appDir = await getApplicationDocumentsDirectory();
-    _persistentCachePath = join(appDir.path, 'persistent_image_cache');
-    final dir = Directory(_persistentCachePath!);
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
+    // 与 CacheService 共用统一的便携 temp 缓存根目录（程序目录下的 temp/image_cache），
+    // 自包含、不污染系统目录，也避免被 OneDrive 同步。
+    _persistentCachePath = await CacheService.imageCacheDirPath;
     return _persistentCachePath!;
   }
 

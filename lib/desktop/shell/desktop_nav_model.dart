@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers/app_providers.dart';
+
+/// 侧边栏是否收起（三端外壳共用，由标题栏的汉堡按钮切换）。
+final sidebarCollapsedProvider = StateProvider<bool>((ref) => false);
 
 /// 桌面端主导航项（三种外壳共用）。
 class DesktopNavItem {

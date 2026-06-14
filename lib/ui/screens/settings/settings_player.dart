@@ -285,12 +285,14 @@ class PlayerSettingsScreen extends ConsumerWidget {
   }
 
   void _showCoreSelector(BuildContext context, WidgetRef ref) {
+    // ExoPlayer/AVPlayer 与原生 MPV 都是移动端专属；桌面端只有 media_kit(mpv)。
     final children = <Widget>[
-      const RadioListTile<String>(
-        title: Text('ExoPlayer/AVPlayer'),
-        subtitle: Text('轻量稳定，适合大多数场景'),
-        value: 'exoPlayer',
-      ),
+      if (Platform.isAndroid || Platform.isIOS)
+        const RadioListTile<String>(
+          title: Text('ExoPlayer/AVPlayer'),
+          subtitle: Text('轻量稳定，适合大多数场景'),
+          value: 'exoPlayer',
+        ),
       if (Platform.isAndroid)
         const RadioListTile<String>(
           title: Text('MPV 原生'),
