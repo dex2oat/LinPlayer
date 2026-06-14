@@ -15,6 +15,7 @@ import '../../../core/services/app_logger.dart';
 import '../../../core/services/mpv_player_adapter.dart';
 import '../../../core/services/subtitle_track_matcher.dart';
 import '../../../core/services/video_player_service.dart';
+import '../../../core/services/watch_history/watch_history_models.dart';
 import '../../../core/utils/playback_url_resolver.dart';
 import '../../utils/desktop_smooth_scroll.dart';
 

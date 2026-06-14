@@ -12,6 +12,7 @@ class PlayerSettingsScreen extends ConsumerWidget {
     final hardwareDecoding = ref.watch(hardwareDecodingProvider);
     final backgroundPlayback = ref.watch(backgroundPlaybackProvider);
     final autoPlayNext = ref.watch(autoPlayNextProvider);
+    final watchedThreshold = ref.watch(watchedThresholdProvider);
     final preferredSubtitleLanguage =
         ref.watch(preferredSubtitleLanguageProvider);
     final preferredAudioLanguage = ref.watch(preferredAudioLanguageProvider);
@@ -88,7 +89,19 @@ class PlayerSettingsScreen extends ConsumerWidget {
             onChanged: (value) =>
                 ref.read(autoPlayNextProvider.notifier).state = value,
           ),
+          /*
+          ListTile(
+            title: const Text('宸茬湅鍒ゅ畾闃堝€?),
+            subtitle: Text('$watchedThreshold%'),
+            onTap: () => _showWatchedThresholdSelector(context, ref),
+          ),
 
+          */
+          ListTile(
+            title: const Text('已看判定阈值'),
+            subtitle: Text('$watchedThreshold%'),
+            onTap: () => _showWatchedThresholdSelector(context, ref),
+          ),
           const Divider(),
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -356,6 +369,67 @@ class PlayerSettingsScreen extends ConsumerWidget {
                 .map((speed) => RadioListTile<double>(
                       title: Text('${speed}x'),
                       value: speed,
+                    ))
+                .toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /*
+  void _showWatchedThresholdSelector(BuildContext context, WidgetRef ref) {
+    final thresholds = [75, 80, 85, 90, 95];
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('宸茬湅鍒ゅ畾闃堝€?),
+        content: RadioGroup<int>(
+          groupValue: ref.read(watchedThresholdProvider),
+          onChanged: (value) {
+            if (value != null) {
+              ref.read(watchedThresholdProvider.notifier).state = value;
+            }
+            Navigator.pop(context);
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: thresholds
+                .map((threshold) => RadioListTile<int>(
+                      title: Text('$threshold%'),
+                      subtitle:
+                          Text('鎾斁杩涘害杈惧埌 $threshold% 鍚庤涓哄凡鐪?),
+                      value: threshold,
+                    ))
+                .toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  */
+  void _showWatchedThresholdSelector(BuildContext context, WidgetRef ref) {
+    final thresholds = [75, 80, 85, 90, 95];
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('已看判定阈值'),
+        content: RadioGroup<int>(
+          groupValue: ref.read(watchedThresholdProvider),
+          onChanged: (value) {
+            if (value != null) {
+              ref.read(watchedThresholdProvider.notifier).state = value;
+            }
+            Navigator.pop(context);
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: thresholds
+                .map((threshold) => RadioListTile<int>(
+                      title: Text('$threshold%'),
+                      subtitle: Text('播放进度达到 $threshold% 后视为已看'),
+                      value: threshold,
                     ))
                 .toList(),
           ),

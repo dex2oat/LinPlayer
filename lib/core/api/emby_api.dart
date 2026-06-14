@@ -335,7 +335,7 @@ class EmbyHomeApi implements HomeApi {
       'ParentIndexNumber,ImageTags,ParentThumbItemId,ParentThumbImageTag,'
       'ParentPrimaryImageItemId,ParentPrimaryImageTag,SeriesThumbImageTag,'
       'SeriesPrimaryImageTag,BackdropImageTags,ChildCount,RecursiveItemCount,'
-      'CanDownload,SupportsSync';
+      'CanDownload,SupportsSync,ProviderIds,PresentationUniqueKey,Path';
 
   @override
   Future<List<MediaItem>> getResumeItems() async {
@@ -435,7 +435,8 @@ class EmbyLibraryApi implements LibraryApi {
       'RunTimeTicks,ProductionYear,Tags,SeriesName,IndexNumber,'
       'ParentIndexNumber,ImageTags,ParentThumbItemId,ParentThumbImageTag,'
       'ParentPrimaryImageItemId,ParentPrimaryImageTag,SeriesThumbImageTag,'
-      'SeriesPrimaryImageTag,ChildCount,RecursiveItemCount,CanDownload,SupportsSync';
+      'SeriesPrimaryImageTag,ChildCount,RecursiveItemCount,CanDownload,SupportsSync,'
+      'ProviderIds,PresentationUniqueKey,Path';
 
   @override
   Future<List<MediaItem>> getLibraryItems({
@@ -499,7 +500,8 @@ class EmbyMediaApi implements MediaApi {
       'ParentIndexNumber,People,Studios,ImageTags,ParentThumbItemId,'
       'ParentThumbImageTag,ParentPrimaryImageItemId,ParentPrimaryImageTag,'
       'SeriesThumbImageTag,SeriesPrimaryImageTag,BackdropImageTags,'
-      'ChildCount,RecursiveItemCount,CanDownload,SupportsSync';
+      'ChildCount,RecursiveItemCount,CanDownload,SupportsSync,ProviderIds,'
+      'PresentationUniqueKey,Path';
 
   @override
   Future<MediaItem> getItemDetails(String itemId) async {
@@ -615,7 +617,7 @@ class EmbySearchApi implements SearchApi {
       'Recursive': recursive,
       'Limit': 50,
       'Fields':
-          'Overview,Genres,CommunityRating,OfficialRating,PremiereDate,RunTimeTicks,ProductionYear,Tags,SeriesName,IndexNumber,ParentIndexNumber',
+          'Overview,Genres,CommunityRating,OfficialRating,PremiereDate,RunTimeTicks,ProductionYear,Tags,SeriesName,IndexNumber,ParentIndexNumber,ProviderIds,PresentationUniqueKey,Path',
     });
     return _parseItemList(resp.data);
   }
@@ -628,7 +630,7 @@ class EmbySearchApi implements SearchApi {
       'Recursive': true,
       'Limit': 50,
       'Fields':
-          'Overview,Genres,CommunityRating,OfficialRating,PremiereDate,RunTimeTicks,ProductionYear,Tags,SeriesName,IndexNumber,ParentIndexNumber',
+          'Overview,Genres,CommunityRating,OfficialRating,PremiereDate,RunTimeTicks,ProductionYear,Tags,SeriesName,IndexNumber,ParentIndexNumber,ProviderIds,PresentationUniqueKey,Path',
     });
     final items = _parseItemList(resp.data);
     final serverName = _client._dio.options.baseUrl;
@@ -918,6 +920,9 @@ MediaItem _parseMediaItem(Map<String, dynamic> d) {
     id: d['Id']?.toString() ?? '',
     name: d['Name'] ?? '',
     type: d['Type'] ?? '',
+    providerIds: _parseProviderIds(d['ProviderIds']),
+    presentationUniqueKey: d['PresentationUniqueKey']?.toString(),
+    path: d['Path']?.toString(),
     overview: d['Overview']?.toString(),
     primaryImageTag: _extractImageTag(d, 'Primary'),
     thumbImageTag: _extractImageTag(d, 'Thumb'),
@@ -968,6 +973,28 @@ MediaItem _parseMediaItem(Map<String, dynamic> d) {
   );
 }
 
+Map<String, String>? _parseProviderIds(dynamic value) {
+  if (value is! Map) {
+    return null;
+  }
+  final providerIds = <String, String>{};
+  value.forEach((key, entryValue) {
+    final normalizedKey = key?.toString();
+    final normalizedValue = entryValue?.toString();
+    if (normalizedKey == null ||
+        normalizedKey.isEmpty ||
+        normalizedValue == null ||
+        normalizedValue.isEmpty) {
+      return;
+    }
+    providerIds[normalizedKey] = normalizedValue;
+  });
+  if (providerIds.isEmpty) {
+    return null;
+  }
+  return providerIds;
+}
+
 String? _extractImageTag(Map<String, dynamic> d, String type) {
   final tags = d['ImageTags'] as Map<String, dynamic>?;
   final value = tags?[type]?.toString();
@@ -1014,34 +1041,36 @@ Season _parseSeason(Map<String, dynamic> d, String seriesId) {
   );
 }
 
-  Episode _parseEpisode(Map<String, dynamic> d) {
-    final ud = d['UserData'] as Map<String, dynamic>?;
-    return Episode(
-      id: d['Id']?.toString() ?? '',
-      name: d['Name'] ?? '',
-      indexNumber: d['IndexNumber'] as int?,
-      primaryImageTag: _extractImageTag(d, 'Primary') ?? d['PrimaryImageTag']?.toString(),
-      thumbImageTag: _extractImageTag(d, 'Thumb') ?? d['ThumbImageTag']?.toString(),
-      seriesId: d['SeriesId']?.toString() ?? '',
-      seasonId: d['SeasonId']?.toString() ?? '',
-      parentThumbItemId: d['ParentThumbItemId']?.toString(),
-      parentThumbImageTag: d['ParentThumbImageTag']?.toString(),
-      parentPrimaryImageItemId: d['ParentPrimaryImageItemId']?.toString(),
-      parentPrimaryImageTag: d['ParentPrimaryImageTag']?.toString(),
-      seriesThumbImageTag: d['SeriesThumbImageTag']?.toString(),
-      seriesPrimaryImageTag: d['SeriesPrimaryImageTag']?.toString(),
-      runTimeTicks: _parseTicks(d['RunTimeTicks']),
-      userData: ud != null
-          ? UserData(
-              playbackPositionTicks:
-                  _parseTicksDouble(ud['PlaybackPositionTicks']),
-              played: ud['Played'] as bool?,
-              isFavorite: ud['IsFavorite'] as bool?,
-            )
-          : null,
-      overview: d['Overview']?.toString(),
-    );
-  }
+Episode _parseEpisode(Map<String, dynamic> d) {
+  final ud = d['UserData'] as Map<String, dynamic>?;
+  return Episode(
+    id: d['Id']?.toString() ?? '',
+    name: d['Name'] ?? '',
+    indexNumber: d['IndexNumber'] as int?,
+    primaryImageTag:
+        _extractImageTag(d, 'Primary') ?? d['PrimaryImageTag']?.toString(),
+    thumbImageTag:
+        _extractImageTag(d, 'Thumb') ?? d['ThumbImageTag']?.toString(),
+    seriesId: d['SeriesId']?.toString() ?? '',
+    seasonId: d['SeasonId']?.toString() ?? '',
+    parentThumbItemId: d['ParentThumbItemId']?.toString(),
+    parentThumbImageTag: d['ParentThumbImageTag']?.toString(),
+    parentPrimaryImageItemId: d['ParentPrimaryImageItemId']?.toString(),
+    parentPrimaryImageTag: d['ParentPrimaryImageTag']?.toString(),
+    seriesThumbImageTag: d['SeriesThumbImageTag']?.toString(),
+    seriesPrimaryImageTag: d['SeriesPrimaryImageTag']?.toString(),
+    runTimeTicks: _parseTicks(d['RunTimeTicks']),
+    userData: ud != null
+        ? UserData(
+            playbackPositionTicks:
+                _parseTicksDouble(ud['PlaybackPositionTicks']),
+            played: ud['Played'] as bool?,
+            isFavorite: ud['IsFavorite'] as bool?,
+          )
+        : null,
+    overview: d['Overview']?.toString(),
+  );
+}
 
 Person _parsePersonFromItem(Map<String, dynamic> d) {
   return Person(

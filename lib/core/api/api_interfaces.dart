@@ -12,16 +12,17 @@
 abstract class AuthApi {
   /// 用户登录
   /// POST /Users/AuthenticateByName
-  Future<AuthResult> login({required String username, required String password});
-  
+  Future<AuthResult> login(
+      {required String username, required String password});
+
   /// 登出
   /// POST /Sessions/Logout
   Future<void> logout();
-  
+
   /// 获取当前用户信息
   /// GET /Users/Me
   Future<User> getCurrentUser();
-  
+
   /// 刷新Token（如支持）
   Future<AuthResult> refreshToken();
 }
@@ -31,7 +32,7 @@ class AuthResult {
   final String userId;
   final String serverId;
   final User user;
-  
+
   AuthResult({
     required this.accessToken,
     required this.userId,
@@ -45,10 +46,10 @@ class AuthResult {
 abstract class UserApi {
   /// 获取用户资料
   Future<User> getUser(String userId);
-  
+
   /// 标记为已播放
   Future<void> markAsPlayed(String itemId);
-  
+
   /// 标记为未播放
   Future<void> markAsUnplayed(String itemId);
 }
@@ -59,7 +60,7 @@ class User {
   final String? primaryImageTag;
   final bool? hasPassword;
   final List<String>? configuration;
-  
+
   User({
     required this.id,
     required this.name,
@@ -75,11 +76,11 @@ abstract class ServerApi {
   /// 获取公开服务器信息（无需认证）
   /// GET /System/Info/Public
   Future<ServerInfo> getPublicInfo(String baseUrl);
-  
+
   /// 获取系统信息
   /// GET /System/Info
   Future<ServerInfo> getSystemInfo();
-  
+
   /// 测试连接
   Future<bool> testConnection(String baseUrl);
 }
@@ -90,7 +91,7 @@ class ServerInfo {
   final String version;
   final String? productName;
   final String? operatingSystem;
-  
+
   ServerInfo({
     required this.id,
     required this.serverName,
@@ -106,11 +107,11 @@ abstract class HomeApi {
   /// 获取继续观看列表
   /// GET /Users/{UserId}/Items/Resume
   Future<List<MediaItem>> getResumeItems();
-  
+
   /// 获取下一集
   /// GET /Shows/NextUp
   Future<List<MediaItem>> getNextUp();
-  
+
   /// 获取媒体库列表
   /// GET /Users/{userId}/Views
   Future<List<Library>> getLibraries();
@@ -118,11 +119,11 @@ abstract class HomeApi {
   /// 获取媒体数量统计
   /// GET /Items/Counts
   Future<MediaCounts> getMediaCounts();
-  
+
   /// 获取最新添加
   /// GET /Users/{UserId}/Items/Latest
   Future<List<MediaItem>> getLatestItems(String libraryId, {int limit = 20});
-  
+
   /// 获取随机推荐
   Future<List<MediaItem>> getRandomRecommendations({int limit = 8});
 }
@@ -153,7 +154,7 @@ abstract class LibraryApi {
     int startIndex = 0,
     int limit = 50,
   });
-  
+
   /// 获取筛选条件
   /// GET /Items/Filters
   Future<Filters> getFilters(String libraryId);
@@ -163,7 +164,7 @@ class Filters {
   final List<String> genres;
   final List<String> years;
   final List<String> officialRatings;
-  
+
   Filters({
     required this.genres,
     required this.years,
@@ -177,19 +178,19 @@ abstract class MediaApi {
   /// 获取单项详情
   /// GET /Items/{Id}
   Future<MediaItem> getItemDetails(String itemId);
-  
+
   /// 获取相似推荐
   /// GET /Items/{Id}/Similar
   Future<List<MediaItem>> getSimilarItems(String itemId);
-  
+
   /// 获取季列表
   /// GET /Shows/{Id}/Seasons
   Future<List<Season>> getSeasons(String seriesId);
-  
+
   /// 获取集列表
   /// GET /Shows/{Id}/Episodes
   Future<List<Episode>> getEpisodes(String seriesId, {String? seasonId});
-  
+
   /// 获取人物参演
   /// GET /Persons/{Name}/Items
   Future<List<Person>> getPersonItems(String personName);
@@ -199,6 +200,9 @@ class MediaItem {
   final String id;
   final String name;
   final String type; // 'Movie', 'Series', 'Episode', 'Season'
+  final Map<String, String>? providerIds;
+  final String? presentationUniqueKey;
+  final String? path;
   final String? overview;
   final String? primaryImageTag;
   final String? thumbImageTag;
@@ -234,6 +238,9 @@ class MediaItem {
     required this.id,
     required this.name,
     required this.type,
+    this.providerIds,
+    this.presentationUniqueKey,
+    this.path,
     this.overview,
     this.primaryImageTag,
     this.thumbImageTag,
@@ -265,7 +272,7 @@ class MediaItem {
     this.canDownload,
     this.remoteTrailers,
   });
-  
+
   String? get formattedRuntime {
     if (runTimeTicks == null) return null;
     final minutes = (runTimeTicks! / 10000000 / 60).round();
@@ -276,11 +283,23 @@ class MediaItem {
     }
     return '${mins}m';
   }
-  
+
   bool get isWatched => userData?.played ?? false;
-  double? get progress => userData?.playbackPositionTicks != null && runTimeTicks != null
-      ? userData!.playbackPositionTicks! / runTimeTicks!
-      : null;
+  String? get tmdbId {
+    final ids = providerIds;
+    if (ids == null || ids.isEmpty) return null;
+    for (final entry in ids.entries) {
+      if (entry.key.toLowerCase() == 'tmdb' && entry.value.isNotEmpty) {
+        return entry.value;
+      }
+    }
+    return null;
+  }
+
+  double? get progress =>
+      userData?.playbackPositionTicks != null && runTimeTicks != null
+          ? userData!.playbackPositionTicks! / runTimeTicks!
+          : null;
 }
 
 class UserData {
@@ -288,7 +307,7 @@ class UserData {
   final bool? played;
   final bool? isFavorite;
   final double? playCount;
-  
+
   UserData({
     this.playbackPositionTicks,
     this.played,
@@ -306,7 +325,7 @@ class Season {
   final String seriesId;
   final String? seriesPrimaryImageTag;
   final String? seriesThumbImageTag;
-  
+
   Season({
     required this.id,
     required this.name,
@@ -337,7 +356,7 @@ class Episode {
   final UserData? userData;
   final String? overview;
   final List<String>? remoteTrailers;
-  
+
   Episode({
     required this.id,
     required this.name,
@@ -357,7 +376,7 @@ class Episode {
     this.overview,
     this.remoteTrailers,
   });
-  
+
   String? get formattedRuntime {
     if (runTimeTicks == null) return null;
     final minutes = (runTimeTicks! / 10000000 / 60).round();
@@ -376,7 +395,7 @@ class Person {
   final String? primaryImageTag;
   final String? role;
   final String? type; // 'Actor', 'Director', etc.
-  
+
   Person({
     required this.id,
     required this.name,
@@ -391,7 +410,7 @@ class Library {
   final String name;
   final String? primaryImageTag;
   final String collectionType; // 'movies', 'tvshows', etc.
-  
+
   Library({
     required this.id,
     required this.name,
@@ -406,11 +425,11 @@ abstract class SearchApi {
   /// 搜索建议
   /// GET /Search/Hints
   Future<List<MediaItem>> getSearchHints(String query);
-  
+
   /// 搜索
   /// GET /Users/{UserId}/Items?SearchTerm=...
   Future<List<MediaItem>> search(String query, {bool recursive = true});
-  
+
   /// 聚合搜索（跨服务器）
   Future<Map<String, List<MediaItem>>> searchAggregate(String query);
 }
@@ -421,7 +440,7 @@ abstract class PlaybackApi {
   /// 获取播放信息
   /// POST /Items/{Id}/PlaybackInfo
   Future<PlaybackInfo> getPlaybackInfo(String itemId);
-  
+
   /// 获取视频流
   /// GET /Videos/{Id}/stream
   String getVideoStreamUrl(
@@ -437,19 +456,20 @@ abstract class PlaybackApi {
     bool enableAutoStreamCopyAudio = true,
     bool enableAutoStreamCopyVideo = true,
   });
-  
+
   /// 获取字幕流URL
   /// GET /Videos/{itemId}/{mediaSourceId}/Subtitles/{index}/Stream.{codec}
-  String getSubtitleStreamUrl(String itemId, String mediaSourceId, int index, String codec);
-  
+  String getSubtitleStreamUrl(
+      String itemId, String mediaSourceId, int index, String codec);
+
   /// 播放开始上报
   /// POST /Sessions/Playing
   Future<void> reportPlaybackStart(PlaybackStartInfo info);
-  
+
   /// 播放进度上报
   /// POST /Sessions/Playing/Progress
   Future<void> reportPlaybackProgress(PlaybackProgressInfo info);
-  
+
   /// 播放停止上报
   /// POST /Sessions/Playing/Stopped
   Future<void> reportPlaybackStopped(PlaybackStopInfo info);
@@ -459,7 +479,7 @@ class PlaybackInfo {
   final String itemId;
   final List<MediaSource> mediaSources;
   final List<PlaybackDeviceProfile>? deviceProfiles;
-  
+
   PlaybackInfo({
     required this.itemId,
     required this.mediaSources,
@@ -475,7 +495,7 @@ class MediaSource {
   final int? size;
   final int? runTimeTicks;
   final List<MediaStream> mediaStreams;
-  
+
   MediaSource({
     required this.id,
     this.name,
@@ -505,7 +525,7 @@ class MediaStream {
   final int? height;
   final int? channels;
   final int? bitRate;
-  
+
   MediaStream({
     required this.index,
     required this.type,
@@ -525,7 +545,7 @@ class MediaStream {
     this.channels,
     this.bitRate,
   });
-  
+
   bool get isVideo => type == 'Video';
   bool get isAudio => type == 'Audio';
   bool get isSubtitle => type == 'Subtitle';
@@ -539,7 +559,9 @@ class MediaStream {
     if (siblings != null && siblings.length > 1) {
       final pos = siblings.indexWhere((s) => s.index == index);
       if (pos >= 0) {
-        final label = codecStr.isNotEmpty ? '$lang $codecStr #${pos + 1} ($ext)' : '$lang #${pos + 1} ($ext)';
+        final label = codecStr.isNotEmpty
+            ? '$lang $codecStr #${pos + 1} ($ext)'
+            : '$lang #${pos + 1} ($ext)';
         return label;
       }
     }
@@ -550,11 +572,27 @@ class MediaStream {
   static String _languageName(String? code) {
     if (code == null || code.isEmpty) return '未知';
     const map = {
-      'chi': '中文', 'zh': '中文', 'chs': '简体中文', 'cht': '繁体中文',
-      'zho': '中文', 'eng': '英语', 'en': '英语', 'jpn': '日语', 'ja': '日语',
-      'kor': '韩语', 'ko': '韩语', 'fre': '法语', 'fra': '法语',
-      'ger': '德语', 'deu': '德语', 'spa': '西班牙语', 'por': '葡萄牙语',
-      'rus': '俄语', 'ita': '意大利语', 'tha': '泰语', 'vie': '越南语',
+      'chi': '中文',
+      'zh': '中文',
+      'chs': '简体中文',
+      'cht': '繁体中文',
+      'zho': '中文',
+      'eng': '英语',
+      'en': '英语',
+      'jpn': '日语',
+      'ja': '日语',
+      'kor': '韩语',
+      'ko': '韩语',
+      'fre': '法语',
+      'fra': '法语',
+      'ger': '德语',
+      'deu': '德语',
+      'spa': '西班牙语',
+      'por': '葡萄牙语',
+      'rus': '俄语',
+      'ita': '意大利语',
+      'tha': '泰语',
+      'vie': '越南语',
       'und': '未知',
     };
     return map[code.toLowerCase()] ?? code;
@@ -575,7 +613,7 @@ class PlaybackDeviceProfile {
   // 设备能力配置
   final String name;
   final int? maxStreamingBitrate;
-  
+
   PlaybackDeviceProfile({
     required this.name,
     this.maxStreamingBitrate,
@@ -588,7 +626,7 @@ class PlaybackStartInfo {
   final String? audioStreamIndex;
   final String? subtitleStreamIndex;
   final String? playMethod;
-  
+
   PlaybackStartInfo({
     required this.itemId,
     required this.mediaSourceId,
@@ -605,7 +643,7 @@ class PlaybackProgressInfo {
   final bool isPaused;
   final bool isMuted;
   final double volumeLevel;
-  
+
   PlaybackProgressInfo({
     required this.itemId,
     required this.mediaSourceId,
@@ -620,7 +658,7 @@ class PlaybackStopInfo {
   final String itemId;
   final String mediaSourceId;
   final int positionTicks;
-  
+
   PlaybackStopInfo({
     required this.itemId,
     required this.mediaSourceId,
@@ -638,7 +676,7 @@ abstract class FavoriteApi {
   /// 添加到收藏
   /// POST /Users/{UserId}/FavoriteItems/{Id}
   Future<void> addFavorite(String itemId);
-  
+
   /// 取消收藏
   /// DELETE /Users/{UserId}/FavoriteItems/{Id}
   Future<void> removeFavorite(String itemId);
@@ -659,7 +697,7 @@ class Session {
   final String? deviceName;
   final bool? isNowPlaying;
   final NowPlayingItem? nowPlayingItem;
-  
+
   Session({
     required this.id,
     this.userName,
@@ -676,7 +714,7 @@ class NowPlayingItem {
   final String? seriesName;
   final int? runTimeTicks;
   final int? playbackPositionTicks;
-  
+
   NowPlayingItem({
     required this.id,
     required this.name,
@@ -699,15 +737,18 @@ abstract class ImageApi {
     double quality = 90,
     String? format,
   });
-  
+
   /// 获取主封面
-  String getPrimaryImageUrl(String itemId, {String? tag, int? maxWidth, String? format});
+  String getPrimaryImageUrl(String itemId,
+      {String? tag, int? maxWidth, String? format});
 
   /// 获取缩略图/横图
-  String getThumbImageUrl(String itemId, {String? tag, int? maxWidth, String? format});
-  
+  String getThumbImageUrl(String itemId,
+      {String? tag, int? maxWidth, String? format});
+
   /// 获取背景图
-  String getBackdropImageUrl(String itemId, {String? tag, int? maxWidth, String? format});
+  String getBackdropImageUrl(String itemId,
+      {String? tag, int? maxWidth, String? format});
 }
 
 // ==================== 弹幕相关 ====================
@@ -830,13 +871,13 @@ abstract class ApiClientFactory {
 
   /// 切换活跃线路
   void switchLine(String lineUrl);
-  
+
   /// 获取当前线路
   String get currentLine;
-  
+
   /// 设置认证Token
   void setAuthToken(String token);
-  
+
   /// 清除认证
   void clearAuth();
 }

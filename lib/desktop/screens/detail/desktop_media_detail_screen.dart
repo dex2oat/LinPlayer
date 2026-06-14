@@ -11,6 +11,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../../core/services/watch_history/watch_history_models.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/utils/color_extractor.dart';
 import '../../../core/utils/playback_url_resolver.dart';

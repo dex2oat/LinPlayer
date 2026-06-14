@@ -36,6 +36,7 @@ Map<String, dynamic> _buildBackupPayload(WidgetRef ref) {
       'hardwareDecoding': ref.read(hardwareDecodingProvider),
       'backgroundPlayback': ref.read(backgroundPlaybackProvider),
       'autoPlayNext': ref.read(autoPlayNextProvider),
+      'watchedThreshold': ref.read(watchedThresholdProvider),
       'danmakuEnabled': ref.read(danmakuEnabledProvider),
       'danmakuOpacity': ref.read(danmakuOpacityProvider),
       'danmakuFontSize': ref.read(danmakuFontSizeProvider),
@@ -116,6 +117,10 @@ Future<void> _restoreBackupPayload(
   if (settings['autoPlayNext'] is bool) {
     ref.read(autoPlayNextProvider.notifier).state =
         settings['autoPlayNext'] as bool;
+  }
+  if (settings['watchedThreshold'] is num) {
+    ref.read(watchedThresholdProvider.notifier).state =
+        (settings['watchedThreshold'] as num).toInt();
   }
   if (settings['danmakuEnabled'] is bool) {
     ref.read(danmakuEnabledProvider.notifier).state =

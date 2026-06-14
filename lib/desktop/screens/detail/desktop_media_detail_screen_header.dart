@@ -543,6 +543,25 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
         arguments,
         mode: ProcessStartMode.detached,
       );
+      final scopeKey =
+          buildWatchHistoryScopeKey(ref.read(currentServerProvider));
+      if (scopeKey != null) {
+        try {
+          await ref.read(watchHistoryProvider).capturePlayback(
+                scopeKey: scopeKey,
+                api: api,
+                item: widget.item,
+                positionTicks:
+                    (widget.item.userData?.playbackPositionTicks ?? 0).round(),
+                source: WatchHistoryWriteSource.externalMpv,
+                watchedThresholdPercent: ref.read(watchedThresholdProvider),
+                incrementPlayCount: true,
+                force: true,
+              );
+        } catch (_) {
+          // Ignore local history persistence failures for external players.
+        }
+      }
 
       if (!mounted) return;
       final videoStream = mediaSource.mediaStreams.firstWhere(

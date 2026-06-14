@@ -11,8 +11,8 @@ import 'mpv_player_adapter.dart';
 
 /// 播放器内核类型
 enum PlayerCoreType {
-  exoPlayer,  // ExoPlayer（Android 原生）
-  mpv,        // MPV（libmpv FFI）
+  exoPlayer, // ExoPlayer（Android 原生）
+  mpv, // MPV（libmpv FFI）
 }
 
 /// 视频播放器服务
@@ -101,7 +101,8 @@ class VideoPlayerService extends ChangeNotifier {
   /// 拖动方向：1=向前, -1=向后, 0=无
   int get dragDirection {
     if (!_isDragging) return 0;
-    final dx = _dragPreviewPosition.inMilliseconds - _dragStartPosition.inMilliseconds;
+    final dx =
+        _dragPreviewPosition.inMilliseconds - _dragStartPosition.inMilliseconds;
     if (dx < -500) return 1; // 向后拖 = 快进
     if (dx > 500) return -1; // 向前拖 = 快退
     return 0;
@@ -114,9 +115,10 @@ class VideoPlayerService extends ChangeNotifier {
   ///
   /// ExoPlayer 返回 Texture widget，media_kit 返回 Video widget
   Widget buildVideo() {
-    return _adapter?.buildVideo() ?? const Center(
-      child: CircularProgressIndicator(),
-    );
+    return _adapter?.buildVideo() ??
+        const Center(
+          child: CircularProgressIndicator(),
+        );
   }
 
   /// libass 是否已就绪
@@ -481,7 +483,8 @@ class VideoPlayerService extends ChangeNotifier {
   }
 
   /// 加载字幕数据到内存（通过 libass）
-  Future<void> loadLibassSubtitleMemory(Uint8List data, {String codec = 'ass'}) async {
+  Future<void> loadLibassSubtitleMemory(Uint8List data,
+      {String codec = 'ass'}) async {
     await _adapter?.loadLibassSubtitleMemory(data, codec: codec);
   }
 
@@ -531,7 +534,11 @@ class VideoPlayerService extends ChangeNotifier {
 
   /// 播放
   Future<void> play() async {
-    if (_adapter == null || !isInitialized || hasError || isPlaying || isPlaybackActionPending) {
+    if (_adapter == null ||
+        !isInitialized ||
+        hasError ||
+        isPlaying ||
+        isPlaybackActionPending) {
       return;
     }
     _setPendingPlayingState(true);
@@ -553,7 +560,10 @@ class VideoPlayerService extends ChangeNotifier {
         return;
       } catch (error) {
         lastError = error;
-        if (_hasReportedStart || attempt >= 2 || _primaryVideoUrl == null || _primaryVideoUrl!.isEmpty) {
+        if (_hasReportedStart ||
+            attempt >= 2 ||
+            _primaryVideoUrl == null ||
+            _primaryVideoUrl!.isEmpty) {
           rethrow;
         }
         _startupRetryCount = attempt + 1;
@@ -583,7 +593,11 @@ class VideoPlayerService extends ChangeNotifier {
 
   /// 暂停
   Future<void> pause() async {
-    if (_adapter == null || !isInitialized || hasError || !isPlaying || isPlaybackActionPending) {
+    if (_adapter == null ||
+        !isInitialized ||
+        hasError ||
+        !isPlaying ||
+        isPlaybackActionPending) {
       return;
     }
     _setPendingPlayingState(false);
@@ -593,6 +607,7 @@ class VideoPlayerService extends ChangeNotifier {
       _setPendingPlayingState(null);
       rethrow;
     }
+    _reportProgress();
     _cancelHideControlsTimer();
     notifyListeners();
   }
@@ -614,6 +629,7 @@ class VideoPlayerService extends ChangeNotifier {
     await _adapter?.seekTo(position);
     _dragPreviewPosition = Duration.zero;
     _isScrubbingPosition = false;
+    _reportProgress();
     notifyListeners();
   }
 
@@ -773,11 +789,14 @@ class VideoPlayerService extends ChangeNotifier {
     if (dx.abs() > dy.abs() * 1.5) {
       // 水平滑动（进度调节）：需要水平移动明显大于垂直移动
       _isScrubbingPosition = true;
-      final progressDelta = dx / width * duration.inMilliseconds * 0.5; // 降低灵敏度系数
-      final newPositionMs = max(0, min(
-        _dragStartPosition.inMilliseconds + progressDelta.round(),
-        duration.inMilliseconds,
-      ));
+      final progressDelta =
+          dx / width * duration.inMilliseconds * 0.5; // 降低灵敏度系数
+      final newPositionMs = max(
+          0,
+          min(
+            _dragStartPosition.inMilliseconds + progressDelta.round(),
+            duration.inMilliseconds,
+          ));
       _dragPreviewPosition = Duration(milliseconds: newPositionMs);
       notifyListeners();
     } else if (dy.abs() > dx.abs() * 1.5) {
@@ -786,7 +805,8 @@ class VideoPlayerService extends ChangeNotifier {
       if (_dragStartX < width / 2) {
         // 左侧：亮度
         final brightnessDelta = -dy / height * 0.7; // 降低灵敏度系数
-        final newBrightness = (_dragStartBrightness + brightnessDelta).clamp(0.1, 1.0);
+        final newBrightness =
+            (_dragStartBrightness + brightnessDelta).clamp(0.1, 1.0);
         setBrightness(newBrightness);
       } else {
         // 右侧：音量
@@ -801,7 +821,8 @@ class VideoPlayerService extends ChangeNotifier {
   void onDragEnd(DragEndDetails details) {
     if (!_isDragging) return;
     _isDragging = false;
-    final targetPosition = _isScrubbingPosition ? _dragPreviewPosition : _dragStartPosition;
+    final targetPosition =
+        _isScrubbingPosition ? _dragPreviewPosition : _dragStartPosition;
     _isScrubbingPosition = false;
     seekTo(targetPosition);
     _startHideControlsTimer();

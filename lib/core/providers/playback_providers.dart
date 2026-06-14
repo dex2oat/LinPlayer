@@ -98,6 +98,26 @@ final autoPlayNextProvider =
   );
 });
 
+final watchedThresholdProvider =
+    StateNotifierProvider<PreferenceNotifier<int>, int>((ref) {
+  int normalize(int? value) {
+    final threshold = value ?? 90;
+    return threshold.clamp(75, 95);
+  }
+
+  return PreferenceNotifier<int>(
+    defaultValue: 90,
+    readValue: (prefs) =>
+        normalize(prefs.getInt('linplayer_watched_threshold')),
+    writeValue: (prefs, value) async {
+      await prefs.setInt(
+        'linplayer_watched_threshold',
+        normalize(value),
+      );
+    },
+  );
+});
+
 final danmakuEnabledProvider =
     StateNotifierProvider<PreferenceNotifier<bool>, bool>((ref) {
   return PreferenceNotifier<bool>(

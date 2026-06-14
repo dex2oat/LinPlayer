@@ -1,6 +1,7 @@
 part of 'desktop_player_screen.dart';
 
-class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
+class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
+    with WidgetsBindingObserver {
   static const MethodChannel _windowChannel =
       MethodChannel('com.linplayer/window');
   static const Duration _uiRefreshInterval = Duration(milliseconds: 200);
@@ -50,6 +51,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _playerService = VideoPlayerService();
     _initializePlayer();
     _focusNode.requestFocus();
@@ -113,6 +115,14 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
         }
       });
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      return;
+    }
+    unawaited(_persistCurrentWatchHistory(force: true));
   }
 
   void _checkSkipOpening() {
@@ -210,6 +220,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
           milliseconds: (item.userData!.playbackPositionTicks! / 10000).round(),
         );
       }
+      final startPositionTicks = (startPosition?.inMilliseconds ?? 0) * 10000;
 
       ref.read(currentPlayingItemProvider.notifier).state = item;
       ref.read(selectedMediaSourceProvider.notifier).state = mediaSource?.id;
@@ -248,16 +259,31 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
           try {
             await api.playback.reportPlaybackStart(info);
           } catch (_) {}
+          await _writeWatchHistoryForItem(
+            item: item,
+            positionTicks: startPositionTicks,
+            incrementPlayCount: true,
+            force: true,
+          );
         },
         onProgress: (info) async {
           try {
             await api.playback.reportPlaybackProgress(info);
           } catch (_) {}
+          await _writeWatchHistoryForItem(
+            item: item,
+            positionTicks: info.positionTicks,
+          );
         },
         onStop: (info) async {
           try {
             await api.playback.reportPlaybackStopped(info);
           } catch (_) {}
+          await _writeWatchHistoryForItem(
+            item: item,
+            positionTicks: info.positionTicks,
+            force: true,
+          );
         },
       );
 
@@ -2088,6 +2114,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _cancelHideControlsTimer();
     _skipButtonTimer?.cancel();
     _speedLongPressTimer?.cancel();
@@ -2097,6 +2124,44 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen> {
     _focusNode.dispose();
     _playerService.dispose();
     super.dispose();
+  }
+
+  Future<void> _writeWatchHistoryForItem({
+    required MediaItem item,
+    required int positionTicks,
+    bool incrementPlayCount = false,
+    bool force = false,
+  }) async {
+    final scopeKey = buildWatchHistoryScopeKey(ref.read(currentServerProvider));
+    if (scopeKey == null) {
+      return;
+    }
+    try {
+      await ref.read(watchHistoryProvider).capturePlayback(
+            scopeKey: scopeKey,
+            api: ref.read(apiClientProvider),
+            item: item,
+            positionTicks: positionTicks,
+            source: WatchHistoryWriteSource.internalPlayer,
+            watchedThresholdPercent: ref.read(watchedThresholdProvider),
+            incrementPlayCount: incrementPlayCount,
+            force: force,
+          );
+    } catch (_) {
+      // Ignore local watch history failures to avoid interrupting playback.
+    }
+  }
+
+  Future<void> _persistCurrentWatchHistory({bool force = false}) async {
+    final item = ref.read(currentPlayingItemProvider);
+    if (item == null) {
+      return;
+    }
+    await _writeWatchHistoryForItem(
+      item: item,
+      positionTicks: (_playerService.position.inMilliseconds * 10000).round(),
+      force: force,
+    );
   }
 
   // ========== 统计信息显示 ==========

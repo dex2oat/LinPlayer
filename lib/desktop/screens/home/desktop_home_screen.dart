@@ -1,10 +1,13 @@
 import 'package:flutter/gestures.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../../core/services/watch_history/watch_history_models.dart';
 import '../../../ui/utils/media_helpers.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
 import '../../widgets/desktop_cover_radii.dart';
@@ -29,6 +32,7 @@ class _DesktopHomeScreenState extends ConsumerState<DesktopHomeScreen>
     ref.invalidate(librariesProvider);
     ref.invalidate(randomRecommendationsProvider);
     ref.invalidate(embyMediaCountsProvider);
+    unawaited(ref.read(watchHistoryRestoreQueueProvider.notifier).refresh());
   }
 
   @override
@@ -70,6 +74,12 @@ class _DesktopHomeScreenState extends ConsumerState<DesktopHomeScreen>
         physics: const ClampingScrollPhysics(),
         slivers: [
           const SliverToBoxAdapter(child: _DesktopTopBar()),
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(24, 0, 24, 12),
+              child: _DesktopWatchHistoryRestoreBanner(),
+            ),
+          ),
           if (servers.isEmpty)
             const SliverFillRemaining(
               child: _EmptyServerGuide(),
@@ -220,6 +230,160 @@ class DesktopResumeScreen extends ConsumerWidget {
   }
 }
 
+class _DesktopWatchHistoryRestoreBanner extends ConsumerWidget {
+  const _DesktopWatchHistoryRestoreBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final currentServer = ref.watch(currentServerProvider);
+    if (!serverHasUsableAuth(currentServer)) {
+      return const SizedBox.shrink();
+    }
+
+    final queueState = ref.watch(watchHistoryRestoreQueueProvider);
+    final candidate = queueState.currentCandidate;
+    if (candidate == null) {
+      return const SizedBox.shrink();
+    }
+
+    final theme = Theme.of(context);
+    final bannerColor =
+        theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.92);
+    final title = _buildRestoreBannerTitle(candidate.record);
+    final subtitle = candidate.record.played
+        ? '已看完 · ${candidate.reason}'
+        : '上次看到 ${_formatHistoryPosition(candidate.record.lastPositionTicks)} · ${candidate.reason}';
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      child: Container(
+        key: ValueKey(candidate.record.recordId),
+        decoration: BoxDecoration(
+          color: bannerColor,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.35),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 18,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.restore,
+                color: theme.colorScheme.primary,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '发现一条可恢复的本地观看记录',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyLarge?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            TextButton(
+              onPressed: () {
+                ref
+                    .read(watchHistoryRestoreQueueProvider.notifier)
+                    .skipCurrent();
+              },
+              child: const Text('跳过'),
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton(
+              onPressed: () async {
+                await ref
+                    .read(watchHistoryRestoreQueueProvider.notifier)
+                    .deleteCurrentRecord();
+              },
+              child: const Text('不要记录'),
+            ),
+            const SizedBox(width: 8),
+            FilledButton(
+              onPressed: () async {
+                final restored = await ref
+                    .read(watchHistoryRestoreQueueProvider.notifier)
+                    .restoreCurrent();
+                if (!context.mounted || restored) {
+                  return;
+                }
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('恢复失败，请稍后再试')),
+                );
+              },
+              child: const Text('恢复'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _buildRestoreBannerTitle(WatchHistoryRecord record) {
+    if (record.mediaKind == WatchHistoryMediaKind.episode &&
+        record.seriesTitle != null &&
+        record.seriesTitle!.isNotEmpty) {
+      final season = record.seasonNumber;
+      final episode = record.episodeNumber;
+      if (season != null && episode != null) {
+        return '${record.seriesTitle} S${season.toString().padLeft(2, '0')}E${episode.toString().padLeft(2, '0')}';
+      }
+      return record.seriesTitle!;
+    }
+    return record.title;
+  }
+
+  String _formatHistoryPosition(int ticks) {
+    final totalSeconds = ticks ~/ 10000000;
+    final hours = totalSeconds ~/ 3600;
+    final minutes = (totalSeconds % 3600) ~/ 60;
+    final seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+    }
+    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+}
+
 class _DesktopTopBar extends ConsumerStatefulWidget {
   const _DesktopTopBar();
 
@@ -269,6 +433,9 @@ class _DesktopTopBarState extends ConsumerState<_DesktopTopBar> {
               ref.invalidate(librariesProvider);
               ref.invalidate(randomRecommendationsProvider);
               ref.invalidate(embyMediaCountsProvider);
+              unawaited(
+                ref.read(watchHistoryRestoreQueueProvider.notifier).refresh(),
+              );
             },
           ),
         ],
@@ -469,6 +636,9 @@ class _DesktopTopBarState extends ConsumerState<_DesktopTopBar> {
           ref.invalidate(resumeItemsProvider);
           ref.invalidate(randomRecommendationsProvider);
           ref.invalidate(embyMediaCountsProvider);
+          unawaited(
+            ref.read(watchHistoryRestoreQueueProvider.notifier).refresh(),
+          );
         },
       ),
     );
