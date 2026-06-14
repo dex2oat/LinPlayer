@@ -49,7 +49,9 @@ class _HeroSection extends ConsumerWidget {
       item,
       maxWidth: 600,
     );
-    final videoUrl = (useVideoBackground && item.remoteTrailers != null && item.remoteTrailers!.isNotEmpty)
+    final videoUrl = (useVideoBackground &&
+            item.remoteTrailers != null &&
+            item.remoteTrailers!.isNotEmpty)
         ? item.remoteTrailers!.first
         : null;
 
@@ -75,7 +77,9 @@ class _HeroSection extends ConsumerWidget {
                   placeholder: imageUrls.isNotEmpty
                       ? MediaImage(
                           imageUrl: imageUrls.first,
-                          imageUrls: imageUrls.length > 1 ? imageUrls.sublist(1) : null,
+                          imageUrls: imageUrls.length > 1
+                              ? imageUrls.sublist(1)
+                              : null,
                           width: double.infinity,
                           height: heroHeight,
                           fit: BoxFit.cover,
@@ -457,7 +461,7 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
         ),
         _MenuItem(
           icon: Icons.open_in_new,
-          label: '调用外部 MPV 播放器',
+          label: '调用外部播放器',
           onTap: () {
             _hideAllOverlays();
             _launchExternalPlayer();
@@ -476,11 +480,102 @@ class _InfoSectionState extends ConsumerState<_InfoSection> {
     Overlay.of(context).insert(_playMenuOverlay!);
   }
 
-  void _launchExternalPlayer() {
-    // TODO: 实现外部播放器调用
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('正在启动外部播放器...')),
-    );
+  Future<void> _launchExternalPlayer() async {
+    final externalMpvPath = ref.read(externalMpvPathProvider).trim();
+    if (externalMpvPath.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先在设置里选择外部 MPV 路径')),
+      );
+      return;
+    }
+
+    final executableFile = File(externalMpvPath);
+    if (!await executableFile.exists()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('外部 MPV 路径不存在，请重新在设置中选择')),
+      );
+      return;
+    }
+
+    try {
+      final api = ref.read(apiClientProvider);
+      final playbackInfo =
+          await ref.read(playbackInfoProvider(widget.itemId).future);
+      final selection = buildPlaybackSelection(
+        playbackInfo: playbackInfo,
+        itemId: widget.itemId,
+        preferredMediaSourceId: ref.read(selectedMediaSourceProvider),
+        playSessionId:
+            '${widget.itemId}-${DateTime.now().microsecondsSinceEpoch}',
+      );
+      final mediaSource = selection.mediaSource;
+      if (mediaSource == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('当前条目暂无可播放媒体源')),
+        );
+        return;
+      }
+
+      final request = selection.primaryRequest;
+      final videoUrl = api.playback.getVideoStreamUrl(
+        request.itemId,
+        mediaSourceId: request.mediaSourceId,
+        container: request.container,
+        playSessionId: request.playSessionId,
+        staticStream: request.staticStream,
+        allowDirectPlay: request.allowDirectPlay,
+        allowDirectStream: request.allowDirectStream,
+        allowTranscoding: request.allowTranscoding,
+        enableAutoStreamCopy: request.enableAutoStreamCopy,
+        enableAutoStreamCopyAudio: request.enableAutoStreamCopyAudio,
+        enableAutoStreamCopyVideo: request.enableAutoStreamCopyVideo,
+      );
+      final startSeconds = _resumeStartSeconds();
+      final arguments = <String>[
+        if (startSeconds != null) '--start=$startSeconds',
+        videoUrl,
+      ];
+
+      await Process.start(
+        externalMpvPath,
+        arguments,
+        mode: ProcessStartMode.detached,
+      );
+
+      if (!mounted) return;
+      final videoStream = mediaSource.mediaStreams.firstWhere(
+        (stream) => stream.isVideo,
+        orElse: () => MediaStream(index: 0, type: 'Video'),
+      );
+      final sourceLabel = _buildSourceDisplayName(mediaSource, videoStream);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已调用外部播放器播放：$sourceLabel')),
+      );
+    } on ProcessException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('启动外部播放器失败：${error.message}')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('获取外部播放地址失败：$error')),
+      );
+    }
+  }
+
+  String? _resumeStartSeconds() {
+    final ticks = widget.item.userData?.playbackPositionTicks;
+    if (ticks == null || ticks <= 0) {
+      return null;
+    }
+    final seconds = ticks / 10000000;
+    if (seconds < 5) {
+      return null;
+    }
+    return seconds.toStringAsFixed(3);
   }
 
   void _handleDownload() {

@@ -20,6 +20,7 @@ class PlayerSettingsScreen extends ConsumerWidget {
     final subtitleFont = ref.watch(subtitleFontProvider);
     final subtitleBackground = ref.watch(subtitleBackgroundProvider);
     final mpvDolbyVisionFix = ref.watch(mpvDolbyVisionFixProvider);
+    final externalMpvPath = ref.watch(externalMpvPathProvider);
     final impellerEnabled = ref.watch(impellerEnabledProvider);
     final exoLibass = ref.watch(exoLibassProvider);
 
@@ -197,6 +198,38 @@ class PlayerSettingsScreen extends ConsumerWidget {
             onChanged: (value) =>
                 ref.read(impellerEnabledProvider.notifier).state = value,
           ),
+          if (isDesktopPlatform) ...[
+            const Divider(),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text(
+                '外部播放器',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey,
+                ),
+              ),
+            ),
+            ListTile(
+              title: const Text('外部 MPV 路径'),
+              subtitle: Text(
+                externalMpvPath.isEmpty ? '点击选择外部 MPV 可执行文件' : externalMpvPath,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: externalMpvPath.isEmpty
+                  ? const Icon(Icons.chevron_right)
+                  : IconButton(
+                      tooltip: '清除路径',
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        ref.read(externalMpvPathProvider.notifier).state = '';
+                      },
+                    ),
+              onTap: () => _pickExternalMpvPath(context, ref),
+            ),
+          ],
           if (!isDesktopPlatform && playerCore == 'exoPlayer')
             SwitchListTile(
               title: const Text('EXO 启用 ASS 原生渲染'),
@@ -455,6 +488,30 @@ class PlayerSettingsScreen extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+
+  Future<void> _pickExternalMpvPath(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final result = await FilePicker.platform.pickFiles(
+      dialogTitle: '选择外部 MPV 可执行文件',
+      allowMultiple: false,
+      type: Platform.isWindows ? FileType.custom : FileType.any,
+      allowedExtensions: Platform.isWindows ? const ['exe'] : null,
+    );
+    final path = result?.files.single.path;
+    if (path == null || path.isEmpty) {
+      return;
+    }
+
+    ref.read(externalMpvPathProvider.notifier).state = path;
+    if (!context.mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已更新外部 MPV 路径')),
     );
   }
 }
