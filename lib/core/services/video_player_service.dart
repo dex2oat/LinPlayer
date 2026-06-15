@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/api_interfaces.dart';
+import '../../plugins/runtime/plugin_player_bridge.dart';
 import 'app_logger.dart';
 import 'player_adapter.dart';
 import 'exo_player_adapter.dart';
@@ -153,7 +154,32 @@ class VideoPlayerService extends ChangeNotifier {
     }
   }
 
+  /// 向插件系统暴露的播放控制钩子。
+  PluginPlayerHooks? _pluginHooks;
+
+  /// 播放事件附带的基础数据（详细媒体信息由插件 ctx.player.getCurrentMedia 获取）。
+  Map<String, dynamic> _pluginEventData() => {
+        'itemId': _currentItemId,
+        'mediaSourceId': _mediaSourceId,
+        'positionMs': position.inMilliseconds,
+        'durationMs': duration.inMilliseconds,
+      };
+
+  /// 绑定插件播放桥（让插件可控制播放并接收事件）。
+  void _bindPluginBridge() {
+    final hooks = PluginPlayerHooks();
+    hooks.play = () => play();
+    hooks.pause = () => pause();
+    hooks.seek = (pos) => seekTo(pos);
+    hooks.position = () => position;
+    hooks.duration = () => duration;
+    hooks.isPlaying = () => isPlaying;
+    _pluginHooks = hooks;
+    PluginPlayerBridge.instance.bind(hooks);
+  }
+
   void _bindAdapterCallbacks() {
+    _bindPluginBridge();
     _adapter!.setCallbacks(PlayerStateCallbacks(
       onPositionChanged: () => notifyListeners(),
       onDurationChanged: () => notifyListeners(),
@@ -168,14 +194,18 @@ class VideoPlayerService extends ChangeNotifier {
             _hasReportedStart = true;
           }
           _startHideControlsTimer();
+          PluginPlayerBridge.instance.emit('onPlay', _pluginEventData());
         } else {
           _cancelHideControlsTimer();
+          PluginPlayerBridge.instance.emit('onPause', _pluginEventData());
         }
         notifyListeners();
       },
       onBufferingStateChanged: () => notifyListeners(),
       onCompleted: () {
         notifyListeners();
+        // 通知插件系统：一集播放结束（示例 Telegram 插件监听此事件）。
+        PluginPlayerBridge.instance.emit('onPlayEnd', _pluginEventData());
         // TODO: 自动播放下一集
       },
       onError: () {
@@ -920,6 +950,11 @@ class VideoPlayerService extends ChangeNotifier {
     _stopProgressTimer();
     _cancelHideControlsTimer();
     _hasReportedStart = false;
+    final hooks = _pluginHooks;
+    if (hooks != null) {
+      PluginPlayerBridge.instance.unbind(hooks);
+      _pluginHooks = null;
+    }
     await _adapter?.dispose();
     _adapter = null;
     super.dispose();

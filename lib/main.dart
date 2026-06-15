@@ -11,6 +11,7 @@ import 'core/theme/app_motion.dart';
 import 'core/utils/platform_utils.dart';
 import 'desktop/desktop_app.dart';
 import 'desktop/window/desktop_window_chrome.dart';
+import 'plugins/plugin_system.dart';
 import 'tv/tv_app.dart';
 
 Future<void> main() async {
@@ -40,24 +41,20 @@ Future<void> main() async {
   // 启动清理放后台，不阻塞启动。
   unawaited(CacheService.runStartupCleanup());
 
-  if (isTvPlatform) {
-    // TV 端入口
-    runApp(
-      const ProviderScope(
-        child: LinPlayerTvApp(),
-      ),
-    );
-  } else if (isDesktopPlatform) {
-    runApp(
-      const ProviderScope(
-        child: LinPlayerDesktopApp(),
-      ),
-    );
-  } else {
-    runApp(
-      const ProviderScope(
-        child: LinPlayerApp(),
-      ),
-    );
-  }
+  // 插件系统：共享同一个 ProviderContainer，便于插件 ctx 读取应用状态。
+  final container = ProviderContainer();
+  await initializePluginSystem(container);
+
+  final Widget appWidget = isTvPlatform
+      ? const LinPlayerTvApp()
+      : isDesktopPlatform
+          ? const LinPlayerDesktopApp()
+          : const LinPlayerApp();
+
+  runApp(
+    UncontrolledProviderScope(
+      container: container,
+      child: appWidget,
+    ),
+  );
 }

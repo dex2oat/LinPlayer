@@ -68,8 +68,16 @@ dependencies:
   macos_ui: ^2.2.2
   window_manager: ^0.5.1
 
+  # 插件系统：QuickJS 脚本引擎（每个插件独立 isolate，崩溃/超时隔离）
+  # 使用仓库内 vendored 版本：已打 Dart 3 / ffi 2.x 兼容补丁（见 third_party/flutter_qjs）。
+  flutter_qjs:
+    path: third_party/flutter_qjs
+  # 插件系统：.lpk 打包解压（zip）
+  archive: ^3.6.1
+
 dependency_overrides:
-  # 如有需要
+  # vendored 的 third_party/flutter_qjs 已放宽 ffi 约束为 >=1.0.0 <3.0.0，
+  # 与项目 ffi ^2.2.0 兼容，无需 override。
 
 dev_dependencies:
   flutter_test:

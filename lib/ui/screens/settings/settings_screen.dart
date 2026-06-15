@@ -12,6 +12,7 @@ import '../../../core/utils/danmaku_filter.dart';
 import '../../../core/utils/platform_utils.dart';
 import '../../../core/api/danmaku/danmaku_source.dart';
 import '../../../core/api/danmaku/danmaku_service.dart';
+import '../../../plugins/ui/plugin_management_screen.dart';
 
 part 'settings_backup_restore.dart';
 part 'settings_danmaku.dart';

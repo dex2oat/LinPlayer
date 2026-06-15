@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/theme/app_motion.dart';
+import '../../plugins/plugin_system.dart';
 import '../screens/detail/desktop_media_detail_screen.dart';
 import '../screens/player/desktop_player_screen.dart';
 import '../screens/search/desktop_search_screen.dart';
@@ -22,6 +23,8 @@ final _rootNavigatorKey = GlobalKey<NavigatorState>();
 
 final desktopRouterProvider = Provider<GoRouter>((ref) {
   final startupPage = ref.watch(startupPageProvider);
+  // 把桌面根导航器交给插件系统，供插件 UI（Toast/Dialog/表单/openPage）使用。
+  attachPluginNavigator(_rootNavigatorKey);
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
     initialLocation: desktopStartupLocationFor(startupPage),

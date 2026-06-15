@@ -1,0 +1,308 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+
+import '../../core/providers/app_preferences.dart';
+import '../../core/services/app_logger.dart';
+import '../models/plugin_extension_point.dart';
+import '../models/plugin_info.dart';
+import '../models/plugin_manifest.dart';
+import '../models/plugin_permission.dart';
+import '../runtime/plugin_context_bridge.dart';
+import '../runtime/plugin_runtime.dart';
+import '../runtime/plugin_storage.dart';
+import 'plugin_extension_registry.dart';
+import 'plugin_installer.dart';
+
+/// 插件管理器：扫描、安装、卸载、启用/禁用、生命周期管理。
+///
+/// - 每个启用的插件拥有独立 [PluginRuntime]（独立 QuickJS isolate）；
+/// - 启用状态持久化在 shared_preferences；
+/// - 插件失控（超时/崩溃）会被自动禁用并标记 faulted，不影响主程序与其他插件。
+class PluginManager extends ChangeNotifier {
+  static final AppLogger _log = AppLogger();
+  static const _enabledKey = 'linplayer_enabled_plugins';
+
+  /// 全局单例（UI 深处/JS 回调链路使用）。
+  static PluginManager? _instance;
+  static PluginManager get instance {
+    final i = _instance;
+    if (i == null) {
+      throw StateError('PluginManager 尚未初始化，请先调用 PluginManager.ensureInitialized');
+    }
+    return i;
+  }
+
+  final PluginExtensionRegistry registry;
+
+  late final String _pluginsRootDir;
+  late final String _dataRootDir;
+  late final PluginInstaller _installer;
+
+  final Map<String, PluginInfo> _plugins = {};
+  final Map<String, PluginRuntime> _runtimes = {};
+  Set<String> _enabledIds = {};
+  bool _initialized = false;
+
+  PluginManager({PluginExtensionRegistry? registry})
+      : registry = registry ?? PluginExtensionRegistry();
+
+  List<PluginInfo> get plugins => _plugins.values.toList(growable: false);
+  String get pluginsRootDir => _pluginsRootDir;
+
+  PluginInfo? pluginById(String id) => _plugins[id];
+  PluginRuntime? runtimeOf(String id) => _runtimes[id];
+
+  /// 初始化目录、读取启用集合、扫描并激活已启用插件。
+  static Future<PluginManager> ensureInitialized(
+      {PluginExtensionRegistry? registry}) async {
+    if (_instance != null) return _instance!;
+    final mgr = PluginManager(registry: registry);
+    await mgr._init();
+    _instance = mgr;
+    return mgr;
+  }
+
+  Future<void> _init() async {
+    if (_initialized) return;
+    final docs = await getApplicationDocumentsDirectory();
+    _pluginsRootDir = p.join(docs.path, 'plugins');
+    _dataRootDir = p.join(docs.path, 'plugin_data');
+    await Directory(_pluginsRootDir).create(recursive: true);
+    await Directory(_dataRootDir).create(recursive: true);
+    _installer = PluginInstaller(_pluginsRootDir);
+
+    _enabledIds = _readEnabledIds();
+    _initialized = true;
+    await scan();
+  }
+
+  Set<String> _readEnabledIds() {
+    try {
+      final list = AppPreferencesStore.instance.getStringList(_enabledKey);
+      return list?.toSet() ?? {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> _persistEnabledIds() async {
+    try {
+      await AppPreferencesStore.instance
+          .setStringList(_enabledKey, _enabledIds.toList());
+    } catch (e) {
+      _log.w('PluginManager', '持久化启用状态失败: $e');
+    }
+  }
+
+  /// 扫描插件目录，加载清单，并激活所有已启用插件。
+  Future<void> scan() async {
+    final root = Directory(_pluginsRootDir);
+    if (!await root.exists()) return;
+
+    _plugins.clear();
+    await for (final entry in root.list()) {
+      if (entry is! Directory) continue;
+      try {
+        final info = await _installer.loadFromDirectory(entry.path);
+        _plugins[info.id] = info;
+      } catch (e) {
+        _log.w('PluginManager', '跳过无效插件目录 ${entry.path}: $e');
+      }
+    }
+
+    // 激活已启用的插件。
+    for (final info in _plugins.values) {
+      if (_enabledIds.contains(info.id)) {
+        await _activate(info);
+      }
+    }
+    notifyListeners();
+  }
+
+  /// 从 .lpk 文件安装（安装后默认禁用，需用户授权后启用）。
+  Future<PluginInfo> install(String lpkPath) async {
+    final info = await _installer.installFromLpkFile(lpkPath);
+    _plugins[info.id] = info;
+    notifyListeners();
+    return info;
+  }
+
+  /// 启用插件（假定用户已同意其权限）。
+  Future<void> enable(String id) async {
+    final info = _plugins[id];
+    if (info == null) throw StateError('插件不存在: $id');
+    _enabledIds.add(id);
+    await _persistEnabledIds();
+    await _activate(info);
+    notifyListeners();
+  }
+
+  /// 禁用插件。
+  Future<void> disable(String id) async {
+    _enabledIds.remove(id);
+    await _persistEnabledIds();
+    await _deactivate(id);
+    final info = _plugins[id];
+    if (info != null) {
+      info.status = PluginStatus.disabled;
+      info.error = null;
+    }
+    notifyListeners();
+  }
+
+  /// 卸载插件（先禁用，再删除目录）。
+  Future<void> uninstall(String id) async {
+    await _deactivate(id);
+    _enabledIds.remove(id);
+    await _persistEnabledIds();
+    final info = _plugins.remove(id);
+    if (info != null) {
+      try {
+        await _installer.uninstall(info.directory);
+      } catch (e) {
+        _log.w('PluginManager', '删除插件目录失败: $e');
+      }
+    }
+    notifyListeners();
+  }
+
+  /// 触发某扩展的回调（actions/contextMenus/settingsPages 的 handler）。
+  Future<dynamic> triggerExtension(PluginExtension ext,
+      [List<dynamic> args = const []]) async {
+    final runtime = _runtimes[ext.pluginId];
+    if (runtime == null) {
+      _log.w('PluginManager', '插件未运行，无法触发: ${ext.pluginId}');
+      return null;
+    }
+    final handler = ext.data['handler'];
+    return _invokeHandlerValue(runtime, handler, args);
+  }
+
+  /// 触发任意 handler 值（兼容 {__handler__:id} 与字符串函数名）。
+  Future<dynamic> _invokeHandlerValue(
+      PluginRuntime runtime, dynamic handler, List<dynamic> args) async {
+    if (handler is Map && handler['__handler__'] != null) {
+      return runtime.invokeHandler('${handler['__handler__']}', args);
+    }
+    if (handler is String && handler.isNotEmpty) {
+      return runtime.invokeNamed(handler, args);
+    }
+    return null;
+  }
+
+  /// 调用插件内某个具名字段的 handler（如设置页的 load/submit）。
+  Future<dynamic> invokeExtensionField(
+      PluginExtension ext, String field, List<dynamic> args) async {
+    final runtime = _runtimes[ext.pluginId];
+    if (runtime == null) return null;
+    return _invokeHandlerValue(runtime, ext.data[field], args);
+  }
+
+  // ---- 内部：激活/停用 ----
+
+  Future<void> _activate(PluginInfo info) async {
+    if (_runtimes.containsKey(info.id)) return; // 已激活
+    info.status = PluginStatus.loading;
+    info.error = null;
+    notifyListeners();
+
+    try {
+      final source = await File(info.entryPath).readAsString();
+      final permissions = PluginGrantedPermissions(info.manifest.permissions);
+      final storage = PluginStorage(
+        pluginId: info.id,
+        dataDir: p.join(_dataRootDir, info.id),
+      );
+      final bridge = PluginContextBridge(
+        manifest: info.manifest,
+        permissions: permissions,
+        storage: storage,
+        registry: registry,
+        httpAllowedHosts: _allowedHostsOf(info.manifest),
+      );
+      final runtime = PluginRuntime(
+        manifest: info.manifest,
+        mainJsSource: source,
+        bridge: bridge,
+        permissions: permissions,
+        onFault: (reason) => _handleFault(info.id, reason),
+      );
+      _runtimes[info.id] = runtime;
+
+      // 注册 manifest 静态声明的扩展点。
+      _registerManifestExtensions(info.manifest);
+
+      await runtime.load();
+
+      info.status = PluginStatus.enabled;
+      _log.i('PluginManager', '插件已启用: ${info.id}');
+    } catch (e, st) {
+      _log.eWithStack('PluginManager', '启用插件失败: ${info.id}', e, st);
+      info.status = PluginStatus.error;
+      info.error = '$e';
+      await _deactivate(info.id);
+    }
+    notifyListeners();
+  }
+
+  void _registerManifestExtensions(PluginManifest manifest) {
+    for (final decl in manifest.extensions) {
+      final data = Map<String, dynamic>.from(decl.data);
+      final id = '${data['id'] ?? 'static_${decl.type.id}_${data.hashCode}'}';
+      registry.register(PluginExtension(
+        pluginId: manifest.id,
+        type: decl.type,
+        id: id,
+        data: data,
+        fromManifest: true,
+      ));
+    }
+  }
+
+  Future<void> _deactivate(String id) async {
+    registry.removeAllForPlugin(id);
+    final runtime = _runtimes.remove(id);
+    if (runtime != null) {
+      try {
+        await runtime.dispose();
+      } catch (e) {
+        _log.w('PluginManager', '释放插件运行时失败 $id: $e');
+      }
+    }
+  }
+
+  void _handleFault(String id, String reason) {
+    final info = _plugins[id];
+    if (info != null) {
+      info.status = PluginStatus.error;
+      info.error = reason;
+      info.faulted = true;
+    }
+    // 失控插件强制禁用（从启用集合移除并清理运行时）。
+    _enabledIds.remove(id);
+    unawaited(_persistEnabledIds());
+    unawaited(_deactivate(id));
+    notifyListeners();
+  }
+
+  List<String> _allowedHostsOf(PluginManifest manifest) {
+    final raw = manifest.raw['httpAllowedHosts'];
+    if (raw is List) {
+      return raw.map((e) => '$e').toList();
+    }
+    return const [];
+  }
+
+  @override
+  void dispose() {
+    for (final r in _runtimes.values) {
+      unawaited(r.dispose());
+    }
+    _runtimes.clear();
+    super.dispose();
+  }
+}

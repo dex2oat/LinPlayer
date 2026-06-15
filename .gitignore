@@ -118,6 +118,14 @@ windows/flutter/ephemeral/
 linux/flutter/ephemeral/
 macos/Flutter/ephemeral/
 
+# 自动生成的插件注册文件（flutter pub get 会重新生成，不应提交）
+# 与上面 Windows 的处理保持一致，避免新增/移除插件时产生无意义 diff。
+linux/flutter/generated_plugin_registrant.cc
+linux/flutter/generated_plugin_registrant.h
+linux/flutter/generated_plugins.cmake
+macos/Flutter/GeneratedPluginRegistrant.swift
+**/generated_plugin_registrant.dart
+
 # Native build system caches
 **/.gradle/
 **/.kotlin/
@@ -128,3 +136,14 @@ macos/Flutter/ephemeral/
 *.freezed.dart
 *.mocks.dart
 packaging/
+
+# 插件系统：打包产物（.lpk 可由 tools/pack_plugin.dart 随时重新生成）
+/dist/
+*.lpk
+
+# Vendored 三方包（third_party/flutter_qjs 源码需提交，但其构建产物不提交）。
+# build/、.dart_tool/、coverage/、*.iml 已被上面的全局规则覆盖；此处仅作显式声明。
+third_party/**/.dart_tool/
+third_party/**/build/
+third_party/**/.cxx/
+third_party/**/example/

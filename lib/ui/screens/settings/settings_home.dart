@@ -31,6 +31,12 @@ class SettingsScreen extends ConsumerWidget {
             onTap: () => _showDanmakuSettings(context),
           ),
           _SettingsCard(
+            icon: Icons.extension,
+            title: '插件',
+            subtitle: '安装、启用/禁用第三方插件',
+            onTap: () => _showPlugins(context),
+          ),
+          _SettingsCard(
             icon: Icons.info,
             title: '关于',
             subtitle: '版本、开源许可、致谢',
@@ -121,6 +127,13 @@ class SettingsScreen extends ConsumerWidget {
     Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => const BackupRestoreScreen()),
+    );
+  }
+
+  void _showPlugins(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const PluginManagementScreen()),
     );
   }
 }
