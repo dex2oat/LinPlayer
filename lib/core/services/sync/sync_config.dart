@@ -8,10 +8,10 @@
 ///
 /// 注意：client_id / app_id 属于「公开标识符」，留在客户端是安全的；
 /// 真正必须保护的是 secret，代理只负责注入它。
-const String kSyncProxyBaseUrl = ''; // 例：'https://linplayer-oauth.pages.dev/api'
+const String kSyncProxyBaseUrl = 'https://291277.xyz/api';
 
 /// 可选共享密钥，需与代理环境变量 LINPLAYER_PROXY_KEY 一致。留空则不发送。
-const String kSyncProxyKey = '';
+const String kSyncProxyKey = 'm4cfEohhuz4u142d3w';
 
 bool get kUseSyncProxy => kSyncProxyBaseUrl.isNotEmpty;
 

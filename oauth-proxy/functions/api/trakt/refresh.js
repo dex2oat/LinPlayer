@@ -11,7 +11,12 @@ export async function onRequestPost({ env, request }) {
   }
   const upstream = await fetch('https://api.trakt.tv/oauth/token', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'Linplayer/1.0.0',
+      'trakt-api-version': '2',
+      'trakt-api-key': env.TRAKT_CLIENT_ID,
+    },
     body: JSON.stringify({
       refresh_token: refreshToken,
       client_id: env.TRAKT_CLIENT_ID,

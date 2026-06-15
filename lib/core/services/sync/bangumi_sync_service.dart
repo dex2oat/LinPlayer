@@ -12,7 +12,7 @@ import 'trakt_sync_service.dart' show SyncSession;
 /// 的静态页（见 docs/oauth/bangumi.html，可托管到 GitHub Pages）。
 /// 用户在设置页可改成自己托管的地址；务必与 Bangumi 应用后台登记的回调一致。
 const String kDefaultBangumiRedirectUri =
-    'https://example.github.io/LinPlayer/oauth/bangumi.html';
+    'https://291277.xyz/oauth/bangumi';
 
 /// Bangumi 同步内核：授权码（手动粘贴）登录 + 令牌刷新 + 收藏/进度写入。
 class BangumiSyncService {
