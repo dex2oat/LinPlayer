@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app_preferences.dart';
 import '../api/api_interfaces.dart' show MediaItem;
+import '../api/danmaku/danmaku_service.dart';
 import '../services/sync/bangumi_sync_service.dart';
 import '../services/sync/sync_models.dart';
 import '../services/sync/sync_scrobble_service.dart';
@@ -49,7 +50,7 @@ class SyncState {
 const String _bangumiRedirectPrefKey = 'bangumi_redirect_uri';
 
 class SyncController extends StateNotifier<SyncState> {
-  SyncController()
+  SyncController(this._ref)
       : super(SyncState(
           bangumiRedirectUri:
               AppPreferencesStore.instance.getString(_bangumiRedirectPrefKey) ??
@@ -57,6 +58,8 @@ class SyncController extends StateNotifier<SyncState> {
         )) {
     _restore();
   }
+
+  final Ref _ref;
 
   final TraktSyncService trakt = TraktSyncService();
   final BangumiSyncService bangumi = BangumiSyncService();
@@ -129,7 +132,13 @@ class SyncController extends StateNotifier<SyncState> {
         !state.isConnected(SyncService.bangumi)) {
       return;
     }
-    await _scrobble.scrobbleWatched(item, seriesProviderIds: seriesProviderIds);
+    // 弹弹play 在线时作为 Bangumi 反查首选（需配置 DANDANPLAY 凭据，与弹幕同一套）。
+    final dandanplay = _ref.read(danmakuServiceProvider).dandanplay;
+    await _scrobble.scrobbleWatched(
+      item,
+      seriesProviderIds: seriesProviderIds,
+      dandanplay: dandanplay,
+    );
   }
 
   // ---- 断开连接 ----
@@ -148,5 +157,5 @@ class SyncController extends StateNotifier<SyncState> {
 
 final syncControllerProvider =
     StateNotifierProvider<SyncController, SyncState>((ref) {
-  return SyncController();
+  return SyncController(ref);
 });

@@ -273,6 +273,7 @@ class DandanplaySource extends DanmakuSource {
       year: a['year'] as int?,
       episodeCount: a['episodeCount'] as int?,
       episodes: episodes,
+      bangumiUrl: a['bangumiUrl'] as String?,
     );
   }
 }
@@ -460,6 +461,7 @@ class CustomDanmakuSource extends DanmakuSource {
       year: a['year'] as int?,
       episodeCount: a['episodeCount'] as int?,
       episodes: episodes,
+      bangumiUrl: a['bangumiUrl'] as String?,
     );
   }
 }
