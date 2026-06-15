@@ -10,6 +10,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   Timer? _longPressTimer;
   Timer? _sleepTimer;
   double? _initialVideoAspectRatio;
+  // 本次播放是否已上报「看过」到同步服务，避免 onStop 多次触发导致重复写入。
+  bool _didScrobble = false;
 
   static VideoPlayerService? _activePlayerService;
 
@@ -260,6 +262,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         ? DateTime.now().microsecondsSinceEpoch
         : null;
 
+    _didScrobble = false;
     await _playerService.initialize(
       videoUrl: videoUrl,
       itemId: widget.itemId,
@@ -290,6 +293,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         try {
           await api.playback.reportPlaybackStopped(info);
         } catch (_) {}
+        await _maybeScrobbleWatched(info, item);
       },
     );
 
@@ -2071,6 +2075,32 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
     }
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  /// 播放停止时判断是否「看完」（进度≥90%），是则上报到已连接的同步服务。
+  /// onStop 可能因显式停止 + dispose 触发两次，用 [_didScrobble] 去重。
+  Future<void> _maybeScrobbleWatched(PlaybackStopInfo info, MediaItem item) async {
+    if (_didScrobble) return;
+    final runtime = item.runTimeTicks;
+    if (runtime == null || runtime <= 0) return;
+    if (info.positionTicks / runtime < 0.9) return;
+    _didScrobble = true;
+
+    // 剧集需要所属剧的 ProviderIds 才能给 Bangumi 取 subject_id。
+    Map<String, String>? seriesProviderIds;
+    if (item.type == 'Episode' && item.seriesId != null) {
+      try {
+        final series =
+            await ref.read(apiClientProvider).media.getItemDetails(item.seriesId!);
+        seriesProviderIds = series.providerIds;
+      } catch (_) {}
+    }
+
+    try {
+      await ref
+          .read(syncControllerProvider.notifier)
+          .scrobbleWatched(item, seriesProviderIds: seriesProviderIds);
+    } catch (_) {}
   }
 
   Future<void> _playPrevious() async {

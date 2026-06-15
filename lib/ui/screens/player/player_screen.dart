@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../../core/providers/sync_providers.dart';
 import '../../widgets/common/danmaku_search_widget.dart';
 import '../../widgets/common/danmaku_overlay.dart';
 import '../../widgets/common/media_widgets.dart';
