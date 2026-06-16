@@ -973,84 +973,8 @@ class ContinueWatchingSection extends ConsumerWidget {
   }
 
   void _showContinueWatchingSheet(BuildContext context, WidgetRef ref) {
-    final resumeAsync = ref.read(resumeItemsProvider);
-    resumeAsync.when(
-      data: (items) {
-        if (items.isEmpty) return;
-
-        // 智能分析图片尺寸偏好
-        final sizePreference = ImageSizeHelper.analyzeForResumeSection(items);
-
-        showModalBottomSheet(
-          context: context,
-          isScrollControlled: true,
-          backgroundColor: Colors.transparent,
-          builder: (context) => DraggableScrollableSheet(
-            initialChildSize: 0.7,
-            minChildSize: 0.3,
-            maxChildSize: 0.9,
-            expand: false,
-            builder: (context, scrollController) {
-              return Container(
-                decoration: BoxDecoration(
-                  color: Theme.of(context).scaffoldBackgroundColor,
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(16),
-                  ),
-                ),
-                child: SafeArea(
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Row(
-                          children: [
-                            const Text(
-                              '继续观看',
-                              style: TextStyle(
-                                  fontSize: 18, fontWeight: FontWeight.w700),
-                            ),
-                            const Spacer(),
-                            IconButton(
-                              icon: const Icon(Icons.close),
-                              onPressed: () => Navigator.pop(context),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      Expanded(
-                        child: GridView.builder(
-                          controller: scrollController,
-                          padding: const EdgeInsets.all(16),
-                          gridDelegate:
-                              const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 2,
-                            childAspectRatio: 1.5,
-                            crossAxisSpacing: 12,
-                            mainAxisSpacing: 12,
-                          ),
-                          itemCount: items.length,
-                          itemBuilder: (context, index) {
-                            final item = items[index];
-                            return _ContinueWatchingCard(
-                              item: item,
-                              sizePreference: sizePreference,
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        );
-      },
-      loading: () {},
-      error: (_, __) {},
-    );
+    // 直接导航到继续观看列表页，而不使用 ModalBottomSheet
+    context.push('/resume');
   }
 }
 

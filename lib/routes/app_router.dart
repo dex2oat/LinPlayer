@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../core/providers/app_providers.dart';
+import '../core/providers/media_providers.dart';
 import '../core/theme/app_motion.dart';
 import '../plugins/plugin_system.dart';
 import '../ui/screens/detail/media_detail_screen.dart';
@@ -19,6 +20,8 @@ import '../ui/screens/server/icon_select_screen.dart';
 import '../ui/screens/server/server_lines_screen.dart';
 import '../ui/screens/server/server_list_screen.dart';
 import '../ui/screens/settings/settings_screen.dart';
+import '../ui/utils/media_helpers.dart';
+import '../ui/widgets/common/media_widgets.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -519,16 +522,48 @@ class _FloatingTabBar extends StatelessWidget {
   }
 }
 
-class _ResumeRouteScreen extends StatelessWidget {
+class _ResumeRouteScreen extends ConsumerWidget {
   const _ResumeRouteScreen();
 
   @override
-  Widget build(BuildContext context) {
-    return const Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: EdgeInsets.only(top: 8, bottom: 24),
-          child: ContinueWatchingSection(),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final resumeAsync = ref.watch(resumeItemsProvider);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('继续观看'),
+      ),
+      body: resumeAsync.when(
+        data: (items) {
+          if (items.isEmpty) {
+            return const Center(
+              child: Text('暂无继续观看的内容'),
+            );
+          }
+
+          return GridView.builder(
+            padding: const EdgeInsets.all(16),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              childAspectRatio: 0.7,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+            ),
+            itemCount: items.length,
+            itemBuilder: (context, index) {
+              final item = items[index];
+              return MediaPoster(
+                item: item,
+                width: 150,
+                height: 200,
+                onTap: () => context.push(mediaRouteForItem(item)),
+              );
+            },
+          );
+        },
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (error, _) => Center(
+          child: Text('加载失败: $error'),
         ),
       ),
     );
