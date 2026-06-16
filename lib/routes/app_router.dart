@@ -275,49 +275,62 @@ class _AnimatedBranchContainer extends StatefulWidget {
       _AnimatedBranchContainerState();
 }
 
-class _AnimatedBranchContainerState extends State<_AnimatedBranchContainer> {
+class _AnimatedBranchContainerState extends State<_AnimatedBranchContainer>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<Offset> _animation;
   int _previousIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 240),
+      vsync: this,
+    );
+    _animation = Tween<Offset>(
+      begin: Offset.zero,
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
+    ));
+  }
 
   @override
   void didUpdateWidget(covariant _AnimatedBranchContainer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.currentIndex != widget.currentIndex) {
+      final bool moveRight = widget.currentIndex > _previousIndex;
       _previousIndex = oldWidget.currentIndex;
+
+      // 设置动画方向
+      _animation = Tween<Offset>(
+        begin: Offset(moveRight ? 0.04 : -0.04, 0),
+        end: Offset.zero,
+      ).animate(CurvedAnimation(
+        parent: _controller,
+        curve: Curves.easeOutCubic,
+      ));
+
+      _controller.forward(from: 0.0);
     }
   }
 
   @override
-  Widget build(BuildContext context) {
-    final bool moveRight = widget.currentIndex > _previousIndex;
-    return Stack(
-      fit: StackFit.expand,
-      children: List<Widget>.generate(widget.children.length, (index) {
-        final bool isActive = index == widget.currentIndex;
-        final bool isLeaving = index == _previousIndex && !isActive;
-        // 收敛位移、去掉叠加的 AnimatedOpacity（每个分支一次 saveLayer），
-        // Tab 切换只做单层轻量滑动。
-        final double targetOffset = isActive
-            ? 0
-            : isLeaving
-                ? (moveRight ? -0.04 : 0.04)
-                : (index > widget.currentIndex ? 0.04 : -0.04);
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
-        return IgnorePointer(
-          ignoring: !isActive,
-          child: TickerMode(
-            enabled: isActive || isLeaving,
-            child: AnimatedSlide(
-              duration: const Duration(milliseconds: 240),
-              curve: Curves.easeOutCubic,
-              offset: Offset(targetOffset, 0),
-              child: Offstage(
-                offstage: !isActive && !isLeaving,
-                child: widget.children[index],
-              ),
-            ),
-          ),
-        );
-      }),
+  @override
+  Widget build(BuildContext context) {
+    return SlideTransition(
+      position: _animation,
+      child: IndexedStack(
+        index: widget.currentIndex,
+        children: widget.children,
+      ),
     );
   }
 }
