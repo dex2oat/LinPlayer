@@ -469,7 +469,7 @@ class _HomeAppBarState extends ConsumerState<_HomeAppBar> {
               IconButton(
                 icon: const Icon(Icons.collections_bookmark),
                 onPressed: () {
-                  context.go('/libraries');
+                  context.push('/libraries');
                 },
               ),
               // 搜索按钮
@@ -1341,7 +1341,7 @@ class LibrariesSection extends ConsumerWidget {
                     ),
                   ),
                   GestureDetector(
-                    onTap: () => context.go('/libraries'),
+                    onTap: () => context.push('/libraries'),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
