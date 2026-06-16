@@ -91,6 +91,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                     pageBuilder: (context, state) => _buildHorizontalPage(
                       child: const AddServerScreen(),
                       state: state,
+                      direction: _PageTransitionDirection.forward,
                     ),
                   ),
                   GoRoute(
@@ -100,6 +101,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                         serverId: state.pathParameters['serverId']!,
                       ),
                       state: state,
+                      direction: _PageTransitionDirection.forward,
                     ),
                   ),
                   GoRoute(
@@ -109,6 +111,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                         serverId: state.pathParameters['serverId']!,
                       ),
                       state: state,
+                      direction: _PageTransitionDirection.forward,
                     ),
                   ),
                   GoRoute(
@@ -118,6 +121,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                         serverId: state.pathParameters['serverId']!,
                       ),
                       state: state,
+                      direction: _PageTransitionDirection.forward,
                     ),
                   ),
                 ],

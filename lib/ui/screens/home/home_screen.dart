@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/providers/app_providers.dart';
@@ -393,6 +394,11 @@ class _HomeAppBarState extends ConsumerState<_HomeAppBar> {
     _serverMenuOverlay = null;
   }
 
+  void _navigateToServerManagement() {
+    HapticFeedback.mediumImpact();
+    context.go('/');
+  }
+
   @override
   void deactivate() {
     _hideServerMenu();
@@ -420,6 +426,7 @@ class _HomeAppBarState extends ConsumerState<_HomeAppBar> {
               GestureDetector(
                 key: _serverButtonKey,
                 onTap: _showServerSelector,
+                onLongPress: _navigateToServerManagement,
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
