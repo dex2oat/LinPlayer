@@ -20,6 +20,10 @@ add_executable(${BINARY_NAME} WIN32
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
 
+# VS 2026/MSVC 在中文代码页(936)下会把 UTF-8 源码里的中文注释判为 C4819，叠加 Flutter
+# 模板的 /WX(警告即错误)直接构建失败。强制以 UTF-8 解析源文件，从根上消除 C4819。
+target_compile_options(${BINARY_NAME} PRIVATE "/utf-8")
+
 # Add preprocessor definitions for the build version.
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION=\"${FLUTTER_VERSION}\"")
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MAJOR=${FLUTTER_VERSION_MAJOR}")
@@ -46,7 +50,7 @@ option(LINPLAYER_UPGRADE_LIBMPV "Upgrade libmpv-2.dll for PGS/SUP support" ON)
 if(LINPLAYER_UPGRADE_LIBMPV AND NOT DEFINED ENV{LINPLAYER_SKIP_LIBMPV_UPGRADE})
   add_custom_command(
     TARGET ${BINARY_NAME} POST_BUILD
-    COMMAND powershell -ExecutionPolicy Bypass -File "${CMAKE_SOURCE_DIR}/scripts/upgrade_libmpv_for_pgs.ps1" -BuildOutput "$<TARGET_FILE_DIR:${BINARY_NAME}>"
+    COMMAND powershell -ExecutionPolicy Bypass -File "${CMAKE_SOURCE_DIR}/scripts/upgrade_libmpv_for_pgs.ps1" -BuildOutput "$<TARGET_FILE_DIR:${BINARY_NAME}>" -AllowFailure
     COMMENT "升级 libmpv-2.dll 以支持 PGS/SUP 图形字幕"
     VERBATIM
   )

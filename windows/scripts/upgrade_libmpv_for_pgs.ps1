@@ -333,7 +333,11 @@ Write-Host "Upgrade targets: $($targetDirectories -join ', ')"
 
 $primaryTargetDll = Join-Path $outDir "libmpv-2.dll"
 if (-not (Test-Path -LiteralPath $primaryTargetDll)) {
-    throw "libmpv-2.dll not found in target directory. Run 'flutter build windows' first to generate the base DLL, then rebuild."
+    # 干净构建：基础 libmpv-2.dll 由 Flutter 的 install 步骤在本 POST_BUILD 之后才复制进
+    # 输出目录（鸡生蛋）。此处优雅跳过而非 throw —— 否则首次/清理后构建必然失败。DLL 就位
+    # 后的下一次构建（或手动运行本脚本）会完成 PGS/SUP 完整版升级。
+    Write-Warning "libmpv-2.dll 尚未生成（干净构建首次运行），跳过 PGS 升级；DLL 就位后下次构建会自动完成升级。"
+    exit 0
 }
 
 $tempBase = Join-Path $env:TEMP "linplayer_libmpv_upgrade"
