@@ -60,8 +60,22 @@ class _EditBodyState extends State<_EditBody> {
 
   AniModel get ani => widget.ani;
 
-  String _str(String key) => (ani.raw[key] ?? '').toString();
   int? _int(String key) => (ani.raw[key] as num?)?.toInt();
+
+  /// match / exclude 在服务端是**字符串数组**；这里展开成「每行一条」编辑。
+  String _listText(String key) {
+    final v = ani.raw[key];
+    if (v is List) return v.map((e) => e.toString()).join('\n');
+    final s = (v ?? '').toString();
+    return s.isEmpty ? '' : s;
+  }
+
+  /// 反向：把「每行一条」拆回字符串数组（去空白行）。
+  List<String> _parseList(String text) => text
+      .split(RegExp(r'[\n,]'))
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty)
+      .toList();
 
   @override
   void initState() {
@@ -75,8 +89,8 @@ class _EditBodyState extends State<_EditBody> {
     _offset =
         TextEditingController(text: (_int('offset') ?? 0).toString());
     _subgroup = TextEditingController(text: ani.subgroup ?? '');
-    _match = TextEditingController(text: _str('match'));
-    _exclude = TextEditingController(text: _str('exclude'));
+    _match = TextEditingController(text: _listText('match'));
+    _exclude = TextEditingController(text: _listText('exclude'));
     _downloadPath = TextEditingController(text: ani.downloadPath ?? '');
     _bgmUrl = TextEditingController(text: ani.bgmUrl ?? '');
     _enable = ani.enable;
@@ -113,8 +127,8 @@ class _EditBodyState extends State<_EditBody> {
         'totalEpisodeNumber': int.tryParse(_total.text.trim()) ?? 0,
         'offset': int.tryParse(_offset.text.trim()) ?? 0,
         'subgroup': _subgroup.text.trim(),
-        'match': _match.text.trim(),
-        'exclude': _exclude.text.trim(),
+        'match': _parseList(_match.text),
+        'exclude': _parseList(_exclude.text),
         'globalExclude': _globalExclude,
         'customDownloadPath': _customDownloadPath,
         if (_customDownloadPath) 'downloadPath': _downloadPath.text.trim(),
