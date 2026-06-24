@@ -109,6 +109,21 @@ class _SourceBrowseScreenState extends ConsumerState<SourceBrowseScreen> {
           actions: [
             if (!_searching)
               Consumer(builder: (context, ref, _) {
+                final sort = ref.watch(sourceBrowseSortProvider);
+                return PopupMenuButton<SourceSortMode>(
+                  tooltip: '排序',
+                  icon: const Icon(Icons.sort_rounded),
+                  initialValue: sort,
+                  onSelected: (m) =>
+                      ref.read(sourceBrowseSortProvider.notifier).state = m,
+                  itemBuilder: (context) => [
+                    for (final m in SourceSortMode.values)
+                      PopupMenuItem(value: m, child: Text(m.label)),
+                  ],
+                );
+              }),
+            if (!_searching)
+              Consumer(builder: (context, ref, _) {
                 final grid = ref.watch(sourceBrowseGridProvider);
                 return IconButton(
                   tooltip: grid ? '条形列表' : '封面网格',
@@ -225,18 +240,20 @@ class _SourceBrowseScreenState extends ConsumerState<SourceBrowseScreen> {
       return const Center(child: Text('此目录为空'));
     }
     final grid = ref.watch(sourceBrowseGridProvider);
+    final entries =
+        sortSourceEntries(c.entries, ref.watch(sourceBrowseSortProvider));
     return RefreshIndicator(
       onRefresh: () => c.refresh(),
-      child: grid ? _buildGrid(c) : _buildList(c),
+      child: grid ? _buildGrid(entries) : _buildList(entries),
     );
   }
 
-  Widget _buildList(SourceBrowseController c) {
+  Widget _buildList(List<SourceEntry> entries) {
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: c.entries.length,
+      itemCount: entries.length,
       itemBuilder: (context, index) {
-        final e = c.entries[index];
+        final e = entries[index];
         return _EntryTile(entry: e, onTap: () => _onTapEntry(e))
             .animate()
             .fadeIn(delay: (index * 18).ms, duration: AppMotion.fast);
@@ -244,7 +261,7 @@ class _SourceBrowseScreenState extends ConsumerState<SourceBrowseScreen> {
     );
   }
 
-  Widget _buildGrid(SourceBrowseController c) {
+  Widget _buildGrid(List<SourceEntry> entries) {
     return GridView.builder(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -253,9 +270,9 @@ class _SourceBrowseScreenState extends ConsumerState<SourceBrowseScreen> {
         crossAxisSpacing: 12,
         mainAxisSpacing: 12,
       ),
-      itemCount: c.entries.length,
+      itemCount: entries.length,
       itemBuilder: (context, index) {
-        final e = c.entries[index];
+        final e = entries[index];
         return _EntryCard(entry: e, onTap: () => _onTapEntry(e))
             .animate()
             .fadeIn(delay: (index * 14).ms, duration: AppMotion.fast);

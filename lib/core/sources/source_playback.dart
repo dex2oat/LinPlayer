@@ -46,6 +46,42 @@ final sourceSelectedQualityProvider = StateProvider<String?>((ref) => null);
 /// 文件浏览展示模式：false = 条形列表，true = 封面网格。三端共用、可切换。
 final sourceBrowseGridProvider = StateProvider<bool>((ref) => false);
 
+/// 文件浏览排序方式。
+enum SourceSortMode { nameAsc, nameDesc, sizeDesc, sizeAsc }
+
+extension SourceSortModeLabel on SourceSortMode {
+  String get label => switch (this) {
+        SourceSortMode.nameAsc => '名称 ↑',
+        SourceSortMode.nameDesc => '名称 ↓',
+        SourceSortMode.sizeDesc => '大小 ↓',
+        SourceSortMode.sizeAsc => '大小 ↑',
+      };
+}
+
+/// 当前浏览排序方式。三端共用、可切换。
+final sourceBrowseSortProvider =
+    StateProvider<SourceSortMode>((ref) => SourceSortMode.nameAsc);
+
+/// 按 [mode] 排序文件项：文件夹始终在前，组内按名称/大小升降序。
+List<SourceEntry> sortSourceEntries(
+    List<SourceEntry> entries, SourceSortMode mode) {
+  final out = [...entries];
+  out.sort((a, b) {
+    if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
+    switch (mode) {
+      case SourceSortMode.nameAsc:
+        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      case SourceSortMode.nameDesc:
+        return b.name.toLowerCase().compareTo(a.name.toLowerCase());
+      case SourceSortMode.sizeDesc:
+        return (b.size ?? 0).compareTo(a.size ?? 0);
+      case SourceSortMode.sizeAsc:
+        return (a.size ?? 0).compareTo(b.size ?? 0);
+    }
+  });
+  return out;
+}
+
 /// 解析当前内核 / 解码设置，供「源直链播放」统一构建（三端口径一致）。
 ({
   PlayerCoreType coreType,

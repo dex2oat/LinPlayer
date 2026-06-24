@@ -118,6 +118,20 @@ class _DesktopSourceBrowseViewState
           ),
           const SizedBox(width: 8),
           Consumer(builder: (context, ref, _) {
+            final sort = ref.watch(sourceBrowseSortProvider);
+            return PopupMenuButton<SourceSortMode>(
+              tooltip: '排序',
+              icon: const Icon(Icons.sort_rounded),
+              initialValue: sort,
+              onSelected: (m) =>
+                  ref.read(sourceBrowseSortProvider.notifier).state = m,
+              itemBuilder: (context) => [
+                for (final m in SourceSortMode.values)
+                  PopupMenuItem(value: m, child: Text(m.label)),
+              ],
+            );
+          }),
+          Consumer(builder: (context, ref, _) {
             final grid = ref.watch(sourceBrowseGridProvider);
             return IconButton(
               tooltip: grid ? '条形列表' : '封面网格',
@@ -199,6 +213,8 @@ class _DesktopSourceBrowseViewState
       return const Center(child: Text('此目录为空'));
     }
     final grid = ref.watch(sourceBrowseGridProvider);
+    final entries =
+        sortSourceEntries(c.entries, ref.watch(sourceBrowseSortProvider));
     final delegate = grid
         ? const SliverGridDelegateWithMaxCrossAxisExtent(
             maxCrossAxisExtent: 200,
@@ -217,9 +233,9 @@ class _DesktopSourceBrowseViewState
         controller: controller,
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
         gridDelegate: delegate,
-        itemCount: c.entries.length,
+        itemCount: entries.length,
         itemBuilder: (context, index) {
-          final e = c.entries[index];
+          final e = entries[index];
           final card = grid
               ? _DesktopCoverCard(entry: e, onTap: () => _onTapEntry(e))
               : _DesktopEntryCard(entry: e, onTap: () => _onTapEntry(e));
