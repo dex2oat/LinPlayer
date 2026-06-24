@@ -7,7 +7,7 @@ import '../screens/server/tv_add_server_screen.dart';
 import '../screens/server/tv_edit_server_screen.dart';
 import '../screens/source/tv_source_picker_screen.dart';
 import '../screens/source/tv_source_login_screen.dart';
-import '../../ui/screens/source/source_player_screen.dart';
+import '../../core/sources/source_playback.dart';
 import '../../core/sources/source_kind.dart';
 import '../screens/settings/tv_settings_screen.dart';
 import '../screens/settings/tv_lan_control_screen.dart';
@@ -57,12 +57,12 @@ final tvRouter = GoRouter(
         kind: sourceKindFromName(state.pathParameters['kind']),
       ),
     ),
-    // 网盘/聚合源：直链播放页（共用实现，含 D-pad 遥控）。
+    // 网盘/聚合源：直链播放复用完整 TV 播放页（弹幕/字幕/D-pad 遥控）。
     GoRoute(
       path: '/tv/source-player',
       builder: (context, state) {
-        final args = state.extra as SourcePlayArgs;
-        return SourcePlayerScreen(server: args.server, entry: args.entry);
+        final sp = state.extra as SourcePlayback;
+        return TvPlayerScreen(sourcePlay: sp);
       },
     ),
     // 编辑服务器（名称/信息/图标/线路，独立页面）

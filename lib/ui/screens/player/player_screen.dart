@@ -37,6 +37,10 @@ import '../../../core/utils/track_preference.dart';
 import '../../../core/utils/platform_utils.dart';
 import '../../../core/widgets/player_settings_panel.dart';
 import '../../../core/theme/app_motion.dart';
+import '../../../core/sources/media_source_backend.dart';
+import '../../../core/sources/source_playback.dart';
+import '../../../core/sources/source_registry.dart';
+import '../../widgets/common/source_quality_button.dart';
 
 part 'player_screen_state.dart';
 part 'player_screen_panels.dart';
@@ -46,7 +50,17 @@ class PlayerScreen extends ConsumerStatefulWidget {
   final String itemId;
   final String? mediaSourceId;
 
-  const PlayerScreen({super.key, required this.itemId, this.mediaSourceId});
+  /// 非空表示「网盘/聚合源直链播放」：跳过 Emby PlaybackInfo，直接用
+  /// [MediaSourceBackend.resolvePlay] 的 URL + 逐流 headers 喂内核，
+  /// 复用本播放页全部能力（弹幕/字幕/手势/续播）。
+  final SourcePlayback? sourcePlay;
+
+  const PlayerScreen({
+    super.key,
+    required this.itemId,
+    this.mediaSourceId,
+    this.sourcePlay,
+  });
 
   @override
   ConsumerState<PlayerScreen> createState() => _PlayerScreenState();

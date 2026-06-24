@@ -25,6 +25,9 @@ import '../../../core/services/translation/translation_engine.dart';
 import '../../../core/services/app_logger.dart';
 import '../../../core/services/font_service.dart';
 import '../../../core/services/video_player_service.dart';
+import '../../../core/sources/source_playback.dart';
+import '../../../core/sources/source_registry.dart';
+import '../../../ui/widgets/common/source_quality_button.dart';
 import '../../../core/utils/playback_error_text.dart';
 import '../../../core/utils/playback_url_resolver.dart';
 import '../../../core/utils/track_preference.dart';
@@ -39,7 +42,11 @@ class TvPlayerScreen extends ConsumerStatefulWidget {
   final String? mediaId;
   final String? episodeId;
 
-  const TvPlayerScreen({super.key, this.mediaId, this.episodeId});
+  /// 非空表示「网盘/聚合源直链播放」：复用本播放页全部能力播放网盘直链。
+  final SourcePlayback? sourcePlay;
+
+  const TvPlayerScreen(
+      {super.key, this.mediaId, this.episodeId, this.sourcePlay});
 
   @override
   ConsumerState<TvPlayerScreen> createState() => _TvPlayerScreenState();
@@ -251,6 +258,11 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
   }
 
   Future<void> _init() async {
+    // 网盘/聚合源直链：走专属初始化，复用本播放页 UI/内核。
+    if (widget.sourcePlay != null) {
+      await _initSourcePlayer(widget.sourcePlay!);
+      return;
+    }
     if (_itemId.isEmpty) {
       setState(() => _error = '无效的媒体 ID');
       return;
@@ -382,6 +394,69 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
       AppLogger().eWithStack('TvPlayer', '播放失败', e, st);
       if (mounted) setState(() => _error = e.toString());
     }
+  }
+
+  /// 网盘/聚合源直链播放初始化：复用 TV 播放页全部能力。
+  Future<void> _initSourcePlayer(SourcePlayback sp,
+      {Duration? startPosition}) async {
+    final backend = mediaSourceBackendFor(sp.server.sourceKind);
+    try {
+      ref.read(loadedDanmakuProvider.notifier).state = const [];
+      final qualityId = ref.read(sourceSelectedQualityProvider) ?? sp.qualityId;
+      final play =
+          await backend.resolvePlay(sp.server, sp.entry, qualityId: qualityId);
+      final cfg = resolveSourcePlayerConfig(ref);
+      final item = sp.toMediaItem();
+      ref.read(sourcePlayQualitiesProvider.notifier).state = play.qualities;
+      if (ref.read(sourceSelectedQualityProvider) == null) {
+        ref.read(sourceSelectedQualityProvider.notifier).state =
+            play.selectedQualityId;
+      }
+      await _service.initialize(
+        videoUrl: play.url,
+        itemId: sp.syntheticItemId,
+        startPosition: startPosition,
+        coreType: cfg.coreType,
+        hardwareDecoding: cfg.hardwareDecoding,
+        useLibass: cfg.useLibass,
+        useGpuNext: cfg.useGpuNext,
+        surfaceViewId: cfg.surfaceViewId,
+        httpHeaders: play.httpHeaders.isEmpty ? null : play.httpHeaders,
+        userAgentOverride: play.userAgentOverride,
+        streamUrlResolver: () async {
+          final q = ref.read(sourceSelectedQualityProvider) ?? sp.qualityId;
+          final fresh =
+              await backend.resolvePlay(sp.server, sp.entry, qualityId: q);
+          return (url: fresh.url, fallbackUrl: null);
+        },
+        streamUrlTtl: const Duration(minutes: 3),
+      );
+      _item = item;
+      _mediaSource = null;
+      ref.read(currentPlayingItemProvider.notifier).state = item;
+      await _service.play();
+      if (mounted) {
+        setState(() => _ready = true);
+        _scheduleHide();
+      }
+      if (play.subtitles.isNotEmpty) {
+        try {
+          await _service.loadLibassSubtitle(play.subtitles.first.url);
+        } catch (_) {}
+      }
+    } catch (e, st) {
+      AppLogger().eWithStack('TvPlayer', '源播放失败', e, st);
+      if (mounted) setState(() => _error = e.toString());
+    }
+  }
+
+  /// 播放内切换清晰度：记当前进度，按新档重解析并续播。
+  Future<void> _switchSourceQuality(String qualityId) async {
+    final sp = widget.sourcePlay;
+    if (sp == null) return;
+    final pos = _service.position;
+    ref.read(sourceSelectedQualityProvider.notifier).state = qualityId;
+    await _initSourcePlayer(sp, startPosition: pos);
   }
 
   /// 看完（进度达到统一观看阈值）→ 上报已连接的 Trakt/Bangumi。
@@ -1082,6 +1157,13 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
                     onClose: () => context.pop(),
                   ),
                 ),
+              ),
+            // 网盘转码源（夸克等）清晰度切换：仅源直链播放且有多档时显示。
+            if (_ready && _showControls && widget.sourcePlay != null)
+              Positioned(
+                right: m.s(48),
+                bottom: m.s(120),
+                child: SourceQualityButton(onSelect: _switchSourceQuality),
               ),
           ],
         ),

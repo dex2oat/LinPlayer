@@ -3,8 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/api/emby_api.dart';
 import '../../../core/providers/app_providers.dart';
+import '../../../core/sources/anirss_backend.dart';
+import '../../../core/sources/openlist_backend.dart';
+import '../../../core/sources/source_http.dart';
+import '../../../core/sources/source_kind.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../widgets/common/media_widgets.dart';
+import '../source/quark_qr_login_view.dart';
 
 /// 服务器列表页面
 class ServerListScreen extends ConsumerStatefulWidget {
@@ -133,7 +138,9 @@ class _ServerListScreenState extends ConsumerState<ServerListScreen> {
           server: server,
           onTap: () {
             ref.read(currentServerProvider.notifier).state = server;
-            if (server.authToken != null) {
+            // 网盘/聚合源（夸克扫码无 authToken，凭据在 SourceCredentialStore）
+            // 也视为已认证，避免被误判为未登录。
+            if (server.authToken != null || server.isFileBrowse) {
               ref.read(authStateProvider.notifier).state = AuthState.authenticated;
             }
             // 网盘/聚合源 → 文件浏览页；Emby → 原首页。
@@ -165,7 +172,7 @@ class _ServerListScreenState extends ConsumerState<ServerListScreen> {
               title: const Text('重新登录'),
               onTap: () {
                 Navigator.pop(context);
-                _showReloginDialog(context, ref, server);
+                _relogin(context, ref, server);
               },
             ),
             ListTile(
@@ -265,6 +272,153 @@ class _ServerListScreenState extends ConsumerState<ServerListScreen> {
     );
   }
   
+  /// 按源类型分流「重新登录」：夸克=扫码/Cookie，OpenList/Ani-rss=账密，Emby=账密。
+  /// 修复此前所有源都弹 Emby 账密框的问题（扫码登录的夸克不该让用户输密码）。
+  void _relogin(BuildContext context, WidgetRef ref, ServerConfig server) {
+    switch (server.sourceKind) {
+      case SourceKind.quark:
+        _showQuarkRelogin(context, ref, server);
+      case SourceKind.openlist:
+      case SourceKind.anirss:
+        _showSourceCredRelogin(context, ref, server);
+      case SourceKind.emby:
+        _showReloginDialog(context, ref, server);
+    }
+  }
+
+  /// 夸克重新登录：复用扫码视图，凭据写回同一 server（不新建、不要求密码）。
+  void _showQuarkRelogin(
+      BuildContext context, WidgetRef ref, ServerConfig server) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('重新扫码登录夸克'),
+        content: SizedBox(
+          width: 300,
+          child: QuarkQrLoginView(
+            currentName: () => server.name,
+            existingServerId: server.id,
+            onSuccess: (_) {
+              // 凭据已写回 SourceCredentialStore[server.id]，服务器记录无需改动。
+              ref.read(currentServerProvider.notifier).state = server;
+              ref.read(authStateProvider.notifier).state =
+                  AuthState.authenticated;
+              if (ctx.mounted) Navigator.pop(ctx);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('夸克已重新登录')),
+                );
+              }
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// OpenList / Ani-rss 重新登录：账密对自身后端鉴权，更新同一 server 的 token。
+  void _showSourceCredRelogin(
+      BuildContext context, WidgetRef ref, ServerConfig server) {
+    final urlCtrl = TextEditingController(text: server.baseUrl);
+    final userCtrl = TextEditingController(text: server.username ?? '');
+    final passCtrl = TextEditingController();
+    var loading = false;
+    String? error;
+    final isOpenList = server.sourceKind == SourceKind.openlist;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(isOpenList ? '重新登录 OpenList' : '重新登录 Ani-rss'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: urlCtrl,
+                decoration: const InputDecoration(
+                    labelText: '服务器地址', border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: userCtrl,
+                decoration: const InputDecoration(
+                    labelText: '用户名', border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: passCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(
+                    labelText: '密码', border: OutlineInputBorder()),
+              ),
+              if (error != null) ...[
+                const SizedBox(height: 8),
+                Text(error!,
+                    style: TextStyle(
+                        color: Theme.of(ctx).colorScheme.error, fontSize: 13)),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('取消')),
+            FilledButton(
+              onPressed: loading
+                  ? null
+                  : () async {
+                      setDialogState(() {
+                        loading = true;
+                        error = null;
+                      });
+                      try {
+                        final base = normalizeBaseUrl(urlCtrl.text.trim());
+                        final user = userCtrl.text.trim();
+                        final pass = passCtrl.text;
+                        final token = isOpenList
+                            ? await OpenListBackend.login(base, user, pass)
+                            : await AniRssBackend.login(base, user, pass);
+                        final updated = server.copyWith(
+                          baseUrl: base,
+                          username: user,
+                          password: pass,
+                          authToken: token,
+                        );
+                        ref
+                            .read(serverListProvider.notifier)
+                            .updateServer(updated);
+                        ref.read(currentServerProvider.notifier).state =
+                            updated;
+                        ref.read(authStateProvider.notifier).state =
+                            AuthState.authenticated;
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      } catch (e) {
+                        setDialogState(() {
+                          loading = false;
+                          error = e.toString().replaceAll('Exception: ', '');
+                        });
+                      }
+                    },
+              child: loading
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('登录'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showReloginDialog(BuildContext context, WidgetRef ref, ServerConfig server) {
     final usernameCtrl = TextEditingController(text: server.username ?? '');
     final passwordCtrl = TextEditingController();

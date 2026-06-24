@@ -7,8 +7,9 @@ import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/server_providers.dart';
 import '../../../core/sources/media_source_backend.dart';
 import '../../../core/sources/source_browse_controller.dart';
+import '../../../core/sources/source_playback.dart';
 import '../../../core/theme/app_motion.dart';
-import 'source_player_screen.dart';
+import '../../widgets/common/media_widgets.dart';
 
 /// 网盘/聚合源文件浏览页（移动端）。
 ///
@@ -64,7 +65,7 @@ class _SourceBrowseScreenState extends ConsumerState<SourceBrowseScreen> {
       c.enterDir(e);
     } else if (e.isVideo) {
       context.push('/source-player',
-          extra: SourcePlayArgs(server: c.server, entry: e));
+          extra: SourcePlayback(server: c.server, entry: e));
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('暂不支持播放该文件类型')),
@@ -106,6 +107,18 @@ class _SourceBrowseScreenState extends ConsumerState<SourceBrowseScreen> {
                 )
               : Text(c.server.name, overflow: TextOverflow.ellipsis),
           actions: [
+            if (!_searching)
+              Consumer(builder: (context, ref, _) {
+                final grid = ref.watch(sourceBrowseGridProvider);
+                return IconButton(
+                  tooltip: grid ? '条形列表' : '封面网格',
+                  icon: Icon(grid ? Icons.view_list_rounded
+                      : Icons.grid_view_rounded),
+                  onPressed: () => ref
+                      .read(sourceBrowseGridProvider.notifier)
+                      .state = !grid,
+                );
+              }),
             IconButton(
               icon: Icon(_searching ? Icons.close : Icons.search),
               onPressed: () {
@@ -211,18 +224,42 @@ class _SourceBrowseScreenState extends ConsumerState<SourceBrowseScreen> {
     if (c.entries.isEmpty) {
       return const Center(child: Text('此目录为空'));
     }
+    final grid = ref.watch(sourceBrowseGridProvider);
     return RefreshIndicator(
       onRefresh: () => c.refresh(),
-      child: ListView.builder(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: c.entries.length,
-        itemBuilder: (context, index) {
-          final e = c.entries[index];
-          return _EntryTile(entry: e, onTap: () => _onTapEntry(e))
-              .animate()
-              .fadeIn(delay: (index * 18).ms, duration: AppMotion.fast);
-        },
+      child: grid ? _buildGrid(c) : _buildList(c),
+    );
+  }
+
+  Widget _buildList(SourceBrowseController c) {
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: c.entries.length,
+      itemBuilder: (context, index) {
+        final e = c.entries[index];
+        return _EntryTile(entry: e, onTap: () => _onTapEntry(e))
+            .animate()
+            .fadeIn(delay: (index * 18).ms, duration: AppMotion.fast);
+      },
+    );
+  }
+
+  Widget _buildGrid(SourceBrowseController c) {
+    return GridView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 200,
+        childAspectRatio: 0.82,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
       ),
+      itemCount: c.entries.length,
+      itemBuilder: (context, index) {
+        final e = c.entries[index];
+        return _EntryCard(entry: e, onTap: () => _onTapEntry(e))
+            .animate()
+            .fadeIn(delay: (index * 14).ms, duration: AppMotion.fast);
+      },
     );
   }
 }
@@ -247,11 +284,25 @@ class _EntryTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hasThumb = entry.thumbUrl != null && entry.thumbUrl!.isNotEmpty;
+    final leading = hasThumb
+        ? ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: MediaImage(
+              imageUrl: entry.thumbUrl,
+              width: 64,
+              height: 40,
+              fit: BoxFit.cover,
+              useDefaultUserAgent: true,
+            ),
+          )
+        : Icon(_icon, color: _iconColor(context), size: 30);
     return ListTile(
-      leading: Icon(_icon, color: _iconColor(context), size: 30),
-      title: Text(entry.name, maxLines: 2, overflow: TextOverflow.ellipsis),
+      leading: SizedBox(width: 64, child: Center(child: leading)),
+      // 文件名完整显示：放宽到 3 行，长名不再被截断。
+      title: Text(entry.name, maxLines: 3, overflow: TextOverflow.ellipsis),
       subtitle: entry.size != null && !entry.isDir
-          ? Text(_formatSize(entry.size!))
+          ? Text(formatSourceFileSize(entry.size!))
           : null,
       trailing: entry.isDir
           ? const Icon(Icons.chevron_right, color: Colors.grey)
@@ -259,16 +310,67 @@ class _EntryTile extends StatelessWidget {
       onTap: onTap,
     );
   }
+}
 
-  String _formatSize(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    const units = ['KB', 'MB', 'GB', 'TB'];
-    double size = bytes / 1024;
-    int unit = 0;
-    while (size >= 1024 && unit < units.length - 1) {
-      size /= 1024;
-      unit++;
-    }
-    return '${size.toStringAsFixed(size >= 10 ? 0 : 1)} ${units[unit]}';
+/// 封面网格卡片：视频有缩略图则展示封面（夸克/OpenList 等），否则大图标。
+class _EntryCard extends StatelessWidget {
+  final SourceEntry entry;
+  final VoidCallback onTap;
+
+  const _EntryCard({required this.entry, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final hasThumb = entry.thumbUrl != null && entry.thumbUrl!.isNotEmpty;
+    final icon = entry.isDir
+        ? Icons.folder_rounded
+        : (entry.isVideo
+            ? Icons.movie_rounded
+            : Icons.insert_drive_file_outlined);
+    final iconColor = entry.isDir
+        ? const Color(0xFFF6B73C)
+        : (entry.isVideo ? const Color(0xFF5B8DEF) : Colors.grey);
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                width: double.infinity,
+                color: Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerHighest
+                    .withValues(alpha: 0.4),
+                child: hasThumb
+                    ? MediaImage(
+                        imageUrl: entry.thumbUrl,
+                        fit: BoxFit.cover,
+                        useDefaultUserAgent: true,
+                      )
+                    : Center(child: Icon(icon, color: iconColor, size: 44)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            entry.name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12.5, height: 1.25),
+          ),
+          if (entry.size != null && !entry.isDir)
+            Text(
+              formatSourceFileSize(entry.size!),
+              style: TextStyle(
+                  fontSize: 11,
+                  color: Theme.of(context).textTheme.bodySmall?.color),
+            ),
+        ],
+      ),
+    );
   }
 }

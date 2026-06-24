@@ -22,7 +22,10 @@ class QuarkQrLogin extends ChangeNotifier {
   final QuarkTvClient _tv = QuarkTvClient();
   final String name;
 
-  QuarkQrLogin({this.name = ''});
+  /// 非空表示「重新登录」：成功后把新凭据写回这个既有 server id，不新建服务器。
+  final String? existingServerId;
+
+  QuarkQrLogin({this.name = '', this.existingServerId});
 
   QuarkQrState state = QuarkQrState.loading;
   String? qrData;
@@ -91,7 +94,8 @@ class QuarkQrLogin extends ChangeNotifier {
     try {
       final tok = await _tv.exchangeToken(_deviceId, code, isRefresh: false);
       if (_disposed) return;
-      final id = _uuid.v4();
+      // 重新登录：沿用既有 server id，凭据写回原服务器（不新建、不重复）。
+      final id = existingServerId ?? _uuid.v4();
       await SourceCredentialStore.instance.write(id, {
         'refresh_token': tok.refreshToken,
         'device_id': _deviceId,

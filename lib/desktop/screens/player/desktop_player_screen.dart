@@ -29,12 +29,15 @@ import '../../../core/services/translation/whisper/whisper_subtitle_controller.d
 import '../../../core/services/translation/whisper/whisper_transcriber.dart';
 import '../../../core/services/video_player_service.dart';
 import '../../../core/services/watch_history/watch_history_models.dart';
+import '../../../core/sources/source_playback.dart';
+import '../../../core/sources/source_registry.dart';
 import '../../../core/utils/playback_error_text.dart';
 import '../../../core/utils/playback_url_resolver.dart';
 import '../../../core/utils/track_preference.dart';
 import '../../../core/widgets/player_settings_panel.dart';
 import '../../../ui/widgets/common/danmaku_overlay.dart';
 import '../../../ui/widgets/common/danmaku_search_widget.dart';
+import '../../../ui/widgets/common/source_quality_button.dart';
 import '../../shell/desktop_nav_model.dart';
 import '../../utils/desktop_smooth_scroll.dart';
 
@@ -52,10 +55,14 @@ class DesktopPlayerScreen extends ConsumerStatefulWidget {
   final String itemId;
   final String? mediaSourceId;
 
+  /// 非空表示「网盘/聚合源直链播放」：复用本播放页全部能力播放网盘直链。
+  final SourcePlayback? sourcePlay;
+
   const DesktopPlayerScreen({
     super.key,
     required this.itemId,
     this.mediaSourceId,
+    this.sourcePlay,
   });
 
   @override

@@ -14,10 +14,14 @@ class QuarkQrLoginView extends StatefulWidget {
   final ValueGetter<String> currentName;
   final ValueChanged<ServerConfig> onSuccess;
 
+  /// 非空表示「重新登录」：扫码成功后把凭据写回该既有 server id，不新建服务器。
+  final String? existingServerId;
+
   const QuarkQrLoginView({
     super.key,
     required this.currentName,
     required this.onSuccess,
+    this.existingServerId,
   });
 
   @override
@@ -37,7 +41,10 @@ class _QuarkQrLoginViewState extends State<QuarkQrLoginView> {
   void _restart() {
     _login?.removeListener(_onChanged);
     _login?.dispose();
-    final login = QuarkQrLogin(name: widget.currentName());
+    final login = QuarkQrLogin(
+      name: widget.currentName(),
+      existingServerId: widget.existingServerId,
+    );
     login.addListener(_onChanged);
     _login = login;
     login.start();

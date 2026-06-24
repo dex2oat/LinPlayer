@@ -210,30 +210,48 @@ class QuarkTvClient {
     return entries;
   }
 
-  /// 取播放地址：优先转码（streaming），失败回退原文件（download）。
-  Future<String> fileLink(
+  /// 取转码播放档位：返回每一档清晰度的 (resolution, url)，供上层「选清晰度」。
+  Future<List<({String resolution, String url})>> streamingInfos(
     String deviceId,
     String accessToken,
-    String fid, {
-    required bool streaming,
-  }) async {
+    String fid,
+  ) async {
     final data = await _request('/file',
         deviceId: deviceId, accessToken: accessToken, query: {
-          'method': streaming ? 'streaming' : 'download',
+          'method': 'streaming',
           'group_by': 'source',
           'fid': fid,
           'resolution': 'low,normal,high,super,2k,4k',
           'support': 'dolby_vision',
         });
     final dd = data['data'] as Map?;
-    if (streaming) {
-      final infos = (dd?['video_info'] as List?) ?? const [];
-      for (final v in infos) {
-        final url = ((v as Map)['url'] ?? '').toString();
-        if (url.isNotEmpty) return url;
-      }
-      throw SourceException('转码地址不可用');
+    final infos = (dd?['video_info'] as List?) ?? const [];
+    final out = <({String resolution, String url})>[];
+    for (final v in infos) {
+      final vm = v as Map;
+      final url = (vm['url'] ?? '').toString();
+      if (url.isEmpty) continue;
+      out.add((
+        resolution: (vm['resolution'] ?? vm['name'] ?? '').toString(),
+        url: url,
+      ));
     }
+    return out;
+  }
+
+  /// 取原文件直链（转码不可用时回退）。
+  Future<String> downloadLink(
+    String deviceId,
+    String accessToken,
+    String fid,
+  ) async {
+    final data = await _request('/file',
+        deviceId: deviceId, accessToken: accessToken, query: {
+          'method': 'download',
+          'group_by': 'source',
+          'fid': fid,
+        });
+    final dd = data['data'] as Map?;
     final url = (dd?['download_url'] ?? '').toString();
     if (url.isEmpty) throw SourceException('未获取到下载地址');
     return url;

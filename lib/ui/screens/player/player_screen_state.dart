@@ -262,6 +262,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   }
 
   Future<void> _initializePlayer() async {
+    // 网盘/聚合源直链：走专属初始化，复用本播放页 UI/内核，不碰 Emby PlaybackInfo。
+    if (widget.sourcePlay != null) {
+      await _initializeSourcePlayer(widget.sourcePlay!);
+      return;
+    }
     final api = ref.read(apiClientProvider);
 
     // 离线优先：本集已下载完成则用本地文件，且拉取元数据失败时兜底离线播放。
@@ -548,6 +553,77 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _playerService.setSubtitleFont(ref.read(subtitleFontProvider));
     _playerService.setSubtitleBackground(ref.read(subtitleBackgroundProvider));
     _playerService.setAspectRatio(ref.read(aspectRatioProvider));
+  }
+
+  /// 网盘/聚合源直链播放初始化：复用本播放页全部 UI/手势/弹幕/字幕能力。
+  Future<void> _initializeSourcePlayer(SourcePlayback sp,
+      {Duration? startPosition}) async {
+    final backend = mediaSourceBackendFor(sp.server.sourceKind);
+    try {
+      final qualityId = ref.read(sourceSelectedQualityProvider) ?? sp.qualityId;
+      final play =
+          await backend.resolvePlay(sp.server, sp.entry, qualityId: qualityId);
+      final cfg = resolveSourcePlayerConfig(ref);
+      ref.read(currentPlayingItemProvider.notifier).state = sp.toMediaItem();
+      ref.read(sourcePlayQualitiesProvider.notifier).state = play.qualities;
+      if (ref.read(sourceSelectedQualityProvider) == null) {
+        ref.read(sourceSelectedQualityProvider.notifier).state =
+            play.selectedQualityId;
+      }
+      await _playerService.initialize(
+        videoUrl: play.url,
+        itemId: sp.syntheticItemId,
+        startPosition: startPosition,
+        coreType: cfg.coreType,
+        hardwareDecoding: cfg.hardwareDecoding,
+        useLibass: cfg.useLibass,
+        useGpuNext: cfg.useGpuNext,
+        surfaceViewId: cfg.surfaceViewId,
+        httpHeaders: play.httpHeaders.isEmpty ? null : play.httpHeaders,
+        userAgentOverride: play.userAgentOverride,
+        // 网盘短效直链：过期后按当前选中清晰度重解析续播。
+        streamUrlResolver: () async {
+          final q = ref.read(sourceSelectedQualityProvider) ?? sp.qualityId;
+          final fresh =
+              await backend.resolvePlay(sp.server, sp.entry, qualityId: q);
+          return (url: fresh.url, fallbackUrl: null);
+        },
+        streamUrlTtl: const Duration(minutes: 3),
+      );
+      await _playerService.play();
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+      // 外挂字幕（ani-rss 等源带回）：加载首条作默认；内封由内核原生读取。
+      if (play.subtitles.isNotEmpty) {
+        try {
+          await _playerService.loadLibassSubtitle(play.subtitles.first.url);
+        } catch (_) {}
+      }
+      _playerService.setSubtitleSize(ref.read(subtitleSizeProvider));
+      _playerService.setSubtitlePosition(ref.read(subtitlePositionProvider));
+      _playerService.setSubtitleDelay(ref.read(subtitleDelayProvider));
+      _playerService.setSubtitleFont(ref.read(subtitleFontProvider));
+      _playerService.setSubtitleBackground(ref.read(subtitleBackgroundProvider));
+      _playerService.setAspectRatio(ref.read(aspectRatioProvider));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('播放失败: $e')));
+        Navigator.of(context).maybePop();
+      }
+    }
+  }
+
+  /// 播放内切换清晰度：记当前进度，按新档重解析并续播。
+  Future<void> _switchSourceQuality(String qualityId) async {
+    final sp = widget.sourcePlay;
+    if (sp == null) return;
+    final pos = _playerService.position;
+    ref.read(sourceSelectedQualityProvider.notifier).state = qualityId;
+    await _initializeSourcePlayer(sp, startPosition: pos);
   }
 
   Future<Duration?> _resolveResumeStartPosition(
@@ -1621,6 +1697,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
                     icon: const Icon(Icons.lock, color: Colors.white),
                     onPressed: _playerService.toggleLock,
                   ),
+                ),
+              // 网盘转码源（夸克等）清晰度切换：仅源直链播放且有多档时显示。
+              if (widget.sourcePlay != null &&
+                  _playerService.showControls &&
+                  !_playerService.isLocked)
+                Positioned(
+                  right: 16,
+                  bottom: 92,
+                  child: SourceQualityButton(onSelect: _switchSourceQuality),
                 ),
             ],
           );

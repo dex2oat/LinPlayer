@@ -100,7 +100,11 @@ class AniRssBackend implements MediaSourceBackend {
       throw UnsupportedError('Ani-rss 不支持源端搜索');
 
   @override
-  Future<ResolvedPlay> resolvePlay(ServerConfig server, SourceEntry entry) async {
+  Future<ResolvedPlay> resolvePlay(
+    ServerConfig server,
+    SourceEntry entry, {
+    String? qualityId,
+  }) async {
     final b64Filename = (entry.raw?['filename'] ?? '').toString();
     if (b64Filename.isEmpty) throw SourceException('缺少文件信息');
     final token = await _auth.ensureToken(server);

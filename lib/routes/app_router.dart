@@ -27,7 +27,7 @@ import '../ui/screens/anirss/anirss_shell_screen.dart';
 import '../ui/screens/source/source_browse_screen.dart';
 import '../ui/screens/source/source_login_screen.dart';
 import '../ui/screens/source/source_picker_screen.dart';
-import '../ui/screens/source/source_player_screen.dart';
+import '../core/sources/source_playback.dart';
 import '../core/sources/source_kind.dart';
 import '../ui/utils/image_size_helper.dart';
 import '../ui/utils/media_helpers.dart';
@@ -253,12 +253,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) =>
             AniRssDetailScreen(args: state.extra as AniRssDetailArgs),
       ),
-      // 网盘/聚合源：直链播放页（server+entry 经 extra 传入）。
+      // 网盘/聚合源：直链播放复用完整 PlayerScreen（弹幕/字幕/手势/续播）。
       GoRoute(
         path: '/source-player',
         builder: (context, state) {
-          final args = state.extra as SourcePlayArgs;
-          return SourcePlayerScreen(server: args.server, entry: args.entry);
+          final sp = state.extra as SourcePlayback;
+          return PlayerScreen(itemId: sp.syntheticItemId, sourcePlay: sp);
         },
       ),
     ],

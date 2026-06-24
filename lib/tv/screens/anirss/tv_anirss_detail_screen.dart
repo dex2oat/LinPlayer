@@ -9,7 +9,7 @@ import '../../../core/sources/anirss/anirss_nav_args.dart';
 import '../../../core/sources/anirss/anirss_providers.dart';
 import '../../../core/sources/anirss/models/ani.dart';
 import '../../../core/sources/anirss/models/play_item.dart';
-import '../../../ui/screens/source/source_player_screen.dart';
+import '../../../core/sources/source_playback.dart';
 import '../../../ui/widgets/anirss/anirss_detail_actions.dart';
 import '../../../ui/widgets/anirss/anirss_version_picker.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
@@ -22,7 +22,7 @@ import '../../widgets/tv_focusable.dart';
 void _playTv(BuildContext context, ServerConfig server, PlayItemModel item) {
   context.push(
     '/tv/source-player',
-    extra: SourcePlayArgs(server: server, entry: sourceEntryFor(item)),
+    extra: SourcePlayback(server: server, entry: sourceEntryFor(item)),
   );
 }
 

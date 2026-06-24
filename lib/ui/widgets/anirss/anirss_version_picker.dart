@@ -4,7 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/providers/server_providers.dart';
 import '../../../core/sources/anirss/models/play_item.dart';
 import '../../../core/sources/media_source_backend.dart';
-import '../../screens/source/source_player_screen.dart';
+import '../../../core/sources/source_playback.dart';
 
 /// 把一个 [PlayItemModel] 构造成播放后端认识的 [SourceEntry]（与 AniRssBackend.resolvePlay 对齐）。
 SourceEntry sourceEntryFor(PlayItemModel item) => SourceEntry(
@@ -25,7 +25,7 @@ void playSourceItem(
     BuildContext context, ServerConfig server, PlayItemModel item) {
   context.push(
     '/source-player',
-    extra: SourcePlayArgs(server: server, entry: sourceEntryFor(item)),
+    extra: SourcePlayback(server: server, entry: sourceEntryFor(item)),
   );
 }
 

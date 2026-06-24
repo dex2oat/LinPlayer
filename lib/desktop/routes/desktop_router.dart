@@ -21,7 +21,7 @@ import '../screens/server/desktop_add_server_screen.dart';
 import '../screens/source/desktop_source_login_screen.dart';
 import '../screens/source/desktop_source_picker_screen.dart';
 import '../screens/anirss/desktop_anirss_detail_screen.dart';
-import '../../ui/screens/source/source_player_screen.dart';
+import '../../core/sources/source_playback.dart';
 import '../../core/sources/anirss/anirss_nav_args.dart';
 import '../../core/sources/source_kind.dart';
 import '../shell/desktop_shell.dart';
@@ -226,13 +226,14 @@ final desktopRouterProvider = Provider<GoRouter>((ref) {
           fromRight: true,
         ),
       ),
-      // 网盘/聚合源：直链播放页（共用移动端实现）。
+      // 网盘/聚合源：直链播放复用完整桌面 PlayerScreen（弹幕/字幕/手势/续播）。
       GoRoute(
         path: '/source-player',
         pageBuilder: (context, state) {
-          final args = state.extra as SourcePlayArgs;
+          final sp = state.extra as SourcePlayback;
           return _buildFadePage(
-            child: SourcePlayerScreen(server: args.server, entry: args.entry),
+            child:
+                DesktopPlayerScreen(itemId: sp.syntheticItemId, sourcePlay: sp),
             state: state,
           );
         },

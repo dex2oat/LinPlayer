@@ -154,7 +154,11 @@ class OpenListBackend implements MediaSourceBackend {
   }
 
   @override
-  Future<ResolvedPlay> resolvePlay(ServerConfig server, SourceEntry entry) async {
+  Future<ResolvedPlay> resolvePlay(
+    ServerConfig server,
+    SourceEntry entry, {
+    String? qualityId,
+  }) async {
     final resp = await _authed(server, '/api/fs/get', data: {
       'path': entry.id,
       'password': '',

@@ -206,11 +206,84 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
     }
   }
 
+  /// 网盘/聚合源直链播放初始化：复用桌面播放页全部能力。
+  Future<void> _initializeSourcePlayer(SourcePlayback sp,
+      {Duration? startPosition}) async {
+    final backend = mediaSourceBackendFor(sp.server.sourceKind);
+    try {
+      final qualityId = ref.read(sourceSelectedQualityProvider) ?? sp.qualityId;
+      final play =
+          await backend.resolvePlay(sp.server, sp.entry, qualityId: qualityId);
+      final cfg = resolveSourcePlayerConfig(ref);
+      ref.read(currentPlayingItemProvider.notifier).state = sp.toMediaItem();
+      ref.read(sourcePlayQualitiesProvider.notifier).state = play.qualities;
+      if (ref.read(sourceSelectedQualityProvider) == null) {
+        ref.read(sourceSelectedQualityProvider.notifier).state =
+            play.selectedQualityId;
+      }
+      _currentMediaSource = null;
+      _videoUrl = play.url;
+      _displayTitle = sp.entry.name;
+      await _playerService.initialize(
+        videoUrl: play.url,
+        itemId: sp.syntheticItemId,
+        startPosition: startPosition,
+        coreType: cfg.coreType,
+        hardwareDecoding: cfg.hardwareDecoding,
+        useLibass: cfg.useLibass,
+        useGpuNext: cfg.useGpuNext,
+        surfaceViewId: cfg.surfaceViewId,
+        httpHeaders: play.httpHeaders.isEmpty ? null : play.httpHeaders,
+        userAgentOverride: play.userAgentOverride,
+        streamUrlResolver: () async {
+          final q = ref.read(sourceSelectedQualityProvider) ?? sp.qualityId;
+          final fresh =
+              await backend.resolvePlay(sp.server, sp.entry, qualityId: q);
+          return (url: fresh.url, fallbackUrl: null);
+        },
+        streamUrlTtl: const Duration(minutes: 3),
+      );
+      await _playerService.play();
+      if (play.subtitles.isNotEmpty) {
+        try {
+          await _playerService.loadLibassSubtitle(play.subtitles.first.url);
+        } catch (_) {}
+      }
+      await _playerService.setSubtitleSize(ref.read(subtitleSizeProvider));
+      await _playerService
+          .setSubtitlePosition(ref.read(subtitlePositionProvider));
+      await _playerService.setSubtitleDelay(ref.read(subtitleDelayProvider));
+      await _playerService.setSubtitleFont(ref.read(subtitleFontProvider));
+      await _playerService
+          .setSubtitleBackground(ref.read(subtitleBackgroundProvider));
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (mounted) {
+        setState(() => _initErrorMessage = '播放失败: $e');
+      }
+    }
+  }
+
+  /// 播放内切换清晰度：记当前进度，按新档重解析并续播。
+  Future<void> _switchSourceQuality(String qualityId) async {
+    final sp = widget.sourcePlay;
+    if (sp == null) return;
+    final pos = _playerService.position;
+    ref.read(sourceSelectedQualityProvider.notifier).state = qualityId;
+    await _initializeSourcePlayer(sp, startPosition: pos);
+  }
+
   Future<void> _initializePlayer() async {
     if (_initializingPlayer) return;
     _initializingPlayer = true;
     _hasUserTouchedSubtitleSelection = false;
     _initErrorMessage = null;
+    // 网盘/聚合源直链：走专属初始化，复用本播放页 UI/内核。
+    if (widget.sourcePlay != null) {
+      await _initializeSourcePlayer(widget.sourcePlay!);
+      _initializingPlayer = false;
+      return;
+    }
     final api = ref.read(apiClientProvider);
     List<MediaStream> deferredSubtitleStreams = const <MediaStream>[];
     try {
@@ -3277,6 +3350,15 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
                       tooltip: '已锁定',
                       onPressed: _playerService.toggleLock,
                     ),
+                  ),
+                // 网盘转码源（夸克等）清晰度切换：仅源直链播放且有多档时显示。
+                if (widget.sourcePlay != null &&
+                    _showControls &&
+                    !_playerService.isLocked)
+                  Positioned(
+                    right: 24,
+                    bottom: 96,
+                    child: SourceQualityButton(onSelect: _switchSourceQuality),
                   ),
               ],
             ),

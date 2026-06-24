@@ -190,6 +190,9 @@ class QuarkBackend implements MediaSourceBackend {
           isDir: isDir,
           isVideo: !isDir && (fm['category'] == 1 || isVideoFileName(name)),
           size: (fm['size'] as num?)?.toInt(),
+          // 夸克网页 API 对视频文件返回封面缩略图，列表卡片模式可直接展示。
+          thumbUrl: _httpOrNull(fm['thumbnail']?.toString()) ??
+              _httpOrNull(fm['big_thumbnail']?.toString()),
           raw: {'fid': fm['fid']},
         ));
       }
@@ -205,25 +208,38 @@ class QuarkBackend implements MediaSourceBackend {
       throw UnsupportedError('夸克初版暂用本地过滤搜索');
 
   @override
-  Future<ResolvedPlay> resolvePlay(ServerConfig server, SourceEntry entry) async {
+  Future<ResolvedPlay> resolvePlay(
+    ServerConfig server,
+    SourceEntry entry, {
+    String? qualityId,
+  }) async {
     final fid = entry.id;
 
-    // TV（扫码）模式：开放 API 取转码地址，失败回退原文件直链。
+    // TV（扫码）模式：开放 API 取转码各档，失败回退原文件直链。
     if (_isTvMode(server)) {
       return _tvCall(server, (at, did) async {
         try {
-          final url = await _tv.fileLink(did, at, fid, streaming: true);
-          return ResolvedPlay(url: url, title: entry.name);
+          final infos = await _tv.streamingInfos(did, at, fid);
+          final picked = _pickQuality(infos, qualityId);
+          if (picked != null) {
+            return ResolvedPlay(
+              url: picked.url,
+              title: entry.name,
+              qualities: picked.qualities,
+              selectedQualityId: picked.selectedId,
+            );
+          }
         } on SourceException {
-          final url = await _tv.fileLink(did, at, fid, streaming: false);
-          return ResolvedPlay(url: url, title: entry.name);
+          // 转码不可用 → 回退原文件直链。
         }
+        final url = await _tv.downloadLink(did, at, fid);
+        return ResolvedPlay(url: url, title: entry.name);
       });
     }
 
     final headers = {'Cookie': cookieOf(server), 'Referer': referer};
 
-    // 优先转码自适应播放地址。
+    // 优先转码自适应播放地址（多档可选，默认最高）。
     try {
       final resp = await _request(
         server,
@@ -237,17 +253,23 @@ class QuarkBackend implements MediaSourceBackend {
       );
       final vlist =
           ((resp.data['data'] as Map?)?['video_list'] as List?) ?? const [];
+      final infos = <({String resolution, String url})>[];
       for (final v in vlist) {
-        final url =
-            (((v as Map)['video_info'] as Map?)?['url'] ?? '').toString();
-        if (url.isNotEmpty) {
-          return ResolvedPlay(
-            url: url,
-            title: entry.name,
-            httpHeaders: headers,
-            userAgentOverride: ua,
-          );
-        }
+        final vm = v as Map;
+        final url = ((vm['video_info'] as Map?)?['url'] ?? '').toString();
+        if (url.isEmpty) continue;
+        infos.add((resolution: (vm['resolution'] ?? '').toString(), url: url));
+      }
+      final picked = _pickQuality(infos, qualityId);
+      if (picked != null) {
+        return ResolvedPlay(
+          url: picked.url,
+          title: entry.name,
+          httpHeaders: headers,
+          userAgentOverride: ua,
+          qualities: picked.qualities,
+          selectedQualityId: picked.selectedId,
+        );
       }
     } on SourceException {
       // 转码不可用（如未转码完成）→ 回退原文件直链。
@@ -271,5 +293,63 @@ class QuarkBackend implements MediaSourceBackend {
       httpHeaders: {...headers, 'User-Agent': ua},
       userAgentOverride: ua,
     );
+  }
+
+  /// 把转码各档归一为 [PlayQuality] 列表（按清晰度降序），并按 [qualityId] 选档，
+  /// 缺省选最高档。无可用档返回 null（上层回退原文件直链）。
+  ({String url, List<PlayQuality> qualities, String selectedId})? _pickQuality(
+    List<({String resolution, String url})> infos,
+    String? qualityId,
+  ) {
+    if (infos.isEmpty) return null;
+    final cands = <({PlayQuality q, String url})>[];
+    for (final info in infos) {
+      final meta = _quarkQualityMeta(info.resolution);
+      final id = info.resolution.isEmpty ? meta.label : info.resolution;
+      cands.add((
+        q: PlayQuality(id: id, label: meta.label, rank: meta.rank),
+        url: info.url,
+      ));
+    }
+    cands.sort((a, b) => b.q.rank.compareTo(a.q.rank));
+    final chosen = qualityId == null
+        ? cands.first
+        : cands.firstWhere((c) => c.q.id == qualityId,
+            orElse: () => cands.first);
+    return (
+      url: chosen.url,
+      qualities: cands.map((c) => c.q).toList(),
+      selectedId: chosen.q.id,
+    );
+  }
+
+  String? _httpOrNull(String? url) =>
+      (url != null && url.startsWith('http')) ? url : null;
+}
+
+/// 夸克转码档位 → 展示名 + 排序权重（越大越清晰）。
+({String label, int rank}) _quarkQualityMeta(String res) {
+  switch (res.toLowerCase()) {
+    case 'low':
+      return (label: '流畅', rank: 1);
+    case 'normal':
+      return (label: '标清', rank: 2);
+    case 'high':
+      return (label: '高清', rank: 3);
+    case 'super':
+      return (label: '超清', rank: 4);
+    case '2k':
+      return (label: '2K', rank: 5);
+    case '4k':
+      return (label: '4K', rank: 6);
+    case 'dolby_vision':
+    case 'dolby':
+      return (label: '杜比视界', rank: 7);
+    case 'origin':
+    case 'original':
+    case 'originalsource':
+      return (label: '原画', rank: 8);
+    default:
+      return (label: res.isEmpty ? '默认' : res, rank: 0);
   }
 }

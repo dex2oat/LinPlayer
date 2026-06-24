@@ -5,7 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../../../core/providers/server_providers.dart';
 import '../../../core/sources/media_source_backend.dart';
 import '../../../core/sources/source_browse_controller.dart';
-import '../../../ui/screens/source/source_player_screen.dart';
+import '../../../core/sources/source_playback.dart';
+import '../../../ui/widgets/common/media_widgets.dart';
 import '../../theme/tv_design_tokens.dart';
 import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_focusable.dart';
@@ -58,7 +59,7 @@ class _TvSourceBrowseViewState extends ConsumerState<TvSourceBrowseView> {
       _controller.enterDir(e);
     } else if (e.isVideo) {
       context.push('/tv/source-player',
-          extra: SourcePlayArgs(server: _controller.server, entry: e));
+          extra: SourcePlayback(server: _controller.server, entry: e));
     }
   }
 
@@ -189,15 +190,42 @@ class _TvSourceBrowseViewState extends ConsumerState<TvSourceBrowseView> {
       ),
       child: Row(
         children: [
-          Icon(icon, color: color, size: m.s(30)),
+          if (e.thumbUrl != null && e.thumbUrl!.isNotEmpty)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(m.s(4)),
+              child: MediaImage(
+                imageUrl: e.thumbUrl,
+                width: m.s(72),
+                height: m.s(44),
+                fit: BoxFit.cover,
+                useDefaultUserAgent: true,
+              ),
+            )
+          else
+            Icon(icon, color: color, size: m.s(30)),
           SizedBox(width: m.spacingLg),
           Expanded(
-            child: Text(
-              e.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  fontSize: m.fontSizeMd, color: TvDesignTokens.textPrimary),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  e.name,
+                  // 文件名完整显示：放宽到 2 行。
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: m.fontSizeMd,
+                      color: TvDesignTokens.textPrimary),
+                ),
+                if (e.size != null && !e.isDir)
+                  Text(
+                    formatSourceFileSize(e.size!),
+                    style: TextStyle(
+                        fontSize: m.fontSizeSm,
+                        color: TvDesignTokens.textSecondary),
+                  ),
+              ],
             ),
           ),
           if (e.isDir)

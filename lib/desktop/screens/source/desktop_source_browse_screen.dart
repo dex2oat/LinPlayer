@@ -7,8 +7,9 @@ import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/server_providers.dart';
 import '../../../core/sources/media_source_backend.dart';
 import '../../../core/sources/source_browse_controller.dart';
+import '../../../core/sources/source_playback.dart';
 import '../../../core/theme/app_motion.dart';
-import '../../../ui/screens/source/source_player_screen.dart';
+import '../../../ui/widgets/common/media_widgets.dart';
 import '../../utils/desktop_smooth_scroll.dart';
 
 /// 桌面端网盘/聚合源浏览视图（嵌入侧边栏壳的首页内容区）。
@@ -54,7 +55,7 @@ class _DesktopSourceBrowseViewState
       c.enterDir(e);
     } else if (e.isVideo) {
       context.push('/source-player',
-          extra: SourcePlayArgs(server: c.server, entry: e));
+          extra: SourcePlayback(server: c.server, entry: e));
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('暂不支持播放该文件类型')),
@@ -116,6 +117,16 @@ class _DesktopSourceBrowseViewState
             ),
           ),
           const SizedBox(width: 8),
+          Consumer(builder: (context, ref, _) {
+            final grid = ref.watch(sourceBrowseGridProvider);
+            return IconButton(
+              tooltip: grid ? '条形列表' : '封面网格',
+              icon: Icon(
+                  grid ? Icons.view_list_rounded : Icons.grid_view_rounded),
+              onPressed: () =>
+                  ref.read(sourceBrowseGridProvider.notifier).state = !grid,
+            );
+          }),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: '刷新',
@@ -187,20 +198,32 @@ class _DesktopSourceBrowseViewState
     if (c.entries.isEmpty) {
       return const Center(child: Text('此目录为空'));
     }
+    final grid = ref.watch(sourceBrowseGridProvider);
+    final delegate = grid
+        ? const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 200,
+            childAspectRatio: 0.82,
+            crossAxisSpacing: 14,
+            mainAxisSpacing: 14,
+          )
+        : const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 360,
+            childAspectRatio: 4.6,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+          );
     return DesktopSmoothScrollBuilder(
       builder: (context, controller) => GridView.builder(
         controller: controller,
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-          maxCrossAxisExtent: 320,
-          childAspectRatio: 4.2,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-        ),
+        gridDelegate: delegate,
         itemCount: c.entries.length,
         itemBuilder: (context, index) {
           final e = c.entries[index];
-          return _DesktopEntryCard(entry: e, onTap: () => _onTapEntry(e))
+          final card = grid
+              ? _DesktopCoverCard(entry: e, onTap: () => _onTapEntry(e))
+              : _DesktopEntryCard(entry: e, onTap: () => _onTapEntry(e));
+          return card
               .animate()
               .fadeIn(delay: (index * 14).ms, duration: AppMotion.fast);
         },
@@ -257,14 +280,41 @@ class _DesktopEntryCardState extends State<_DesktopEntryCard> {
           ),
           child: Row(
             children: [
-              Icon(_icon, color: _color, size: 26),
+              if (widget.entry.thumbUrl != null &&
+                  widget.entry.thumbUrl!.isNotEmpty)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: MediaImage(
+                    imageUrl: widget.entry.thumbUrl,
+                    width: 56,
+                    height: 34,
+                    fit: BoxFit.cover,
+                    useDefaultUserAgent: true,
+                  ),
+                )
+              else
+                Icon(_icon, color: _color, size: 26),
               const SizedBox(width: 12),
               Expanded(
-                child: Text(
-                  widget.entry.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 13),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      widget.entry.name,
+                      // 文件名完整显示：放宽到 2 行。
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                    if (widget.entry.size != null && !widget.entry.isDir)
+                      Text(
+                        formatSourceFileSize(widget.entry.size!),
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: theme.textTheme.bodySmall?.color),
+                      ),
+                  ],
                 ),
               ),
               if (widget.entry.isDir)
@@ -272,6 +322,61 @@ class _DesktopEntryCardState extends State<_DesktopEntryCard> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 桌面封面网格卡片：视频有缩略图则展示封面，否则大图标。
+class _DesktopCoverCard extends StatelessWidget {
+  final SourceEntry entry;
+  final VoidCallback onTap;
+
+  const _DesktopCoverCard({required this.entry, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final hasThumb = entry.thumbUrl != null && entry.thumbUrl!.isNotEmpty;
+    final icon = entry.isDir
+        ? Icons.folder_rounded
+        : (entry.isVideo
+            ? Icons.movie_rounded
+            : Icons.insert_drive_file_outlined);
+    final iconColor = entry.isDir
+        ? const Color(0xFFF6B73C)
+        : (entry.isVideo ? const Color(0xFF5B8DEF) : Colors.grey);
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                width: double.infinity,
+                color: theme.colorScheme.surfaceContainerHighest
+                    .withValues(alpha: 0.4),
+                child: hasThumb
+                    ? MediaImage(
+                        imageUrl: entry.thumbUrl,
+                        fit: BoxFit.cover,
+                        useDefaultUserAgent: true,
+                      )
+                    : Center(child: Icon(icon, color: iconColor, size: 46)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            entry.name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12.5, height: 1.25),
+          ),
+        ],
       ),
     );
   }

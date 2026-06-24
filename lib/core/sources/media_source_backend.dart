@@ -26,6 +26,20 @@ class SourceEntry {
   });
 }
 
+/// 一档可选清晰度（转码源如夸克会提供多档：标清/高清/超清/4K…）。
+class PlayQuality {
+  /// 回传给 [MediaSourceBackend.resolvePlay] 的清晰度标识（如夸克的 `resolution`）。
+  final String id;
+
+  /// UI 展示名（4K / 超清 / 高清 / 标清…）。
+  final String label;
+
+  /// 排序权重，越大越清晰。用于「默认选最高档」。
+  final int rank;
+
+  const PlayQuality({required this.id, required this.label, this.rank = 0});
+}
+
 /// 外挂字幕轨。
 class SourceSubtitle {
   final String url;
@@ -49,12 +63,20 @@ class ResolvedPlay {
   final String? userAgentOverride;
   final List<SourceSubtitle> subtitles;
 
+  /// 该文件可选的全部清晰度档（转码源才有；非转码源为空）。
+  final List<PlayQuality> qualities;
+
+  /// 本次返回的 [url] 对应的清晰度档 id（用于 UI 高亮当前档）。
+  final String? selectedQualityId;
+
   const ResolvedPlay({
     required this.url,
     required this.title,
     this.httpHeaders = const {},
     this.userAgentOverride,
     this.subtitles = const [],
+    this.qualities = const [],
+    this.selectedQualityId,
   });
 }
 
@@ -87,7 +109,27 @@ abstract class MediaSourceBackend {
 
   /// 把文件解析成可播单元（含取流所需 headers）。短效直链由播放层按
   /// [StreamServerKind.cloud302] 在过期后回调本方法重解析。
-  Future<ResolvedPlay> resolvePlay(ServerConfig server, SourceEntry entry);
+  ///
+  /// [qualityId] 非空时按指定清晰度档取流（转码源用，如夸克）；为空时由后端
+  /// 选默认档（约定「默认选最高档」）。
+  Future<ResolvedPlay> resolvePlay(
+    ServerConfig server,
+    SourceEntry entry, {
+    String? qualityId,
+  });
+}
+
+/// 人类可读文件大小（B/KB/MB/GB/TB）。三端浏览页共用。
+String formatSourceFileSize(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  double size = bytes / 1024;
+  int unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit++;
+  }
+  return '${size.toStringAsFixed(size >= 10 ? 0 : 1)} ${units[unit]}';
 }
 
 /// 视频扩展名判定（各后端列目录时统一用它标记 [SourceEntry.isVideo]）。
