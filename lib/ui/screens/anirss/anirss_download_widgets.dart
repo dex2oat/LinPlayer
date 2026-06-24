@@ -39,6 +39,9 @@ class SubscriptionTile extends StatelessWidget {
   final void Function(bool deleteFiles) onDelete;
   final VoidCallback onToggleEnable;
 
+  /// 非空时显示「编辑」入口（打开订阅配置面板）。
+  final VoidCallback? onEdit;
+
   const SubscriptionTile({
     super.key,
     required this.ani,
@@ -46,6 +49,7 @@ class SubscriptionTile extends StatelessWidget {
     required this.onRefresh,
     required this.onDelete,
     required this.onToggleEnable,
+    this.onEdit,
   });
 
   @override
@@ -71,19 +75,26 @@ class SubscriptionTile extends StatelessWidget {
           else
             ...episodes.map((e) => _EpisodeProgressRow(e)),
           const Divider(height: 16),
-          Row(
+          Wrap(
+            spacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               TextButton.icon(
                 onPressed: onRefresh,
                 icon: const Icon(Icons.refresh, size: 18),
                 label: const Text('刷新'),
               ),
+              if (onEdit != null)
+                TextButton.icon(
+                  onPressed: onEdit,
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  label: const Text('编辑'),
+                ),
               TextButton.icon(
                 onPressed: onToggleEnable,
                 icon: Icon(ani.enable ? Icons.pause : Icons.play_arrow, size: 18),
                 label: Text(ani.enable ? '停用' : '启用'),
               ),
-              const Spacer(),
               TextButton.icon(
                 onPressed: () => _confirmDelete(context),
                 icon: const Icon(Icons.delete_outline, size: 18, color: Colors.red),

@@ -11,11 +11,19 @@ import '../../../core/widgets/app_shimmer.dart';
 import '../../widgets/anirss/ani_poster_card.dart';
 
 /// 首页：番剧海报墙。
-class AniRssHomeTab extends ConsumerWidget {
+class AniRssHomeTab extends ConsumerStatefulWidget {
   const AniRssHomeTab({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AniRssHomeTab> createState() => _AniRssHomeTabState();
+}
+
+class _AniRssHomeTabState extends ConsumerState<AniRssHomeTab> {
+  // 已播放过入场动效的订阅 id：回滑到已加载项不再重复渐显。
+  final Set<String> _seen = {};
+
+  @override
+  Widget build(BuildContext context) {
     final asyncList = ref.watch(aniListProvider);
     return RefreshIndicator(
       onRefresh: () async => ref.refresh(aniListProvider.future),
@@ -31,8 +39,9 @@ class AniRssHomeTab extends ConsumerWidget {
           }
           return GridView.builder(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
+            // 海报放大约 50%：3 列 → 自适应最大宽度（手机由约 106 → 约 168）。
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 170,
               childAspectRatio: 0.52,
               crossAxisSpacing: 12,
               mainAxisSpacing: 14,
@@ -40,7 +49,7 @@ class AniRssHomeTab extends ConsumerWidget {
             itemCount: list.length,
             itemBuilder: (context, index) {
               final ani = list[index];
-              return AniPosterCard(
+              final card = AniPosterCard(
                 imageUrls: [if (ani.image != null) ani.image!],
                 title: ani.title,
                 rating: ani.rating,
@@ -48,7 +57,13 @@ class AniRssHomeTab extends ConsumerWidget {
                 badge: ani.enable ? null : '未启用',
                 badgeMuted: !ani.enable,
                 onTap: () => _openDetail(context, ref, ani),
-              ).appEntrance(index: index);
+              );
+              return entranceOnce(
+                id: ani.id,
+                index: index,
+                seen: _seen,
+                child: card,
+              );
             },
           );
         },

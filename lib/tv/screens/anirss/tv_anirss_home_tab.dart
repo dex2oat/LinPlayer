@@ -13,11 +13,19 @@ import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_focusable.dart';
 
 /// Ani-rss 首页 Tab（TV）：番剧海报墙网格。max-extent 响应式网格 + D-pad 焦点。
-class TvAniRssHomeTab extends ConsumerWidget {
+class TvAniRssHomeTab extends ConsumerStatefulWidget {
   const TvAniRssHomeTab({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<TvAniRssHomeTab> createState() => _TvAniRssHomeTabState();
+}
+
+class _TvAniRssHomeTabState extends ConsumerState<TvAniRssHomeTab> {
+  // 已播放过入场动效的订阅 id：回滑到已加载项不再重复渐显。
+  final Set<String> _seen = {};
+
+  @override
+  Widget build(BuildContext context) {
     final m = context.tv;
     final asyncList = ref.watch(aniListProvider);
     return asyncList.when(
@@ -28,7 +36,8 @@ class TvAniRssHomeTab extends ConsumerWidget {
         if (list.isEmpty) {
           return _centerHint(m, '暂无订阅，去「订阅」页添加番剧');
         }
-        final double maxExtent = m.posterWidth2_3;
+        // 海报放大约 50%。
+        final double maxExtent = m.posterWidth2_3 * 1.5;
         return GridView.builder(
           gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
             maxCrossAxisExtent: maxExtent,
@@ -39,11 +48,15 @@ class TvAniRssHomeTab extends ConsumerWidget {
           itemCount: list.length,
           itemBuilder: (context, index) {
             final ani = list[index];
-            return TvFocusable(
+            final tile = TvFocusable(
               padding: EdgeInsets.all(m.s(6)),
               onSelect: () => _openDetail(context, ref, ani),
               child: _card(m, ani),
-            ).animate().fadeIn(
+            );
+            // 仅首次出现渐显；回滑到已加载项直接显示。
+            if (_seen.contains(ani.id)) return tile;
+            _seen.add(ani.id);
+            return tile.animate().fadeIn(
                   delay: Duration(milliseconds: 12 * (index % 6)),
                   duration: TvDesignTokens.contentFadeDuration,
                 );

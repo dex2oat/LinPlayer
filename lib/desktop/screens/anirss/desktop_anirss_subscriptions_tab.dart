@@ -8,6 +8,7 @@ import '../../../core/sources/anirss/models/ani.dart';
 import '../../../core/widgets/app_shimmer.dart';
 import '../../../ui/screens/anirss/anirss_download_widgets.dart';
 import '../../../ui/widgets/anirss/anirss_add_subscription_body.dart';
+import '../../../ui/widgets/anirss/anirss_edit_subscription_sheet.dart';
 import '../../utils/desktop_smooth_scroll.dart';
 import '../../widgets/native_feedback.dart';
 
@@ -115,6 +116,7 @@ class _SubscriptionList extends ConsumerWidget {
               onDelete: (deleteFiles) =>
                   _delete(context, ref, ani, deleteFiles),
               onToggleEnable: () => _toggle(context, ref, ani),
+              onEdit: () => showAniRssEditSubscriptionSheet(context, ref, ani),
             ),
           if (unmatched.isNotEmpty) ...[
             const Padding(

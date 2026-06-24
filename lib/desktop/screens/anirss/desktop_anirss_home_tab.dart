@@ -12,11 +12,20 @@ import '../../utils/desktop_smooth_scroll.dart';
 import '../../widgets/desktop_ani_poster_card.dart';
 
 /// 桌面端 Ani-rss 首页：番剧海报墙（响应式多列网格）。
-class DesktopAniRssHomeTab extends ConsumerWidget {
+class DesktopAniRssHomeTab extends ConsumerStatefulWidget {
   const DesktopAniRssHomeTab({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DesktopAniRssHomeTab> createState() =>
+      _DesktopAniRssHomeTabState();
+}
+
+class _DesktopAniRssHomeTabState extends ConsumerState<DesktopAniRssHomeTab> {
+  // 已播放过入场动效的订阅 id：回滑到已加载项不再重复渐显。
+  final Set<String> _seen = {};
+
+  @override
+  Widget build(BuildContext context) {
     final asyncList = ref.watch(aniListProvider);
 
     return asyncList.when(
@@ -39,7 +48,8 @@ class DesktopAniRssHomeTab extends ConsumerWidget {
                   builder: (context, constraints) {
                     const crossAxisSpacing = 18.0;
                     const mainAxisSpacing = 28.0;
-                    const targetCardWidth = 168.0;
+                    // 海报放大约 50%：168 → 252。
+                    const targetCardWidth = 252.0;
 
                     final availableWidth = constraints.crossAxisExtent;
                     final crossAxisCount =
@@ -63,7 +73,7 @@ class DesktopAniRssHomeTab extends ConsumerWidget {
                       delegate: SliverChildBuilderDelegate(
                         (context, index) {
                           final ani = list[index];
-                          return DesktopAniPosterCard(
+                          final card = DesktopAniPosterCard(
                             width: actualWidth,
                             imageUrls: [if (ani.image != null) ani.image!],
                             title: ani.title,
@@ -72,7 +82,13 @@ class DesktopAniRssHomeTab extends ConsumerWidget {
                             badge: ani.enable ? null : '未启用',
                             badgeMuted: !ani.enable,
                             onTap: () => _openDetail(context, ref, ani),
-                          ).appEntrance(index: index);
+                          );
+                          return entranceOnce(
+                            id: ani.id,
+                            index: index,
+                            seen: _seen,
+                            child: card,
+                          );
                         },
                         childCount: list.length,
                       ),

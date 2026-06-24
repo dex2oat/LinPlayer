@@ -58,6 +58,23 @@ class AppMotion {
   }
 }
 
+/// 「仅首次出现」入场动效：滚动列表/网格里，item 滚出再滚回会被
+/// GridView/ListView 回收重建，导致 [appEntrance] 的 flutter_animate 重新播放
+/// （即"回滑还在渐显"）。本方法按稳定 [id] 记录已出现项，已出现的直接显示、
+/// 不再渐显；仅真正首次进入视口的项才播放入场。
+///
+/// [seen] 由调用方（通常是 State）持有并跨 rebuild 保留。
+Widget entranceOnce({
+  required String id,
+  required int index,
+  required Set<String> seen,
+  required Widget child,
+}) {
+  if (seen.contains(id)) return child;
+  seen.add(id);
+  return child.appEntrance(index: index);
+}
+
 /// 统一入场动效扩展。在任意 Widget 上 `.appEntrance()` 即可获得
 /// 一致的“淡入 + 轻微上移”，列表/网格传 [index] 自动错峰。
 extension AppMotionEntrance on Widget {
