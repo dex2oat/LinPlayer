@@ -115,11 +115,26 @@ class _SourcePlayerScreenState extends ConsumerState<SourcePlayerScreen> {
       );
       if (_disposed) return;
       await _player.play();
+      // 外挂字幕（ani-rss 等源在 resolvePlay 里带回）：加载首条作默认。
+      // 内封字幕由播放器原生读取，无需在此处理。
+      if (play.subtitles.isNotEmpty) {
+        unawaited(_loadFirstSubtitle(play.subtitles.first.url));
+      }
       _scheduleHideControls();
     } on SourceException catch (e) {
       if (!_disposed) setState(() => _error = e.message);
     } catch (e) {
       if (!_disposed) setState(() => _error = '播放失败: $e');
+    }
+  }
+
+  /// 加载外挂字幕（mpv 内核支持 http url 直载；失败不影响播放）。
+  Future<void> _loadFirstSubtitle(String url) async {
+    if (url.isEmpty) return;
+    try {
+      await _player.loadLibassSubtitle(url);
+    } catch (_) {
+      // 忽略：字幕加载失败不应中断播放。
     }
   }
 

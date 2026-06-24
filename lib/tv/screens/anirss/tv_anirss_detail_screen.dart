@@ -10,6 +10,7 @@ import '../../../core/sources/anirss/anirss_providers.dart';
 import '../../../core/sources/anirss/models/ani.dart';
 import '../../../core/sources/anirss/models/play_item.dart';
 import '../../../ui/screens/source/source_player_screen.dart';
+import '../../../ui/widgets/anirss/anirss_detail_actions.dart';
 import '../../../ui/widgets/anirss/anirss_version_picker.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
 import '../../theme/tv_design_tokens.dart';
@@ -95,6 +96,8 @@ class _Body extends StatelessWidget {
                   _MovieActions(server: server, detail: detail)
                 else
                   _EpisodeList(server: server, detail: detail),
+                SizedBox(height: m.spacingLg),
+                _TvDetailActions(ani: ani),
                 if (overview != null && overview.isNotEmpty) ...[
                   SizedBox(height: m.spacingLg),
                   _buildSynopsis(m, overview),
@@ -274,6 +277,50 @@ class _Body extends StatelessWidget {
             height: TvDesignTokens.lineHeightRelaxed,
           ),
         ),
+      ],
+    );
+  }
+}
+
+/// TV 详情操作行（刷新封面 / 重新刮削 / 下载位置 / BGM 评分）。共用 [runAniRssDetailAction]。
+class _TvDetailActions extends ConsumerWidget {
+  final AniModel ani;
+  const _TvDetailActions({required this.ani});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final m = context.tv;
+    final api = ref.watch(aniRssApiProvider);
+    if (api == null) return const SizedBox.shrink();
+    return Wrap(
+      spacing: m.spacingMd,
+      runSpacing: m.spacingSm,
+      children: [
+        for (final a in AniRssDetailAction.values)
+          TvFocusable(
+            padding: EdgeInsets.all(m.s(3)),
+            onSelect: () => runAniRssDetailAction(context, ref, api, ani, a),
+            child: Container(
+              padding: EdgeInsets.symmetric(
+                  horizontal: m.spacingMd, vertical: m.spacingSm),
+              decoration: BoxDecoration(
+                color: TvDesignTokens.surfaceElevated,
+                borderRadius: BorderRadius.circular(m.posterRadius),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(a.icon,
+                      size: m.fontSizeMd, color: TvDesignTokens.textPrimary),
+                  SizedBox(width: m.spacingSm),
+                  Text(a.label,
+                      style: TextStyle(
+                          fontSize: m.fontSizeSm,
+                          color: TvDesignTokens.textPrimary)),
+                ],
+              ),
+            ),
+          ),
       ],
     );
   }

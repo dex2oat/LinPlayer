@@ -8,6 +8,7 @@ import '../../../core/sources/anirss/anirss_providers.dart';
 import '../../../core/sources/anirss/models/ani.dart';
 import '../../../core/sources/anirss/models/tmdb.dart';
 import '../../../core/widgets/app_shimmer.dart';
+import '../../widgets/anirss/anirss_detail_actions.dart';
 import '../../widgets/anirss/anirss_version_picker.dart';
 import '../../widgets/common/media_widgets.dart';
 
@@ -139,7 +140,14 @@ class _Header extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              BackButton(onPressed: () => Navigator.pop(context)),
+              Row(
+                children: [
+                  BackButton(onPressed: () => Navigator.pop(context)),
+                  const Spacer(),
+                  _AniRssDetailMenu(ani: ani),
+                  const SizedBox(width: 4),
+                ],
+              ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
                 child: Row(
@@ -223,6 +231,35 @@ class _Header extends StatelessWidget {
                     ),
                     child: Text(g.name, style: const TextStyle(fontSize: 11)),
                   ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// 详情页操作菜单（刷新封面 / 重新刮削 / 下载位置 / BGM 评分）。
+class _AniRssDetailMenu extends ConsumerWidget {
+  final AniModel ani;
+  const _AniRssDetailMenu({required this.ani});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final api = ref.watch(aniRssApiProvider);
+    if (api == null) return const SizedBox.shrink();
+    return PopupMenuButton<AniRssDetailAction>(
+      icon: const Icon(Icons.more_vert),
+      onSelected: (a) => runAniRssDetailAction(context, ref, api, ani, a),
+      itemBuilder: (_) => [
+        for (final a in AniRssDetailAction.values)
+          PopupMenuItem(
+            value: a,
+            child: Row(
+              children: [
+                Icon(a.icon, size: 20),
+                const SizedBox(width: 12),
+                Text(a.label),
               ],
             ),
           ),

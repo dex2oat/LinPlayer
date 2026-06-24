@@ -5,10 +5,10 @@ import '../../../core/sources/anirss/anirss_api.dart';
 import '../../../core/sources/anirss/anirss_match.dart';
 import '../../../core/sources/anirss/anirss_providers.dart';
 import '../../../core/sources/anirss/models/ani.dart';
-import '../../../core/sources/anirss/models/bgm_info.dart';
 import '../../../core/sources/anirss/models/torrent_info.dart';
 import '../../../ui/screens/anirss/anirss_download_widgets.dart'
     show torrentStateStyle;
+import '../../../ui/widgets/anirss/anirss_add_subscription_body.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
 import '../../theme/tv_design_tokens.dart';
 import '../../theme/tv_metrics.dart';
@@ -532,7 +532,8 @@ class _UnmatchedRow extends StatelessWidget {
   }
 }
 
-/// 添加订阅 overlay：文本框 → searchBgm → 结果列表（焦点行）→ getAniBySubjectId+addAni。
+/// 添加订阅 overlay（TV）：多搜索源（BGM / Mikan / AniBT / AnimeGarden）切换 →
+/// 焦点行选番 → 共用 [resolveAniRssCandidate]（必要时弹字幕组选择）→ addAni。
 class _AddSubscriptionPanel extends StatefulWidget {
   final AniRssApi api;
   final WidgetRef parentRef;
@@ -544,10 +545,13 @@ class _AddSubscriptionPanel extends StatefulWidget {
 
 class _AddSubscriptionPanelState extends State<_AddSubscriptionPanel> {
   final _ctrl = TextEditingController();
+  DiscoverSource _source = DiscoverSource.bgm;
   bool _loading = false;
   String? _error;
-  String? _addingId;
-  List<BgmInfoModel> _results = const [];
+  String? _busyKey;
+  List<AniRssCandidate> _results = const [];
+
+  AniRssApi get api => widget.api;
 
   @override
   void dispose() {
@@ -555,36 +559,76 @@ class _AddSubscriptionPanelState extends State<_AddSubscriptionPanel> {
     super.dispose();
   }
 
-  Future<void> _search() async {
-    final q = _ctrl.text.trim();
-    if (q.isEmpty) return;
+  void _switchSource(DiscoverSource s) {
+    if (s == _source) return;
+    setState(() {
+      _source = s;
+      _results = const [];
+      _error = null;
+    });
+    if (s != DiscoverSource.bgm) _load();
+  }
+
+  Future<void> _load() async {
+    if (_source == DiscoverSource.bgm && _ctrl.text.trim().isEmpty) return;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final r = await widget.api.searchBgm(q);
-      if (mounted) setState(() => _results = r);
+      switch (_source) {
+        case DiscoverSource.bgm:
+          final r = await api.searchBgm(_ctrl.text.trim());
+          _results = r.map(AniRssCandidate.fromBgm).toList();
+          break;
+        case DiscoverSource.mikan:
+          final mk = await api.mikan(text: _ctrl.text.trim());
+          _results = mk.allItems.map(AniRssCandidate.fromMikan).toList();
+          break;
+        case DiscoverSource.aniBT:
+          final b = await api.aniBT();
+          _results = b.allAnimes.map(AniRssCandidate.fromAnime).toList();
+          break;
+        case DiscoverSource.animeGarden:
+          final weeks = await api.animeGardenList();
+          final seen = <String>{};
+          final out = <AniRssCandidate>[];
+          for (final w in weeks) {
+            for (final it in w.items) {
+              final key = it.bangumiId ?? it.url ?? it.title;
+              if (key.isEmpty || !seen.add(key)) continue;
+              out.add(AniRssCandidate.fromAnimeGarden(it));
+            }
+          }
+          _results = out;
+          break;
+        case DiscoverSource.rss:
+          break;
+      }
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      _error = '$e';
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  Future<void> _add(BgmInfoModel bgm) async {
-    setState(() => _addingId = bgm.id);
+  Future<void> _add(AniRssCandidate c) async {
+    setState(() => _busyKey = c.stableKey);
     try {
-      final ani = await widget.api.getAniBySubjectId(bgm.id);
-      await widget.api.addAni(ani);
+      final ani = await resolveAniRssCandidate(context, api, c);
+      if (ani == null) {
+        if (mounted) setState(() => _busyKey = null);
+        return;
+      }
+      await api.addAni(ani);
       widget.parentRef.invalidate(aniListProvider);
       if (mounted) {
         Navigator.of(context).pop();
-        TvToast.show(context, '已添加订阅「${bgm.displayName}」');
+        TvToast.show(context, '已添加订阅「${c.title}」');
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _addingId = null);
+        setState(() => _busyKey = null);
         TvToast.show(context, '添加失败：$e');
       }
     }
@@ -593,6 +637,7 @@ class _AddSubscriptionPanelState extends State<_AddSubscriptionPanel> {
   @override
   Widget build(BuildContext context) {
     final m = context.tv;
+    final isBgm = _source == DiscoverSource.bgm;
     return Center(
       child: Material(
         color: Colors.transparent,
@@ -608,65 +653,104 @@ class _AddSubscriptionPanelState extends State<_AddSubscriptionPanel> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('搜索并添加订阅',
+              Text('添加订阅',
                   style: TextStyle(
                       fontSize: m.fontSizeLg,
                       color: TvDesignTokens.textPrimary,
                       fontWeight: FontWeight.bold)),
               SizedBox(height: m.spacingMd),
-              Row(
-                children: [
-                  Expanded(
-                    child: Container(
-                      padding: EdgeInsets.symmetric(horizontal: m.spacingMd),
-                      decoration: BoxDecoration(
-                        color: TvDesignTokens.surfaceElevated,
-                        borderRadius: BorderRadius.circular(m.posterRadius),
-                      ),
-                      child: TextField(
-                        controller: _ctrl,
-                        autofocus: true,
-                        style: TextStyle(
-                            fontSize: m.fontSizeMd,
-                            color: TvDesignTokens.textPrimary),
-                        textInputAction: TextInputAction.search,
-                        onSubmitted: (_) => _search(),
-                        decoration: const InputDecoration(
-                          hintText: '输入番剧名（BGM 搜索）',
-                          hintStyle:
-                              TextStyle(color: TvDesignTokens.textDisabled),
-                          border: InputBorder.none,
-                          icon: Icon(Icons.search,
-                              color: TvDesignTokens.textSecondary),
+              _sourceChips(m),
+              SizedBox(height: m.spacingMd),
+              if (isBgm || _source == DiscoverSource.mikan)
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        padding:
+                            EdgeInsets.symmetric(horizontal: m.spacingMd),
+                        decoration: BoxDecoration(
+                          color: TvDesignTokens.surfaceElevated,
+                          borderRadius: BorderRadius.circular(m.posterRadius),
+                        ),
+                        child: TextField(
+                          controller: _ctrl,
+                          autofocus: isBgm,
+                          style: TextStyle(
+                              fontSize: m.fontSizeMd,
+                              color: TvDesignTokens.textPrimary),
+                          textInputAction: TextInputAction.search,
+                          onSubmitted: (_) => _load(),
+                          decoration: InputDecoration(
+                            hintText: isBgm ? '输入番剧名（BGM 搜索）' : '在结果内筛选（可留空）',
+                            hintStyle: const TextStyle(
+                                color: TvDesignTokens.textDisabled),
+                            border: InputBorder.none,
+                            icon: const Icon(Icons.search,
+                                color: TvDesignTokens.textSecondary),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  SizedBox(width: m.spacingMd),
-                  TvFocusable(
-                    padding: EdgeInsets.all(m.s(4)),
-                    onSelect: _loading ? null : _search,
-                    child: Container(
-                      padding: EdgeInsets.symmetric(
-                          horizontal: m.spacingLg, vertical: m.spacingMd),
-                      decoration: BoxDecoration(
-                        color: TvDesignTokens.brand,
-                        borderRadius: BorderRadius.circular(m.posterRadius),
+                    SizedBox(width: m.spacingMd),
+                    TvFocusable(
+                      padding: EdgeInsets.all(m.s(4)),
+                      onSelect: _loading ? null : _load,
+                      child: Container(
+                        padding: EdgeInsets.symmetric(
+                            horizontal: m.spacingLg, vertical: m.spacingMd),
+                        decoration: BoxDecoration(
+                          color: TvDesignTokens.brand,
+                          borderRadius: BorderRadius.circular(m.posterRadius),
+                        ),
+                        child: Text(isBgm ? '搜索' : '刷新',
+                            style: TextStyle(
+                                fontSize: m.fontSizeMd,
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold)),
                       ),
-                      child: Text('搜索',
-                          style: TextStyle(
-                              fontSize: m.fontSizeMd,
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold)),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                ),
               SizedBox(height: m.spacingMd),
               Flexible(child: _buildResults(m)),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _sourceChips(TvMetrics m) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (final s in DiscoverSource.values)
+            if (s != DiscoverSource.rss)
+              Padding(
+                padding: EdgeInsets.only(right: m.spacingSm),
+                child: TvFocusable(
+                  padding: EdgeInsets.all(m.s(3)),
+                  onSelect: () => _switchSource(s),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(
+                        horizontal: m.spacingMd, vertical: m.spacingSm),
+                    decoration: BoxDecoration(
+                      color: _source == s
+                          ? TvDesignTokens.brand
+                          : TvDesignTokens.surfaceElevated,
+                      borderRadius: BorderRadius.circular(m.posterRadius),
+                    ),
+                    child: Text(s.label,
+                        style: TextStyle(
+                            fontSize: m.fontSizeSm,
+                            color: _source == s
+                                ? Colors.white
+                                : TvDesignTokens.textSecondary)),
+                  ),
+                ),
+              ),
+        ],
       ),
     );
   }
@@ -684,7 +768,8 @@ class _AddSubscriptionPanelState extends State<_AddSubscriptionPanel> {
     }
     if (_results.isEmpty) {
       return Center(
-          child: Text('输入关键词后点搜索',
+          child: Text(
+              _source == DiscoverSource.bgm ? '输入关键词后点搜索' : '暂无数据',
               style: TextStyle(
                   fontSize: m.fontSizeSm,
                   color: TvDesignTokens.textSecondary)));
@@ -693,18 +778,17 @@ class _AddSubscriptionPanelState extends State<_AddSubscriptionPanel> {
       shrinkWrap: true,
       itemCount: _results.length,
       itemBuilder: (context, i) {
-        final bgm = _results[i];
+        final c = _results[i];
         final meta = [
-          if (bgm.date != null) bgm.date!.split('T').first,
-          if (bgm.eps != null) '${bgm.eps} 集',
-          if (bgm.score != null && bgm.score! > 0)
-            '★ ${bgm.score!.toStringAsFixed(1)}',
+          if (c.score != null && c.score! > 0)
+            '★ ${c.score!.toStringAsFixed(1)}',
+          if (c.exists) '已订阅',
         ].join(' · ');
         return Padding(
           padding: EdgeInsets.only(bottom: m.spacingSm),
           child: TvFocusable(
             padding: EdgeInsets.all(m.s(4)),
-            onSelect: _addingId != null ? null : () => _add(bgm),
+            onSelect: _busyKey != null ? null : () => _add(c),
             child: Container(
               padding: EdgeInsets.all(m.spacingMd),
               decoration: BoxDecoration(
@@ -717,7 +801,7 @@ class _AddSubscriptionPanelState extends State<_AddSubscriptionPanel> {
                     width: m.s(48),
                     height: m.s(66),
                     child: MediaImage(
-                      imageUrl: bgm.image,
+                      imageUrl: c.cover,
                       fit: BoxFit.cover,
                       borderRadius: BorderRadius.circular(m.s(6)),
                     ),
@@ -728,7 +812,7 @@ class _AddSubscriptionPanelState extends State<_AddSubscriptionPanel> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(bgm.displayName,
+                        Text(c.title,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -745,13 +829,12 @@ class _AddSubscriptionPanelState extends State<_AddSubscriptionPanel> {
                     ),
                   ),
                   SizedBox(width: m.spacingMd),
-                  _addingId == bgm.id
+                  _busyKey == c.stableKey
                       ? SizedBox(
                           width: m.s(24),
                           height: m.s(24),
                           child: const CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: TvDesignTokens.brand))
+                              strokeWidth: 2, color: TvDesignTokens.brand))
                       : Icon(Icons.add_circle_outline,
                           color: TvDesignTokens.brand, size: m.s(28)),
                 ],

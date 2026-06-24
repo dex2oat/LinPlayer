@@ -5,8 +5,10 @@ import 'package:go_router/go_router.dart';
 import '../../../core/providers/server_providers.dart';
 import '../../../core/sources/anirss/anirss_config_spec.dart';
 import '../../../core/sources/anirss/anirss_providers.dart';
+import '../../../core/sources/anirss/anirss_api.dart';
 import '../../../core/sources/anirss/anirss_token.dart';
 import '../../../core/sources/anirss/models/ani_config.dart';
+import '../../../core/sources/anirss/models/log_entry.dart';
 import '../../theme/tv_design_tokens.dart';
 import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_focusable.dart';
@@ -52,6 +54,9 @@ class _TvAniRssSettingsTabState extends ConsumerState<TvAniRssSettingsTab> {
         SizedBox(height: m.spacingLg),
         _buildSectionTitle(m, '关于'),
         _buildAbout(m),
+        SizedBox(height: m.spacingLg),
+        _buildSectionTitle(m, '诊断与维护'),
+        const _TvDiagnosticsSection(),
         SizedBox(height: m.spacingLg),
         _buildSectionTitle(m, 'Ani-rss 服务端设置'),
         asyncConfig.when(
@@ -664,6 +669,295 @@ class _ServerManagementCard extends ConsumerWidget {
     ref.invalidate(aniListProvider);
     ref.invalidate(aniConfigProvider);
     ref.invalidate(aniAboutProvider);
+  }
+}
+
+/// TV 诊断与维护：连接测试 / 清缓存 / 清日志 / 服务更新 / 运行日志 / 停止服务。
+class _TvDiagnosticsSection extends ConsumerStatefulWidget {
+  const _TvDiagnosticsSection();
+
+  @override
+  ConsumerState<_TvDiagnosticsSection> createState() =>
+      _TvDiagnosticsSectionState();
+}
+
+class _TvDiagnosticsSectionState extends ConsumerState<_TvDiagnosticsSection> {
+  String? _busy;
+
+  Future<void> _run(String key, Future<void> Function(AniRssApi api) task,
+      String ok) async {
+    if (_busy != null) return;
+    final api = ref.read(aniRssApiProvider);
+    if (api == null) return;
+    setState(() => _busy = key);
+    try {
+      await task(api);
+      if (mounted) TvToast.show(context, ok);
+    } catch (e) {
+      if (mounted) TvToast.show(context, '失败：$e');
+    } finally {
+      if (mounted) setState(() => _busy = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final m = context.tv;
+    return Column(
+      children: [
+        _tile(m, Icons.wifi_tethering, '存活测试', '检测服务是否在线',
+            () => _run('ping', (a) => a.ping(), '服务在线')),
+        _tile(m, Icons.download_done_outlined, '下载器测试', '检测下载器连接',
+            () => _run('dl', (a) async {
+                  final cfg = await a.config();
+                  await a.downloadLoginTest(cfg);
+                }, '下载器连接正常')),
+        _tile(m, Icons.shield_outlined, 'IP 白名单测试', '检测白名单配置',
+            () => _run('ip', (a) => a.testIpWhitelist(), '白名单测试通过')),
+        _tile(m, Icons.cleaning_services_outlined, '清理缓存', '清理服务端缓存',
+            () => _run('cache', (a) => a.clearCache(), '缓存已清理')),
+        _tile(m, Icons.article_outlined, '运行日志', '查看最近运行日志',
+            _showLogs),
+        _tile(m, Icons.delete_outline, '清空日志', '清空服务端运行日志',
+            () => _run('clearLogs', (a) => a.clearLogs(), '日志已清空')),
+        _tile(m, Icons.system_update_alt_outlined, '检查并更新', '触发服务端自更新',
+            () => _run('update', (a) => a.update(), '已触发更新')),
+        _tile(m, Icons.power_settings_new, '停止服务', '停止 Ani-rss 服务端进程',
+            _confirmStop,
+            danger: true),
+      ],
+    );
+  }
+
+  Widget _tile(TvMetrics m, IconData icon, String title, String subtitle,
+      VoidCallback onTap,
+      {bool danger = false}) {
+    final c = danger ? TvDesignTokens.error : TvDesignTokens.textPrimary;
+    return Padding(
+      padding: EdgeInsets.only(bottom: m.spacingSm),
+      child: TvFocusable(
+        padding: EdgeInsets.all(m.s(4)),
+        onSelect: onTap,
+        child: Container(
+          padding: EdgeInsets.symmetric(
+              horizontal: m.spacingLg, vertical: m.spacingMd),
+          decoration: BoxDecoration(
+            color: TvDesignTokens.surface,
+            borderRadius: BorderRadius.circular(m.posterRadius),
+          ),
+          child: Row(
+            children: [
+              Icon(icon,
+                  color: danger
+                      ? TvDesignTokens.error
+                      : TvDesignTokens.textSecondary,
+                  size: m.s(28)),
+              SizedBox(width: m.spacingMd),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(title,
+                        style: TextStyle(fontSize: m.fontSizeMd, color: c)),
+                    Text(subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: m.fontSizeXs,
+                            color: TvDesignTokens.textSecondary)),
+                  ],
+                ),
+              ),
+              if (_busy != null)
+                SizedBox(
+                  width: m.s(20),
+                  height: m.s(20),
+                  child: const CircularProgressIndicator(
+                      strokeWidth: 2, color: TvDesignTokens.brand),
+                )
+              else
+                Icon(Icons.chevron_right,
+                    color: TvDesignTokens.textSecondary, size: m.s(24)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmStop() async {
+    final m = context.tv;
+    final ok = await showGeneralDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '停止服务',
+      barrierColor: Colors.black.withValues(alpha: 0.7),
+      pageBuilder: (ctx, _, __) => Center(
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            width: m.s(560),
+            padding: EdgeInsets.all(m.spacingXl),
+            decoration: BoxDecoration(
+              color: TvDesignTokens.surface,
+              borderRadius: BorderRadius.circular(m.posterRadius),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('停止 Ani-rss 服务？',
+                    style: TextStyle(
+                        fontSize: m.fontSizeLg,
+                        color: TvDesignTokens.textPrimary,
+                        fontWeight: FontWeight.bold)),
+                SizedBox(height: m.spacingSm),
+                Text('停止后需在服务器端手动重启。',
+                    style: TextStyle(
+                        fontSize: m.fontSizeSm,
+                        color: TvDesignTokens.textSecondary)),
+                SizedBox(height: m.spacingLg),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TvFocusable(
+                        autofocus: true,
+                        padding: EdgeInsets.all(m.s(4)),
+                        onSelect: () => Navigator.of(ctx).pop(false),
+                        child: _dialogButton(m, '取消', danger: false),
+                      ),
+                    ),
+                    SizedBox(width: m.spacingMd),
+                    Expanded(
+                      child: TvFocusable(
+                        padding: EdgeInsets.all(m.s(4)),
+                        onSelect: () => Navigator.of(ctx).pop(true),
+                        child: _dialogButton(m, '停止', danger: true),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (ok != true) return;
+    await _run('stop', (a) => a.stop(), '已发送停止指令');
+  }
+
+  Widget _dialogButton(TvMetrics m, String label, {required bool danger}) {
+    return Container(
+      padding:
+          EdgeInsets.symmetric(horizontal: m.spacingLg, vertical: m.spacingMd),
+      decoration: BoxDecoration(
+        color: danger ? TvDesignTokens.error : TvDesignTokens.surfaceElevated,
+        borderRadius: BorderRadius.circular(m.posterRadius),
+      ),
+      child: Text(label,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+              fontSize: m.fontSizeMd,
+              color: Colors.white,
+              fontWeight: FontWeight.w600)),
+    );
+  }
+
+  Future<void> _showLogs() async {
+    final api = ref.read(aniRssApiProvider);
+    if (api == null) return;
+    List<LogEntryModel> logs;
+    try {
+      logs = await api.logs();
+    } catch (e) {
+      if (mounted) TvToast.show(context, '读取日志失败：$e');
+      return;
+    }
+    if (!mounted) return;
+    final m = context.tv;
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '运行日志',
+      barrierColor: Colors.black.withValues(alpha: 0.8),
+      pageBuilder: (ctx, _, __) => Center(
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            width: m.s(960),
+            constraints: BoxConstraints(maxHeight: m.s(720)),
+            padding: EdgeInsets.all(m.spacingXl),
+            decoration: BoxDecoration(
+              color: TvDesignTokens.surface,
+              borderRadius: BorderRadius.circular(m.posterRadius),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('运行日志（最近 ${logs.length > 100 ? 100 : logs.length} 条）',
+                    style: TextStyle(
+                        fontSize: m.fontSizeLg,
+                        color: TvDesignTokens.textPrimary,
+                        fontWeight: FontWeight.bold)),
+                SizedBox(height: m.spacingMd),
+                Flexible(
+                  child: logs.isEmpty
+                      ? Text('暂无日志',
+                          style: TextStyle(
+                              fontSize: m.fontSizeSm,
+                              color: TvDesignTokens.textSecondary))
+                      : ListView(
+                          children: [
+                            for (final log in logs.reversed.take(100))
+                              Padding(
+                                padding: EdgeInsets.only(bottom: m.spacingXs),
+                                child: Row(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    Container(
+                                      width: m.s(8),
+                                      height: m.s(8),
+                                      margin: EdgeInsets.only(top: m.s(6)),
+                                      decoration: BoxDecoration(
+                                        color: log.isError
+                                            ? TvDesignTokens.error
+                                            : (log.isWarn
+                                                ? Colors.orange
+                                                : Colors.green),
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    SizedBox(width: m.spacingSm),
+                                    Expanded(
+                                      child: Text(log.message,
+                                          style: TextStyle(
+                                              fontSize: m.fontSizeXs,
+                                              color: TvDesignTokens
+                                                  .textSecondary)),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                ),
+                SizedBox(height: m.spacingMd),
+                TvFocusable(
+                  autofocus: true,
+                  padding: EdgeInsets.all(m.s(4)),
+                  onSelect: () => Navigator.of(ctx).pop(),
+                  child: _dialogButton(m, '关闭', danger: false),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

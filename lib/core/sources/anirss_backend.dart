@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'anirss/anirss_api.dart';
 import 'anirss/anirss_token.dart';
 import '../providers/server_providers.dart';
 import 'media_source_backend.dart';
@@ -110,12 +111,48 @@ class AniRssBackend implements MediaSourceBackend {
         '?filename=${Uri.encodeQueryComponent(b64Filename)}'
         '&${AniRssAuth.queryAuthKey}=${Uri.encodeQueryComponent(token)}';
     final headers = {AniRssAuth.header: token};
+    var subs = _subtitlesOf(entry, base, token, headers);
+    // 列表未带外挂字幕时，回退调用 getSubtitles 取（内封被服务端提取/外挂可下载）。
+    if (subs.isEmpty) {
+      subs = await _fetchSubtitles(server, b64Filename, base, token, headers);
+    }
     return ResolvedPlay(
       url: url,
       title: entry.name,
       httpHeaders: headers,
-      subtitles: _subtitlesOf(entry, base, token, headers),
+      subtitles: subs,
     );
+  }
+
+  /// `/api/getSubtitles` 兜底取字幕：仅取带可用 url 的（content-only 内封轨由播放器原生读）。
+  Future<List<SourceSubtitle>> _fetchSubtitles(
+    ServerConfig server,
+    String b64Filename,
+    String base,
+    String token,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final list = await AniRssApi(server).getSubtitles(b64Filename);
+      final out = <SourceSubtitle>[];
+      for (final s in list) {
+        final u = s.url;
+        if (u == null || u.isEmpty) continue;
+        final full = u.startsWith('http')
+            ? u
+            : '$base${u.startsWith('/') ? '' : '/'}$u';
+        final sep = full.contains('?') ? '&' : '?';
+        out.add(SourceSubtitle(
+          url:
+              '$full$sep${AniRssAuth.queryAuthKey}=${Uri.encodeQueryComponent(token)}',
+          title: s.name,
+          httpHeaders: headers,
+        ));
+      }
+      return out;
+    } catch (_) {
+      return const []; // 兜底失败不影响播放
+    }
   }
 
   /// 把 PlayItem.subtitles 映射成外挂字幕轨（仅取可解析的绝对/相对 URL）。

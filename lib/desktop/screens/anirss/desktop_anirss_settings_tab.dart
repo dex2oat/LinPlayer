@@ -8,6 +8,7 @@ import '../../../core/sources/anirss/anirss_providers.dart';
 import '../../../core/sources/anirss/anirss_token.dart';
 import '../../../core/sources/anirss/models/ani_config.dart';
 import '../../../core/widgets/app_shimmer.dart';
+import '../../../ui/widgets/anirss/anirss_diagnostics.dart';
 import '../../../ui/widgets/anirss/config_form.dart';
 import '../../utils/desktop_smooth_scroll.dart';
 import '../../widgets/native_feedback.dart';
@@ -61,6 +62,7 @@ class _DesktopAniRssSettingsTabState
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const _ServerManagementCard(),
+                const _DiagnosticsCard(),
                 const _AboutCard(),
                 const SizedBox(height: 12),
                 Padding(
@@ -251,6 +253,26 @@ class _ServerManagementCard extends ConsumerWidget {
     ref.invalidate(aniListProvider);
     ref.invalidate(aniConfigProvider);
     ref.invalidate(aniAboutProvider);
+  }
+}
+
+/// 诊断与维护入口（桌面）。
+class _DiagnosticsCard extends ConsumerWidget {
+  const _DiagnosticsCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final api = ref.watch(aniRssApiProvider);
+    if (api == null) return const SizedBox.shrink();
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.healing_outlined),
+        title: const Text('诊断与维护'),
+        subtitle: const Text('运行日志 · 连接测试 · 清理缓存 · 服务更新'),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => showAniRssDiagnostics(context, ref),
+      ),
+    );
   }
 }
 

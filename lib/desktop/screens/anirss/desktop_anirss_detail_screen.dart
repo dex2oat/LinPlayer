@@ -9,6 +9,7 @@ import '../../../core/sources/anirss/anirss_providers.dart';
 import '../../../core/sources/anirss/models/ani.dart';
 import '../../../core/sources/anirss/models/tmdb.dart';
 import '../../../core/widgets/app_shimmer.dart';
+import '../../../ui/widgets/anirss/anirss_detail_actions.dart';
 import '../../../ui/widgets/anirss/anirss_version_picker.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
 import '../../utils/desktop_smooth_scroll.dart';
@@ -113,6 +114,40 @@ class _DetailBody extends StatelessWidget {
   }
 }
 
+/// 桌面详情页操作菜单（刷新封面 / 重新刮削 / 下载位置 / BGM 评分）。
+class _DesktopDetailMenu extends ConsumerWidget {
+  final AniModel ani;
+  const _DesktopDetailMenu({required this.ani});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final api = ref.watch(aniRssApiProvider);
+    if (api == null) return const SizedBox.shrink();
+    return Material(
+      color: Colors.black26,
+      shape: const CircleBorder(),
+      child: PopupMenuButton<AniRssDetailAction>(
+        icon: const Icon(Icons.more_vert, color: Colors.white),
+        tooltip: '更多操作',
+        onSelected: (a) => runAniRssDetailAction(context, ref, api, ani, a),
+        itemBuilder: (_) => [
+          for (final a in AniRssDetailAction.values)
+            PopupMenuItem(
+              value: a,
+              child: Row(
+                children: [
+                  Icon(a.icon, size: 20),
+                  const SizedBox(width: 12),
+                  Text(a.label),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _Header extends StatelessWidget {
   final ServerConfig server;
   final AniModel ani;
@@ -165,9 +200,12 @@ class _Header extends StatelessWidget {
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(12),
-              child: Align(
-                alignment: Alignment.topLeft,
-                child: BackButton(onPressed: () => context.pop()),
+              child: Row(
+                children: [
+                  BackButton(onPressed: () => context.pop()),
+                  const Spacer(),
+                  _DesktopDetailMenu(ani: ani),
+                ],
               ),
             ),
           ),
