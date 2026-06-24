@@ -20,10 +20,19 @@
 
 .PARAMETER DownloadUrl
     Direct URL to a shinchiro mpv-dev-x86_64 .7z archive. Defaults to the latest known release.
+
+    SECURITY · CVE-2026-8461 (PixelSmash): shinchiro full builds bundle ffmpeg with the
+    magicyuv decoder enabled, which has a heap OOB write fixed only in FFmpeg 8.1.2
+    (2026-06-17). The pinned 20260610 build predates that fix. Bump this URL to the first
+    shinchiro release dated >= 20260618 (which ships patched ffmpeg) when available.
+    Until then, the player blacklists the magicyuv decoder at runtime (vd=-magicyuv in
+    lib/core/services/mpv_player_adapter.dart), so the bundled-ffmpeg version is not
+    exploitable via this CVE regardless.
 #>
 [CmdletBinding()]
 param(
     [string]$BuildOutput = "",
+    # CVE-2026-8461: keep this >= 20260618 once shinchiro publishes a post-fix build (see .PARAMETER DownloadUrl).
     [string]$DownloadUrl = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260610/mpv-dev-x86_64-20260610-git-304426c.7z",
     [switch]$AllowFailure
 )

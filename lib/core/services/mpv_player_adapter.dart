@@ -581,6 +581,14 @@ class MpvPlayerAdapter implements PlayerAdapter {
           await np.setProperty('blend-subtitles', _subtitleBlendMode);
           await np.setProperty('sub-visibility', 'yes');
           await np.setProperty('hwdec', hardwareDecoding ? 'auto-safe' : 'no');
+          // 安全加固 · CVE-2026-8461 (PixelSmash)：libavcodec 的 magicyuv 解码器
+          // 存在堆越界写（攻击者构造的 slice_height 多写一行 chroma 越界），恶意
+          // AVI/MKV/MOV 即可触发崩溃乃至 RCE。修复随 FFmpeg 8.1.2(2026-06-17)发布，
+          // 但桌面端预编译 libmpv（Windows shinchiro 完整版 / macOS·Linux 系统库）
+          // 仍可能内置旧版 ffmpeg。MagicYUV 是冷门无损录屏编码，正常影视/番剧绝不会
+          // 用到，故直接在 mpv 解码层拒绝该解码器（前缀 '-' 仅黑名单这一个，其余编码
+          // 仍走自动选择），无需等待各平台 libmpv 重新打包即可消除攻击面。
+          await np.setProperty('vd', '-magicyuv');
           if (dolbyVisionFix) {
             // 杜比视界软件修正：media_kit 走 vo=libmpv(gpu 渲染管线)，无独立 gpu-next vo，
             // 无法对 DV RPU 做 libplacebo 映射；这里以色彩空间提示 + 色调映射尽量还原，
