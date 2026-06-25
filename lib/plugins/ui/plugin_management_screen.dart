@@ -181,8 +181,10 @@ class _PluginTile extends StatelessWidget {
                 TextButton.icon(
                   icon: const Icon(Icons.lock_outline, size: 18),
                   label: const Text('权限'),
-                  onPressed: () =>
-                      showPluginPermissionConsent(context, info.manifest),
+                  // 只读查看权限：启用请用上方开关。避免「点权限也能假启用」的歧义。
+                  onPressed: () => showPluginPermissionConsent(
+                      context, info.manifest,
+                      viewOnly: true),
                 ),
                 _SettingsButton(info: info, manager: manager),
                 TextButton.icon(

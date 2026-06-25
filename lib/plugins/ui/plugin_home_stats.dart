@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/providers/server_providers.dart';
 import '../manager/plugin_manager.dart';
 import '../models/plugin_extension_point.dart';
 import '../providers/plugin_providers.dart';
@@ -35,12 +36,18 @@ class PluginHomeStatsView extends ConsumerStatefulWidget {
 class _PluginHomeStatsViewState extends ConsumerState<PluginHomeStatsView> {
   final Map<String, Future<dynamic>> _cache = {};
 
-  /// 缓存键：扩展键 + handler 句柄 id。插件重新注册（如保存设置后）会生成新的
-  /// handler id，从而使该键变化 → 自动重新请求，无需重启应用。
+  /// 当前服务器 id（纳入缓存键的作用域）。在 build 中更新。
+  String _serverScope = '';
+
+  /// 缓存键：当前服务器 id + 扩展键 + handler 句柄 id。
+  /// - handler id：插件重新注册（如保存设置后）会生成新的 id → 自动重新请求。
+  /// - 服务器 id：很多 homeStats 是「按当前服务器」计算的（如只在某台服显示的流量
+  ///   统计）。不纳入作用域的话，切服后会沿用上一台服的旧结果（如切走 uhdnow 后仍
+  ///   显示流量）。把它纳入键 → 切服即重算，handler 返回空则该指标隐藏。
   String _cacheKey(PluginExtension ext) {
     final h = ext.data['handler'];
     final hid = (h is Map) ? '${h['__handler__'] ?? ''}' : '$h';
-    return '${ext.key}:$hid';
+    return '$_serverScope::${ext.key}:$hid';
   }
 
   Future<dynamic> _futureFor(PluginExtension ext) {
@@ -77,6 +84,9 @@ class _PluginHomeStatsViewState extends ConsumerState<PluginHomeStatsView> {
   Widget build(BuildContext context) {
     // 监听注册表：扩展增减时重建（并清理失效缓存）。
     ref.watch(pluginRegistryProvider);
+    // 监听当前服务器：切服时把它纳入缓存作用域，触发按服务器统计的指标重算。
+    _serverScope =
+        ref.watch(currentServerProvider.select((s) => s?.id)) ?? '';
     final exts = PluginManager.instance.registry
         .byType(PluginExtensionType.homeStats);
 

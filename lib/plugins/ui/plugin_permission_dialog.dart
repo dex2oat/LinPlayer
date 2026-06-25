@@ -2,19 +2,23 @@ import 'package:flutter/material.dart';
 
 import '../models/plugin_manifest.dart';
 
-/// 弹出权限同意弹窗。返回 true 表示用户同意启用。
+/// 弹出权限弹窗。
 ///
-/// 启用插件前必须经过此确认（权限声明制）。
+/// - [viewOnly] = false（默认）：**同意制**，用于启用流程。底部为「取消 / 同意并启用」，
+///   返回 true 表示用户同意启用（调用方据此真正 enable）。
+/// - [viewOnly] = true：**只读查看**，仅展示该插件声明的权限，底部只有「关闭」，
+///   不做任何启用动作，恒返回 false。避免「点权限按钮也能假启用」的歧义。
 Future<bool> showPluginPermissionConsent(
   BuildContext context,
-  PluginManifest manifest,
-) async {
+  PluginManifest manifest, {
+  bool viewOnly = false,
+}) async {
   final perms = manifest.resolvedPermissions;
   final result = await showDialog<bool>(
     context: context,
     builder: (context) {
       return AlertDialog(
-        title: Text('启用「${manifest.name}」'),
+        title: Text(viewOnly ? '「${manifest.name}」权限' : '启用「${manifest.name}」'),
         content: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -105,16 +109,23 @@ Future<bool> showPluginPermissionConsent(
             ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('同意并启用'),
-          ),
-        ],
+        actions: viewOnly
+            ? [
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('关闭'),
+                ),
+              ]
+            : [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('同意并启用'),
+                ),
+              ],
       );
     },
   );
