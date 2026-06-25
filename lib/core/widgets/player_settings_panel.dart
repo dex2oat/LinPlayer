@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
@@ -11,7 +10,7 @@ import '../theme/app_motion.dart';
 /// 设计约束（与产品需求一一对应）：
 /// - 停靠屏幕**右侧**，仅左侧圆角；
 /// - 宽度**由内容决定**，但**绝不超过屏幕宽度的 1/3**（[PlayerPanelTokens.maxWidthFraction]）；
-/// - **不使用黑色遮罩**：barrier 全透明、不挡画面；面板自身用「半透明 + 局部高斯模糊」
+/// - **不使用黑色遮罩**：barrier 全透明、不挡画面；面板自身用「淡深色半透明遮罩」
 ///   （仅面板区域，约屏幕 1/3）保证文字清晰，而不是盖一层全屏蒙版；
 /// - **适配深 / 浅色**：颜色全部取自 [AppColors] + 当前 `Theme.brightness`，不再写死黑底白字；
 /// - 入场动效复用 [AppMotion]（自右向左滑入 + 淡入），与全端动效系统一致；
@@ -33,9 +32,6 @@ class PlayerPanelTokens {
 
   /// 高度上限：屏幕高度的 88%。
   static const double maxHeightFraction = 0.88;
-
-  /// 面板局部毛玻璃模糊强度（只作用于面板背后那一条，不是全屏）。
-  static const double blurSigma = 16;
 }
 
 /// 面板配色：根据明暗模式解析出一套可读的半透明配色。
@@ -66,8 +62,8 @@ class PlayerPanelColors {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     if (isDark) {
       return PlayerPanelColors(
-        // 遮罩浓度调低：面板更通透，画面隐约可见（毛玻璃仍保证文字可读）。
-        surface: AppColors.darkSurface.withValues(alpha: 0.62),
+        // 淡黑半透明遮罩(无毛玻璃)：几乎透明、画面隐约可见，白字仍清晰。
+        surface: Colors.black.withValues(alpha: 0.5),
         headerSurface: Colors.white.withValues(alpha: 0.04),
         text: AppColors.darkText,
         textSecondary: AppColors.darkTextSecondary,
@@ -178,13 +174,10 @@ class _PlayerSettingsPanel extends StatelessWidget {
         type: MaterialType.transparency,
         child: ClipRRect(
           borderRadius: borderRadius,
-          // 局部毛玻璃：只模糊面板背后这一条，不是全屏遮罩。
-          child: BackdropFilter(
-            filter: ImageFilter.blur(
-              sigmaX: PlayerPanelTokens.blurSigma,
-              sigmaY: PlayerPanelTokens.blurSigma,
-            ),
-            child: Container(
+          // 去毛玻璃：滑入时 BackdropFilter 每帧实时模糊采样视频 Texture，
+          // 在 Windows/ANGLE 上卡顿。改用淡深色半透明遮罩——几乎透明、
+          // 隐约透出画面，又够暗看清参数，且零模糊开销。
+          child: Container(
               width: width,
               constraints: BoxConstraints(maxHeight: maxHeight),
               decoration: BoxDecoration(
@@ -223,7 +216,6 @@ class _PlayerSettingsPanel extends StatelessWidget {
                 ),
               ),
             ),
-          ),
         ),
       ),
     );

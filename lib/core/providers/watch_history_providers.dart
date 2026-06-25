@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../api/api_interfaces.dart';
 import '../services/watch_history/watch_history_models.dart';
 import '../services/watch_history/watch_history_restore_service.dart';
 import '../services/watch_history/watch_history_service.dart';
@@ -7,6 +8,7 @@ import '../services/watch_history/watch_history_store.dart';
 import '../services/watch_history/watch_history_writeback_service.dart';
 import 'app_preferences.dart';
 import 'media_providers.dart';
+import 'playback_providers.dart';
 import 'server_providers.dart';
 
 final watchHistoryStoreProvider = Provider<WatchHistoryStore>((ref) {
@@ -79,6 +81,35 @@ final watchHistoryRestoreQueueProvider = StateNotifierProvider<
     WatchHistoryRestoreQueueNotifier, WatchHistoryRestoreQueueState>((ref) {
   return WatchHistoryRestoreQueueNotifier(ref);
 });
+
+/// 解析续播起点（三端共用）：优先本地观看记录（含跨服务器续播），回退服务器
+/// userData.playbackPositionTicks。TV 端旧实现只读服务器 userData，会漏掉本地
+/// 已记录但未同步到服务器的进度、以及网盘/聚合源等无服务器 userData 的场景，
+/// 导致“经常续不上”。统一走此函数。返回 null 表示从头播放。
+Future<Duration?> resolveResumeStartPosition(
+  WidgetRef ref,
+  ApiClientFactory api,
+  MediaItem item,
+) async {
+  final remotePlayed = item.userData?.played ?? false;
+  final remotePositionTicks =
+      remotePlayed ? null : item.userData?.playbackPositionTicks?.round();
+  final scopeKey = buildWatchHistoryScopeKey(ref.read(currentServerProvider));
+  final resolvedTicks = scopeKey == null
+      ? remotePositionTicks
+      : await ref.read(watchHistoryProvider).resolveResumePositionTicks(
+            scopeKey: scopeKey,
+            api: api,
+            item: item,
+            remotePositionTicks: remotePositionTicks,
+            remotePlayed: remotePlayed,
+            crossServer: ref.read(crossServerResumeProvider),
+          );
+  if (resolvedTicks == null || resolvedTicks <= 0) {
+    return null;
+  }
+  return Duration(milliseconds: (resolvedTicks / 10000).round());
+}
 
 String? buildWatchHistoryScopeKey(ServerConfig? server) {
   final userId = server?.userId;

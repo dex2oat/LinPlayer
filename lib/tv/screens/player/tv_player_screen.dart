@@ -333,13 +333,15 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
       final surfaceViewId = coreType == PlayerCoreType.nativeMpv
           ? DateTime.now().microsecondsSinceEpoch
           : null;
-      // 续播：未看完且有上次进度则从该位置开始（ticks 为 100ns 单位）。
-      final resumeTicks = item.userData?.playbackPositionTicks;
-      final startPosition = (!(item.userData?.played ?? false) &&
-              resumeTicks != null &&
-              resumeTicks > 0)
-          ? Duration(milliseconds: (resumeTicks / 10000).round())
-          : null;
+      // 续播：与桌面/移动端统一走 resolveResumeStartPosition——优先本地观看记录
+      // （含跨服务器续播），回退服务器 userData。旧实现只读服务器 userData，会漏掉
+      // 本地已记录但未同步到服务器的进度，导致 TV“经常续不上”。
+      Duration? startPosition;
+      try {
+        startPosition = await resolveResumeStartPosition(ref, api, item);
+      } catch (_) {
+        startPosition = null;
+      }
 
       await _service.initialize(
         videoUrl: effectiveUrl,

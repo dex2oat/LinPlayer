@@ -358,7 +358,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
     Duration? startPosition;
     try {
-      startPosition = await _resolveResumeStartPosition(api, item);
+      startPosition = await resolveResumeStartPosition(ref, api, item);
     } catch (_) {
       startPosition = null;
     }
@@ -624,30 +624,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     final pos = _playerService.position;
     ref.read(sourceSelectedQualityProvider.notifier).state = qualityId;
     await _initializeSourcePlayer(sp, startPosition: pos);
-  }
-
-  Future<Duration?> _resolveResumeStartPosition(
-    ApiClientFactory api,
-    MediaItem item,
-  ) async {
-    final remotePlayed = item.userData?.played ?? false;
-    final remotePositionTicks =
-        remotePlayed ? null : item.userData?.playbackPositionTicks?.round();
-    final scopeKey = buildWatchHistoryScopeKey(ref.read(currentServerProvider));
-    final resolvedTicks = scopeKey == null
-        ? remotePositionTicks
-        : await ref.read(watchHistoryProvider).resolveResumePositionTicks(
-              scopeKey: scopeKey,
-              api: api,
-              item: item,
-              remotePositionTicks: remotePositionTicks,
-              remotePlayed: remotePlayed,
-              crossServer: ref.read(crossServerResumeProvider),
-            );
-    if (resolvedTicks == null || resolvedTicks <= 0) {
-      return null;
-    }
-    return Duration(milliseconds: (resolvedTicks / 10000).round());
   }
 
   Future<void> _waitForTracksReady() async {

@@ -26,6 +26,9 @@ class MpvPlayerAdapter implements PlayerAdapter {
   static const _startupSeekPollInterval = Duration(milliseconds: 40);
   static const _startupSeekPollTimeout = Duration(milliseconds: 240);
   static const _startupSeekTolerance = Duration(milliseconds: 750);
+  // 兜底续播前等 demuxer 就绪（duration 落定）。网络 4K 冷启动可能数秒，
+  // 给足耐心，避免“还没加载完就判失败”从头播放；start 选项命中后会立即返回。
+  static const _demuxerReadyTimeout = Duration(seconds: 15);
 
   Player? _player;
   VideoController? _videoController;
@@ -211,28 +214,36 @@ class MpvPlayerAdapter implements PlayerAdapter {
       }
     }
 
-    if (resumePosition != null && np != null) {
-      final seconds = resumePosition.inMilliseconds / 1000.0;
+    // 续播定位统一交给 mpv 的 start 选项（等价于 mpv.exe 的 --start=），在 loadfile
+    // 阶段原生生效，最稳——与 Android 原生 mpv 走同一套路。每次 open 都显式写入：
+    // 有续播点写秒数，无续播点写 none 清掉上一次的残留，避免续播点泄漏到下一集
+    // （没历史也跳着播）。注意 open 之后绝不复位 start：复位会与 loadfile 读取 start
+    // 抢跑，慢速/4K 网络源下把续播点清掉导致从头播放，这正是“经常续不上”的根因。
+    if (np != null) {
       try {
-        await np.setProperty('start', '$seconds');
+        await np.setProperty(
+          'start',
+          resumePosition != null
+              ? '${resumePosition.inMilliseconds / 1000.0}'
+              : 'none',
+        );
       } catch (_) {
         // start 设置失败时继续走兜底 seek 流程。
       }
     }
 
+    // 复位缓存的 duration/position，让兜底续播按「新文件」判定就绪与落位。
+    // reload 复用同一 Player 不经 dispose，残留旧值会让 _waitForDemuxerReady
+    // 立即返回、_isNearStartupSeekTarget 误命中旧位置。stream 会在新文件加载后回填。
+    _duration = Duration.zero;
+    _position = Duration.zero;
+
     final media = Media(videoUrl);
     await _player!.open(media, play: false);
 
     if (resumePosition != null) {
-      // 兜底校正：部分协议/解码路径下 start 选项可能不生效，再用重试 seek 落位。
+      // 兜底校正：个别协议/解码路径下 start 选项可能不生效，等加载就绪后补一次 seek。
       await _applyStartupSeek(resumePosition);
-    }
-
-    // 复位 start，避免 start 选项影响后续可能的加载（防御性处理）。
-    if (resumePosition != null && np != null) {
-      try {
-        await np.setProperty('start', 'none');
-      } catch (_) {}
     }
   }
 
@@ -256,15 +267,25 @@ class MpvPlayerAdapter implements PlayerAdapter {
   /// `hdmv_pgs_subtitle`，这是 PC 端不显示 PGS/SUP 的根因。
   /// 探测结果只用于日志/诊断，真正的修复需要替换为完整版 libmpv-2.dll。
   Future<void> _applyStartupSeek(Duration startPosition) async {
-    Object? lastError;
-    StackTrace? lastStackTrace;
+    // 先等 demuxer 就绪：mpv 的 start 选项在加载时生效，就绪后位置通常已在续播点。
+    // 不等加载完就盲目重试 seek，会在固定短预算内对“尚未加载的播放器”空发 seek
+    // 然后判失败——这是慢速/4K 网络源续播失败的主因。
+    await _waitForDemuxerReady();
 
     for (var attempt = 1; attempt <= _startupSeekAttemptLimit; attempt++) {
+      // start 选项已命中则无需再 seek，直接收工。
+      if (_isNearStartupSeekTarget(_position, startPosition)) {
+        return;
+      }
+
       try {
         await _player!.seek(startPosition);
       } catch (error, stackTrace) {
-        lastError = error;
-        lastStackTrace = stackTrace;
+        // seek 失败不抛出中断播放：start 选项多半已定位，最坏从头播也好过整页报错。
+        _logger.w(
+          'MpvAdapter',
+          'media_kit 启动续播 seek 异常(attempt=$attempt): $error\n$stackTrace',
+        );
       }
 
       if (await _waitForStartupSeekPosition(startPosition)) {
@@ -282,14 +303,19 @@ class MpvPlayerAdapter implements PlayerAdapter {
       }
     }
 
-    if (lastError != null && lastStackTrace != null) {
-      Error.throwWithStackTrace(lastError, lastStackTrace);
-    }
-
     _logger.w(
       'MpvAdapter',
       'media_kit 启动续播未在预期时间内落位，target=${startPosition.inMilliseconds}ms, current=${_position.inMilliseconds}ms',
     );
+  }
+
+  /// 等待 demuxer 就绪（duration > 0 表示已开始解复用）。超时则继续走兜底 seek。
+  Future<void> _waitForDemuxerReady() async {
+    final stopwatch = Stopwatch()..start();
+    while (stopwatch.elapsed < _demuxerReadyTimeout) {
+      if (_duration > Duration.zero) return;
+      await Future.delayed(_startupSeekPollInterval);
+    }
   }
 
   Future<bool> _waitForStartupSeekPosition(Duration target) async {
@@ -1959,33 +1985,14 @@ class MpvPlayerAdapter implements PlayerAdapter {
     final np = _nativePlayer;
     if (np == null) return {};
 
-    final props = [
-      'width',
-      'height',
-      'fps',
-      'container-fps',
-      'video-bitrate',
-      'audio-bitrate',
-      'video-codec',
-      'audio-codec',
-      'audio-params/channel-count',
-      'audio-params/sample-rate',
-      'file-size',
-      'path',
-      'demuxer-cache-duration',
-      'cache-speed',
-      'paused-for-cache',
-      'cache-buffering-state',
-      'demuxer-cache-state',
-      'decoder-frame-drop-count',
-      'frame-drop-count',
-      'hwdec-current',
-      'video-params/pixelformat',
-      'estimated-vf-fps',
-      'vo-drop-frame-count',
-      'vo-delayed-frame-count',
-      'current-tracks/video/codec',
-      'current-tracks/audio/codec',
+    // 只取开播即定的常见视频/音频参数:统计面板查一次即可,不轮询。
+    // (实时指标如渲染帧率/丢帧/缓冲已去掉——高频轮询 mpv 会与渲染争用致画面闪。)
+    const props = [
+      'width', 'height', 'fps', 'container-fps',
+      'video-bitrate', 'audio-bitrate', 'video-codec', 'audio-codec',
+      'audio-params/channel-count', 'audio-params/sample-rate', 'file-size',
+      'hwdec-current', 'video-params/pixelformat',
+      'current-tracks/video/codec', 'current-tracks/audio/codec',
       'current-tracks/video/default-bitrate',
       'current-tracks/audio/default-bitrate',
     ];

@@ -41,9 +41,10 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
 
   // 统计信息显示
   bool _showStatsOverlay = false;
-  Map<String, String> _playbackStats = {};
-  Timer? _statsRefreshTimer;
-  bool _statsRefreshInFlight = false;
+  // 局部刷新:统计浮层每秒更新只重建浮层自身(ValueListenableBuilder),
+  // 不再 setState 整棵播放页 —— 否则 media_kit 的视频 Texture 会随整树重建闪一帧。
+  final ValueNotifier<Map<String, String>> _playbackStats =
+      ValueNotifier(const {});
   bool _isSeekingWithSlider = false;
   double? _sliderSeekValue;
   MediaSource? _currentMediaSource;
@@ -76,10 +77,10 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
       // 正在缓冲(转圈)、统计浮层开着，或缓冲态刚发生切换。控制栏隐藏且无这些时跳过重建，
       // 让隐藏后的播放不再每 200ms 重绘一次，进一步缓解卡顿。
       final buffering = _playerService.isBuffering;
-      final needsRefresh = _showControls ||
-          buffering ||
-          _showStatsOverlay ||
-          _lastBuffering != buffering;
+      // 统计浮层已改为 ValueNotifier 局部刷新,不再靠整树重建驱动,
+      // 故这里不再因 _showStatsOverlay 而 200ms 重建整页(避免视频 Texture 闪)。
+      final needsRefresh =
+          _showControls || buffering || _lastBuffering != buffering;
       _lastBuffering = buffering;
       if (needsRefresh) {
         setState(() {});
@@ -370,7 +371,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
 
       Duration? startPosition;
       try {
-        startPosition = await _resolveResumeStartPosition(api, item);
+        startPosition = await resolveResumeStartPosition(ref, api, item);
       } catch (_) {
         startPosition = null;
       }
@@ -518,30 +519,6 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
       unawaited(
           _initializeSubtitleSelectionAfterStartup(deferredSubtitleStreams));
     }
-  }
-
-  Future<Duration?> _resolveResumeStartPosition(
-    ApiClientFactory api,
-    MediaItem item,
-  ) async {
-    final remotePlayed = item.userData?.played ?? false;
-    final remotePositionTicks =
-        remotePlayed ? null : item.userData?.playbackPositionTicks?.round();
-    final scopeKey = buildWatchHistoryScopeKey(ref.read(currentServerProvider));
-    final resolvedTicks = scopeKey == null
-        ? remotePositionTicks
-        : await ref.read(watchHistoryProvider).resolveResumePositionTicks(
-              scopeKey: scopeKey,
-              api: api,
-              item: item,
-              remotePositionTicks: remotePositionTicks,
-              remotePlayed: remotePlayed,
-              crossServer: ref.read(crossServerResumeProvider),
-            );
-    if (resolvedTicks == null || resolvedTicks <= 0) {
-      return null;
-    }
-    return Duration(milliseconds: (resolvedTicks / 10000).round());
   }
 
   Future<T> _runWithSuppressedTrackSelectionListeners<T>(
@@ -2634,7 +2611,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
 
   // ========== 统计信息行 ==========
 
-  List<Widget> _buildStatsRows() {
+  List<Widget> _buildStatsRows(Map<String, String> stats) {
     final rows = <Widget>[];
 
     // 文件信息
@@ -2643,7 +2620,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
       rows.add(_buildStatRow('文件', versionName));
     }
 
-    final fileSize = _playbackStats['file-size'];
+    final fileSize = stats['file-size'];
     if (fileSize != null && fileSize != 'null') {
       final size = int.tryParse(fileSize);
       if (size != null) {
@@ -2652,18 +2629,18 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
     }
 
     // 视频信息
-    final width = _playbackStats['width'];
-    final height = _playbackStats['height'];
+    final width = stats['width'];
+    final height = stats['height'];
     if (width != null && height != null) {
       rows.add(_buildStatRow('分辨率', '$width x $height'));
     }
 
-    final fps = _playbackStats['container-fps'] ?? _playbackStats['fps'];
+    final fps = stats['container-fps'] ?? stats['fps'];
     if (fps != null) {
       rows.add(_buildStatRow('帧率', '$fps fps'));
     }
 
-    final videoBitrate = _playbackStats['video-bitrate'];
+    final videoBitrate = stats['video-bitrate'];
     if (videoBitrate != null) {
       final bitrate = int.tryParse(videoBitrate);
       if (bitrate != null) {
@@ -2671,25 +2648,25 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
       }
     }
 
-    final videoCodec = _playbackStats['video-codec'] ??
-        _playbackStats['current-tracks/video/codec'];
+    final videoCodec = stats['video-codec'] ??
+        stats['current-tracks/video/codec'];
     if (videoCodec != null && videoCodec.isNotEmpty) {
       rows.add(_buildStatRow('视频编码', videoCodec));
     }
 
-    final pixelFormat = _playbackStats['video-params/pixelformat'];
+    final pixelFormat = stats['video-params/pixelformat'];
     if (pixelFormat != null && pixelFormat.isNotEmpty) {
       rows.add(_buildStatRow('像素格式', pixelFormat));
     }
 
     // 音频信息
-    final audioCodec = _playbackStats['audio-codec'] ??
-        _playbackStats['current-tracks/audio/codec'];
+    final audioCodec = stats['audio-codec'] ??
+        stats['current-tracks/audio/codec'];
     if (audioCodec != null && audioCodec.isNotEmpty) {
       rows.add(_buildStatRow('音频编码', audioCodec));
     }
 
-    final audioBitrate = _playbackStats['audio-bitrate'];
+    final audioBitrate = stats['audio-bitrate'];
     if (audioBitrate != null) {
       final bitrate = int.tryParse(audioBitrate);
       if (bitrate != null) {
@@ -2697,59 +2674,27 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
       }
     }
 
-    final sampleRate = _playbackStats['audio-params/sample-rate'];
+    final sampleRate = stats['audio-params/sample-rate'];
     if (sampleRate != null) {
       rows.add(_buildStatRow('采样率', '${sampleRate}Hz'));
     }
 
-    final channels = _playbackStats['audio-params/channel-count'];
+    final channels = stats['audio-params/channel-count'];
     if (channels != null) {
       rows.add(_buildStatRow('声道', '${channels}ch'));
     }
 
-    // 渲染信息
-    final hwdec = _playbackStats['hwdec-current'];
+    // 硬解
+    final hwdec = stats['hwdec-current'];
     if (hwdec != null && hwdec.isNotEmpty && hwdec != 'no') {
       rows.add(_buildStatRow('硬解', hwdec));
     }
 
-    final voFps = _playbackStats['estimated-vf-fps'];
-    if (voFps != null) {
-      rows.add(_buildStatRow('渲染帧率', '${voFps}fps'));
-    }
-
-    final dropCount = _playbackStats['frame-drop-count'] ??
-        _playbackStats['vo-drop-frame-count'];
-    if (dropCount != null && dropCount != '0') {
-      rows.add(_buildStatRow('丢帧', dropCount));
-    }
-
-    final cacheDuration = _playbackStats['demuxer-cache-duration'];
-    if (cacheDuration != null) {
-      rows.add(_buildStatRow('缓冲', '${cacheDuration}s'));
-    }
-
-    final cacheSpeed = _playbackStats['cache-speed'];
-    if (cacheSpeed != null && cacheSpeed.isNotEmpty) {
-      rows.add(_buildStatRow('缓存速率', '${cacheSpeed}x'));
-    }
-
-    final pausedForCache = _playbackStats['paused-for-cache'];
-    if (pausedForCache != null && pausedForCache.isNotEmpty) {
-      rows.add(_buildStatRow(
-          '缓存等待', pausedForCache == 'yes' ? '是' : pausedForCache));
-    }
-
-    final cacheBufferingState = _playbackStats['cache-buffering-state'];
-    if (cacheBufferingState != null && cacheBufferingState.isNotEmpty) {
-      rows.add(_buildStatRow('缓存状态', cacheBufferingState));
-    }
-
-    // 播放状态
+    // 播放速度。其余实时指标(渲染帧率/丢帧/缓冲/位置)已移除——
+    // 它们要每秒轮询 mpv,会与 libmpv 渲染线程争用导致画面闪,
+    // 且非常用视频参数;统计面板只展示开播即定的视频/音频参数,查一次即可。
     rows.add(
         _buildStatRow('速度', '${_playerService.speed.toStringAsFixed(2)}x'));
-    rows.add(_buildStatRow('位置',
-        '${_formatDuration(_playerService.position)} / ${_formatDuration(_playerService.duration)}'));
 
     return rows;
   }
@@ -2800,8 +2745,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
     _skipButtonTimer?.cancel();
     _speedLongPressTimer?.cancel();
     _volumeSliderTimer?.cancel();
-    _statsRefreshTimer?.cancel();
     _uiRefreshTimer?.cancel();
+    _playbackStats.dispose();
     // 离开播放页时退出全屏并恢复标题栏，避免窗口停在无边框全屏、标题栏却消失的状态。
     if (_isFullscreen) {
       if (Platform.isWindows) {
@@ -2899,33 +2844,21 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
   // ========== 统计信息显示 ==========
 
   void _toggleStatsOverlay() {
-    setState(() {
-      _showStatsOverlay = !_showStatsOverlay;
-      if (_showStatsOverlay) {
-        _refreshStats();
-        _statsRefreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-          _refreshStats();
-        });
-      } else {
-        _statsRefreshTimer?.cancel();
-        _statsRefreshTimer = null;
-        _playbackStats = {};
-      }
-    });
+    setState(() => _showStatsOverlay = !_showStatsOverlay);
+    if (_showStatsOverlay) {
+      // 只查一次:统计面板只展示开播即定的视频/音频参数,无需每秒轮询
+      // (轮询 mpv 会与渲染争用导致画面闪)。
+      _refreshStats();
+    } else {
+      _playbackStats.value = const {};
+    }
   }
 
   Future<void> _refreshStats() async {
-    if (!_showStatsOverlay || !mounted || _statsRefreshInFlight) return;
-    _statsRefreshInFlight = true;
-    try {
-      final stats = await _playerService.getPlaybackStats();
-      if (mounted && _showStatsOverlay) {
-        setState(() {
-          _playbackStats = stats;
-        });
-      }
-    } finally {
-      _statsRefreshInFlight = false;
+    if (!mounted) return;
+    final stats = await _playerService.getPlaybackStats();
+    if (mounted && _showStatsOverlay) {
+      _playbackStats.value = stats;
     }
   }
 
@@ -3283,38 +3216,47 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
                   onDoubleTap: _toggleFullscreen,
                 ),
 
-                // 统计信息覆盖层（MPV式OSD）
-                if (_showStatsOverlay)
-                  Positioned(
-                    top: 80,
-                    left: 16,
-                    child: IgnorePointer(
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.85),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: DefaultTextStyle(
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontFamily: 'monospace',
-                            height: 1.5,
+                // 统计信息覆盖层（MPV式OSD）— 常驻 + Offstage 切换显隐，
+                // 避免 Stack children 增删导致视频 Texture 重新合成卡一帧。
+                Positioned(
+                  top: 80,
+                  left: 16,
+                  child: IgnorePointer(
+                    child: Offstage(
+                      offstage: !_showStatsOverlay,
+                      // 自成一层:每秒统计刷新的重绘不弄脏视频 Texture 所在合成层。
+                      child: RepaintBoundary(
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.85),
+                            borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (_playbackStats.isEmpty)
-                                const Text('正在获取统计信息...')
-                              else
-                                ..._buildStatsRows(),
-                            ],
+                          child: DefaultTextStyle(
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontFamily: 'monospace',
+                              height: 1.5,
+                            ),
+                            child: ValueListenableBuilder<Map<String, String>>(
+                              valueListenable: _playbackStats,
+                              builder: (context, stats, _) => Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (stats.isEmpty)
+                                    const Text('正在获取统计信息...')
+                                  else
+                                    ..._buildStatsRows(stats),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
+                ),
 
                 // 跳过片头按钮
                 if (_showSkipButton)
