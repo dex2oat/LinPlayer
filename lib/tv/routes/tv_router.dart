@@ -10,6 +10,7 @@ import '../screens/source/tv_source_login_screen.dart';
 import '../../core/sources/source_playback.dart';
 import '../../core/sources/source_kind.dart';
 import '../screens/settings/tv_settings_screen.dart';
+import '../screens/settings/tv_cf_proxy_screen.dart';
 import '../screens/settings/tv_lan_control_screen.dart';
 import '../screens/anirss/tv_anirss_detail_screen.dart';
 import '../../core/sources/anirss/anirss_nav_args.dart';
@@ -76,6 +77,11 @@ final tvRouter = GoRouter(
     GoRoute(
       path: '/tv/lan-control',
       builder: (context, state) => const TvLanControlScreen(),
+    ),
+    // CF 优选反代面板（独立页面，遥控器友好）
+    GoRoute(
+      path: '/tv/cf-proxy',
+      builder: (context, state) => const TvCfProxyScreen(),
     ),
     // 详情页（独立页面，无导航栏）
     GoRoute(

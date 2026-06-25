@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/providers/app_providers.dart';
 import '../core/services/font_service.dart';
 import '../core/theme/app_theme.dart';
+import '../plugins/plugin_system.dart';
 import '../ui/widgets/common/app_update_gate.dart';
 import 'theme/tv_metrics.dart';
 import 'theme/tv_theme.dart';
@@ -16,6 +17,9 @@ class LinPlayerTvApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // 把 TV 根导航器交给插件系统，供插件 UI（Toast/Dialog/openPanel）使用。
+    // 幂等：只是把同一个 navigatorKey 赋给宿主绑定。
+    attachPluginNavigator(tvRouter.routerDelegate.navigatorKey);
     final locale = ref.watch(localeProvider);
     final fontFamily = ref.watch(customAppFontPathProvider).isEmpty
         ? null

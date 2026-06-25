@@ -390,6 +390,17 @@ class _TvSettingsScreenState extends ConsumerState<TvSettingsScreen> {
       ]);
     }
 
+    // CF 优选反代：本机实测 CF 边缘 IP + 本地反代加速走 Cloudflare 的线路。
+    items
+      ..add(SizedBox(height: m.spacingLg))
+      ..add(_rowCard(
+        m,
+        title: 'CF 优选反代',
+        subtitle: '为走 Cloudflare 的服务器优选边缘 IP 并本地反代提速（支持定时复测）',
+        trailing: Icon(Icons.bolt, color: TvDesignTokens.brand, size: m.s(28)),
+        onSelect: () => context.push('/tv/cf-proxy'),
+      ));
+
     // 订阅代理(mihomo) —— 仅 Android TV 内置内核。
     if (Platform.isAndroid) {
       items
