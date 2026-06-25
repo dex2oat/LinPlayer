@@ -295,9 +295,6 @@ class _FakeApiClientFactory implements ApiClientFactory {
   FavoriteApi get favorite => throw UnimplementedError();
 
   @override
-  SessionApi get session => throw UnimplementedError();
-
-  @override
   ImageApi get image => throw UnimplementedError();
 
   @override
