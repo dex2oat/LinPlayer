@@ -5,6 +5,22 @@
 /// 更早的按十年代分桶（如 `10年代` = 2010–2019），贴近影视站的时间筛选行。
 library;
 
+import 'package:lpinyin/lpinyin.dart';
+
+/// 按拼音首字母升序排序（中文转拼音、英文/数字原样），用于筛选弹窗里那一长串
+/// 类型/标签/工作室的取值列表。原列表不变，返回新列表。
+List<String> sortByPinyin(List<String> items) {
+  String key(String s) {
+    final p = PinyinHelper.getPinyinE(s.trim(), separator: '', defPinyin: '')
+        .toLowerCase();
+    return p.isEmpty ? s.trim().toLowerCase() : p;
+  }
+
+  final copy = [...items];
+  copy.sort((a, b) => key(a).compareTo(key(b)));
+  return copy;
+}
+
 /// 一个时间筛选项：[label] 显示文案，[yearsCsv] 传给 Emby `Years=` 的逗号分隔值。
 class YearChip {
   final String label;

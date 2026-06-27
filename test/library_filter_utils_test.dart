@@ -37,4 +37,14 @@ void main() {
     expect(v1,
         v0.withGenre('喜剧').withStudio('正午阳光').withYear('2024', '2024')); // 值相等
   });
+
+  test('sortByPinyin: 中文按拼音首字母、英文原样，混合升序', () {
+    // 爱情(a) < 科幻(k) < 战争(z)；Drama(d) 落在 a 与 k 之间。
+    final sorted = sortByPinyin(['科幻', '战争', '爱情', 'Drama']);
+    expect(sorted, ['爱情', 'Drama', '科幻', '战争']);
+    // 原列表不被修改。
+    final src = ['科幻', '爱情'];
+    sortByPinyin(src);
+    expect(src, ['科幻', '爱情']);
+  });
 }

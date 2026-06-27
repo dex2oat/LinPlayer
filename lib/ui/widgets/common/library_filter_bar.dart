@@ -4,10 +4,10 @@ import '../../../core/utils/library_filter_utils.dart';
 
 /// 媒体库筛选面板（移动端 + 桌面端共用，Material）。
 ///
-/// 数据来自 Emby `/Items/Filters` 的一次性返回（Genres / Years / Tags）+ `/Studios`，
-/// 选中值经服务端过滤，不在本地分页拉全量。每组单选，再点一次取消。默认全部展开
-/// （类型/标签/工作室/时间 行直接铺开，不折叠）。标签组承载「地区」等信息——Emby
-/// 无独立地区分面，国产刮削器通常写进 Tags。
+/// 分面取值（类型 / 标签 / 工作室 / 时间）来自 Emby 各分面专用端点。每个维度**一行**，
+/// 默认空（显示「全部」），点该行弹出底部选择器（按拼音首字母排序）选一个值，选中后
+/// 在该行回显，下方媒体库实时服务端过滤。再选「全部」即清除。标签承载「地区」等信息
+/// ——Emby 无独立地区分面，国产刮削器通常写进 Tags。
 class LibraryFilterBar extends StatelessWidget {
   final Filters facets;
   final LibraryFilterValue value;
@@ -24,16 +24,46 @@ class LibraryFilterBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final f = facets;
     final v = value;
     final yearChips = buildYearChips(f.years, currentYear: currentYear);
-    final hasAny = f.genres.isNotEmpty ||
-        f.tags.isNotEmpty ||
-        f.studios.isNotEmpty ||
-        yearChips.isNotEmpty;
+
+    final rows = <Widget>[];
+    if (f.genres.isNotEmpty) {
+      rows.add(_row(context, '类型', v.genre, () async {
+        final picked = await _pick(context, '类型', sortByPinyin(f.genres), v.genre);
+        if (picked != null) onChanged(v.withGenre(picked.isEmpty ? null : picked));
+      }));
+    }
+    if (f.tags.isNotEmpty) {
+      rows.add(_row(context, '标签', v.tag, () async {
+        final picked = await _pick(context, '标签', sortByPinyin(f.tags), v.tag);
+        if (picked != null) onChanged(v.withTag(picked.isEmpty ? null : picked));
+      }));
+    }
+    if (f.studios.isNotEmpty) {
+      rows.add(_row(context, '工作室', v.studio, () async {
+        final picked =
+            await _pick(context, '工作室', sortByPinyin(f.studios), v.studio);
+        if (picked != null) onChanged(v.withStudio(picked.isEmpty ? null : picked));
+      }));
+    }
+    if (yearChips.isNotEmpty) {
+      rows.add(_row(context, '时间', v.yearLabel, () async {
+        final picked = await _pick(
+            context, '时间', yearChips.map((e) => e.label).toList(), v.yearLabel);
+        if (picked == null) return;
+        if (picked.isEmpty) {
+          onChanged(v.withYear(null, null));
+        } else {
+          final csv = yearChips.firstWhere((e) => e.label == picked).yearsCsv;
+          onChanged(v.withYear(picked, csv));
+        }
+      }));
+    }
+
     // 服务器对该库没有返回任何分面时，给个明确提示而非空白（避免误以为"功能没做"）。
-    if (!hasAny) {
+    if (rows.isEmpty) {
       return const Padding(
         padding: EdgeInsets.fromLTRB(16, 6, 16, 6),
         child: Text('该媒体库暂无可筛选项',
@@ -59,146 +89,114 @@ class LibraryFilterBar extends StatelessWidget {
                 ),
               ),
             ),
-          if (f.genres.isNotEmpty)
-            _row(theme, '类型', [
-              for (final g in f.genres)
-                _chip(theme, g, v.genre == g,
-                    () => onChanged(v.withGenre(v.genre == g ? null : g))),
-            ]),
-          if (f.tags.isNotEmpty)
-            _row(theme, '标签', [
-              for (final t in f.tags)
-                _chip(theme, t, v.tag == t,
-                    () => onChanged(v.withTag(v.tag == t ? null : t))),
-            ]),
-          if (f.studios.isNotEmpty)
-            _row(theme, '工作室', [
-              for (final s in f.studios)
-                _chip(theme, s, v.studio == s,
-                    () => onChanged(v.withStudio(v.studio == s ? null : s))),
-            ]),
-          if (yearChips.isNotEmpty)
-            _row(theme, '时间', [
-              for (final yc in yearChips)
-                _chip(theme, yc.label, v.yearLabel == yc.label, () {
-                  final on = v.yearLabel == yc.label;
-                  onChanged(
-                      v.withYear(on ? null : yc.label, on ? null : yc.yearsCsv));
-                }),
-            ]),
+          ...rows,
         ],
       ),
     );
   }
 
-  Widget _row(ThemeData theme, String label, List<Widget> chips) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            margin: const EdgeInsets.only(top: 4, right: 10),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.primary.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          Expanded(child: _ExpandableChips(chips: chips)),
-        ],
-      ),
-    );
-  }
-
-  Widget _chip(ThemeData theme, String label, bool selected, VoidCallback onTap) {
+  /// 一行筛选维度：左侧标签，右侧当前选中值（未选显示「全部」），整行可点开选择器。
+  Widget _row(BuildContext context, String label, String? selected,
+      VoidCallback onTap) {
+    final theme = Theme.of(context);
+    final active = selected != null;
     return InkWell(
       borderRadius: BorderRadius.circular(8),
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 13,
-            color: selected
-                ? theme.colorScheme.primary
-                : theme.textTheme.bodyMedium?.color,
-            fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
-          ),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 48,
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: theme.colorScheme.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                selected ?? '全部',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: active
+                      ? theme.textTheme.bodyLarge?.color
+                      : theme.hintColor,
+                  fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+            ),
+            Icon(Icons.keyboard_arrow_right, size: 18, color: theme.hintColor),
+          ],
         ),
       ),
     );
   }
-}
 
-/// 单组芯片：项太多时默认折叠（约两行），点「展开」放开到约五行并可上下滚动，
-/// 避免工作室/类型等高基数分面把整个面板撑爆。少于阈值则原样平铺、不显示按钮。
-class _ExpandableChips extends StatefulWidget {
-  final List<Widget> chips;
-  const _ExpandableChips({required this.chips});
-
-  @override
-  State<_ExpandableChips> createState() => _ExpandableChipsState();
-}
-
-class _ExpandableChipsState extends State<_ExpandableChips> {
-  bool _expanded = false;
-  static const _threshold = 14; // 超过这么多项才折叠
-  static const _collapsedH = 68.0; // 约两行
-  static const _expandedH = 168.0; // 约五行（可滚）
-
-  @override
-  Widget build(BuildContext context) {
-    final chips = widget.chips;
-    final wrap = Wrap(spacing: 6, runSpacing: 4, children: chips);
-    if (chips.length <= _threshold) return wrap;
-
-    final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        AnimatedSize(
-          duration: const Duration(milliseconds: 180),
-          alignment: Alignment.topCenter,
+  /// 底部选择器：拼音排序后的取值列表 + 顶部「全部」。返回 null=未改、''=全部、其余=选中值。
+  Future<String?> _pick(BuildContext context, String title,
+      List<String> options, String? current) {
+    return showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        return SafeArea(
           child: ConstrainedBox(
             constraints: BoxConstraints(
-                maxHeight: _expanded ? _expandedH : _collapsedH),
-            child: _expanded
-                ? SingleChildScrollView(child: wrap)
-                : ClipRect(
-                    child: Align(
-                        alignment: Alignment.topLeft,
-                        heightFactor: 1,
-                        child: wrap)),
-          ),
-        ),
-        InkWell(
-          onTap: () => setState(() => _expanded = !_expanded),
-          borderRadius: BorderRadius.circular(6),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            child: Row(
+              maxHeight: MediaQuery.of(ctx).size.height * 0.7,
+            ),
+            child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_expanded ? '收起' : '展开',
-                    style:
-                        TextStyle(fontSize: 12, color: theme.colorScheme.primary)),
-                Icon(_expanded ? Icons.expand_less : Icons.expand_more,
-                    size: 16, color: theme.colorScheme.primary),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                  child: Text(title,
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700)),
+                ),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      _option(ctx, '全部', current == null, () => Navigator.pop(ctx, '')),
+                      for (final o in options)
+                        _option(ctx, o, o == current,
+                            () => Navigator.pop(ctx, o)),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
-        ),
-      ],
+        );
+      },
+    );
+  }
+
+  Widget _option(
+      BuildContext context, String label, bool selected, VoidCallback onTap) {
+    final theme = Theme.of(context);
+    return ListTile(
+      dense: true,
+      title: Text(label,
+          style: TextStyle(
+            color: selected ? theme.colorScheme.primary : null,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+          )),
+      trailing: selected
+          ? Icon(Icons.check, size: 18, color: theme.colorScheme.primary)
+          : null,
+      onTap: onTap,
     );
   }
 }

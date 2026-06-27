@@ -134,7 +134,8 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
     );
   }
 
-  /// 类型/标签/时间 筛选行（数据来自 /Items/Filters；每组单选，再选取消）。
+  /// 类型/标签/工作室/时间 各一行：默认「全部」，选中后回显；点该行弹窗（拼音排序）
+  /// 选一个值，下方网格服务端实时过滤。
   Widget _buildFilterRows(TvMetrics m, String libraryId) {
     final facetsAsync = ref.watch(filtersProvider(libraryId));
     return facetsAsync.maybeWhen(
@@ -142,34 +143,46 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
         final years = buildYearChips(f.years, currentYear: DateTime.now().year);
         final rows = <Widget>[];
         if (f.genres.isNotEmpty) {
-          rows.add(_facetRow(m, '类型', [
-            for (final g in f.genres)
-              _facetChip(m, g, _filter.genre == g,
-                  () => _filter = _filter.withGenre(_filter.genre == g ? null : g)),
-          ]));
+          rows.add(_facetRow(m, '类型', _filter.genre, () async {
+            final p = await _showFacetPicker(
+                m, '类型', sortByPinyin(f.genres), _filter.genre);
+            if (p != null) {
+              setState(() =>
+                  _filter = _filter.withGenre(p.isEmpty ? null : p));
+            }
+          }));
         }
         if (f.tags.isNotEmpty) {
-          rows.add(_facetRow(m, '标签', [
-            for (final t in f.tags)
-              _facetChip(m, t, _filter.tag == t,
-                  () => _filter = _filter.withTag(_filter.tag == t ? null : t)),
-          ]));
+          rows.add(_facetRow(m, '标签', _filter.tag, () async {
+            final p = await _showFacetPicker(
+                m, '标签', sortByPinyin(f.tags), _filter.tag);
+            if (p != null) {
+              setState(() => _filter = _filter.withTag(p.isEmpty ? null : p));
+            }
+          }));
         }
         if (f.studios.isNotEmpty) {
-          rows.add(_facetRow(m, '工作室', [
-            for (final s in f.studios)
-              _facetChip(m, s, _filter.studio == s,
-                  () => _filter = _filter.withStudio(_filter.studio == s ? null : s)),
-          ]));
+          rows.add(_facetRow(m, '工作室', _filter.studio, () async {
+            final p = await _showFacetPicker(
+                m, '工作室', sortByPinyin(f.studios), _filter.studio);
+            if (p != null) {
+              setState(() =>
+                  _filter = _filter.withStudio(p.isEmpty ? null : p));
+            }
+          }));
         }
         if (years.isNotEmpty) {
-          rows.add(_facetRow(m, '时间', [
-            for (final yc in years)
-              _facetChip(m, yc.label, _filter.yearLabel == yc.label, () {
-                final on = _filter.yearLabel == yc.label;
-                _filter = _filter.withYear(on ? null : yc.label, on ? null : yc.yearsCsv);
-              }),
-          ]));
+          rows.add(_facetRow(m, '时间', _filter.yearLabel, () async {
+            final p = await _showFacetPicker(
+                m, '时间', years.map((e) => e.label).toList(), _filter.yearLabel);
+            if (p == null) return;
+            if (p.isEmpty) {
+              setState(() => _filter = _filter.withYear(null, null));
+            } else {
+              final csv = years.firstWhere((e) => e.label == p).yearsCsv;
+              setState(() => _filter = _filter.withYear(p, csv));
+            }
+          }));
         }
         if (rows.isEmpty) return const SizedBox.shrink();
         return Padding(
@@ -181,52 +194,14 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
     );
   }
 
-  // 工作室/类型等高基数分面：项太多会把固定高的筛选区撑爆。默认只铺前 N 个 +
-  // 「展开」焦点项（其余不渲染，故不可被遥控器聚焦）；展开后限高约五行放进可滚动区，
-  // D-pad 聚焦时框架自动 ensureVisible 跟随滚动。
-  final Set<String> _expandedFacets = {};
-
-  Widget _facetRow(TvMetrics m, String label, List<Widget> chips) {
-    const threshold = 12;
-    final overflow = chips.length > threshold;
-    final expanded = _expandedFacets.contains(label);
-
-    Widget chipArea;
-    if (!overflow) {
-      chipArea =
-          Wrap(spacing: m.spacingSm, runSpacing: m.spacingSm, children: chips);
-    } else if (!expanded) {
-      chipArea = Wrap(spacing: m.spacingSm, runSpacing: m.spacingSm, children: [
-        ...chips.take(threshold),
-        TvFocusable(
-          onSelect: () => setState(() => _expandedFacets.add(label)),
-          child: _chip(m,
-              label: '展开 +${chips.length - threshold}', selected: false),
-        ),
-      ]);
-    } else {
-      final rowH = m.fontSizeSm + m.spacingSm * 3; // 约一行间距
-      chipArea = ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: rowH * 5),
-        child: SingleChildScrollView(
-          child: Wrap(spacing: m.spacingSm, runSpacing: m.spacingSm, children: [
-            ...chips,
-            TvFocusable(
-              onSelect: () => setState(() => _expandedFacets.remove(label)),
-              child: _chip(m, label: '收起', selected: false),
-            ),
-          ]),
-        ),
-      );
-    }
-
+  Widget _facetRow(
+      TvMetrics m, String label, String? selected, VoidCallback onTap) {
     return Padding(
       padding: EdgeInsets.only(bottom: m.spacingSm),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: EdgeInsets.only(top: m.spacingXs, right: m.spacingMd),
+          SizedBox(
+            width: m.s(76),
             child: Text(
               label,
               style: TextStyle(
@@ -236,16 +211,76 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
               ),
             ),
           ),
-          Expanded(child: chipArea),
+          SizedBox(width: m.spacingMd),
+          TvFocusable(
+            onSelect: onTap,
+            child: _chip(m,
+                icon: Icons.keyboard_arrow_down,
+                label: selected ?? '全部',
+                selected: selected != null),
+          ),
         ],
       ),
     );
   }
 
-  Widget _facetChip(TvMetrics m, String label, bool selected, VoidCallback apply) {
-    return TvFocusable(
-      onSelect: () => setState(apply),
-      child: _chip(m, label: label, selected: selected),
+  /// TV 焦点式单选弹窗：拼音排序取值 + 顶部「全部」。返回 null=未改、''=全部、其余=值。
+  /// 当前值（或「全部」）autofocus，D-pad 在 Wrap 内移动、框架自动 ensureVisible 跟随滚动。
+  Future<String?> _showFacetPicker(
+      TvMetrics m, String title, List<String> options, String? current) {
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          backgroundColor: TvDesignTokens.surfaceElevated,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(m.posterRadius)),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: m.s(560),
+              maxHeight: MediaQuery.of(ctx).size.height * 0.8,
+            ),
+            child: Padding(
+              padding: EdgeInsets.all(m.spacingLg),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: TextStyle(
+                        fontSize: m.fontSizeLg,
+                        color: TvDesignTokens.textPrimary,
+                        fontWeight: FontWeight.bold,
+                      )),
+                  SizedBox(height: m.spacingMd),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      child: Wrap(
+                        spacing: m.spacingSm,
+                        runSpacing: m.spacingSm,
+                        children: [
+                          TvFocusable(
+                            autofocus: current == null,
+                            onSelect: () => Navigator.pop(ctx, ''),
+                            child:
+                                _chip(m, label: '全部', selected: current == null),
+                          ),
+                          for (final o in options)
+                            TvFocusable(
+                              autofocus: o == current,
+                              onSelect: () => Navigator.pop(ctx, o),
+                              child: _chip(m, label: o, selected: o == current),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
