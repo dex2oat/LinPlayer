@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/api/api_interfaces.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
+import '../../../core/utils/library_filter_utils.dart';
 import '../../../ui/utils/media_helpers.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
 import '../../theme/tv_design_tokens.dart';
@@ -17,7 +18,10 @@ class TvLibraryScreen extends ConsumerStatefulWidget {
   /// 由首页/查看全部传入的目标媒体库；为空时取第一个媒体库。
   final String? initialLibraryId;
 
-  const TvLibraryScreen({super.key, this.initialLibraryId});
+  /// 标题兜底：当 [initialLibraryId] 不是媒体库（如合集 BoxSet）时用它显示名字。
+  final String? initialTitle;
+
+  const TvLibraryScreen({super.key, this.initialLibraryId, this.initialTitle});
 
   @override
   ConsumerState<TvLibraryScreen> createState() => _TvLibraryScreenState();
@@ -31,6 +35,8 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
   String? _libraryId;
   // 排序字段：名称 / 最近添加 / 评分 / 首播日期
   String _sortBy = 'SortName';
+  // 类型/标签/时间 筛选（服务端过滤，来自 /Items/Filters）
+  LibraryFilterValue _filter = const LibraryFilterValue();
 
   @override
   void initState() {
@@ -59,6 +65,7 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
                 _buildHeader(m, libs, libId),
                 SizedBox(height: m.spacingMd),
                 _buildSortRow(m),
+                _buildFilterRows(m, libId),
                 SizedBox(height: m.spacingLg),
                 Expanded(child: _buildGrid(m, libId)),
               ],
@@ -74,14 +81,13 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
 
   Widget _buildHeader(TvMetrics m, List<Library> libs, String selectedId) {
     final dense = _densityIndex == 0;
-    final lib = libs.firstWhere(
-      (l) => l.id == selectedId,
-      orElse: () => libs.first,
-    );
+    // selectedId 可能是合集(不在 libs 里)，匹配不到就用传入标题兜底。
+    final match = libs.where((l) => l.id == selectedId).firstOrNull;
+    final title = match?.name ?? widget.initialTitle ?? libs.first.name;
     return Row(
       children: [
         Text(
-          lib.name,
+          title,
           style: TextStyle(
             fontSize: m.fontSizeXxl,
             color: TvDesignTokens.textPrimary,
@@ -128,12 +134,95 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
     );
   }
 
+  /// 类型/标签/时间 筛选行（数据来自 /Items/Filters；每组单选，再选取消）。
+  Widget _buildFilterRows(TvMetrics m, String libraryId) {
+    final facetsAsync = ref.watch(filtersProvider(libraryId));
+    return facetsAsync.maybeWhen(
+      data: (f) {
+        final years = buildYearChips(f.years, currentYear: DateTime.now().year);
+        final rows = <Widget>[];
+        if (f.genres.isNotEmpty) {
+          rows.add(_facetRow(m, '类型', [
+            for (final g in f.genres)
+              _facetChip(m, g, _filter.genre == g,
+                  () => _filter = _filter.withGenre(_filter.genre == g ? null : g)),
+          ]));
+        }
+        if (f.tags.isNotEmpty) {
+          rows.add(_facetRow(m, '标签', [
+            for (final t in f.tags)
+              _facetChip(m, t, _filter.tag == t,
+                  () => _filter = _filter.withTag(_filter.tag == t ? null : t)),
+          ]));
+        }
+        if (f.studios.isNotEmpty) {
+          rows.add(_facetRow(m, '工作室', [
+            for (final s in f.studios)
+              _facetChip(m, s, _filter.studio == s,
+                  () => _filter = _filter.withStudio(_filter.studio == s ? null : s)),
+          ]));
+        }
+        if (years.isNotEmpty) {
+          rows.add(_facetRow(m, '时间', [
+            for (final yc in years)
+              _facetChip(m, yc.label, _filter.yearLabel == yc.label, () {
+                final on = _filter.yearLabel == yc.label;
+                _filter = _filter.withYear(on ? null : yc.label, on ? null : yc.yearsCsv);
+              }),
+          ]));
+        }
+        if (rows.isEmpty) return const SizedBox.shrink();
+        return Padding(
+          padding: EdgeInsets.only(top: m.spacingMd),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: rows),
+        );
+      },
+      orElse: () => const SizedBox.shrink(),
+    );
+  }
+
+  Widget _facetRow(TvMetrics m, String label, List<Widget> chips) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: m.spacingSm),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: EdgeInsets.only(top: m.spacingXs, right: m.spacingMd),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: m.fontSizeSm,
+                color: TvDesignTokens.textSecondary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Wrap(spacing: m.spacingSm, runSpacing: m.spacingSm, children: chips),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _facetChip(TvMetrics m, String label, bool selected, VoidCallback apply) {
+    return TvFocusable(
+      onSelect: () => setState(apply),
+      child: _chip(m, label: label, selected: selected),
+    );
+  }
+
   Widget _buildGrid(TvMetrics m, String libraryId) {
     // 名称按升序（A→Z），其余（最近添加/评分/首播日期）按降序（新→旧 / 高→低）。
     final itemsAsync = ref.watch(libraryItemsProvider((
       libraryId: libraryId,
       sortBy: _sortBy,
       sortOrder: _sortBy == 'SortName' ? 'Ascending' : 'Descending',
+      genres: _filter.genre,
+      tags: _filter.tag,
+      studios: _filter.studio,
+      years: _filter.yearsCsv,
     )));
     final api = ref.read(apiClientProvider);
 

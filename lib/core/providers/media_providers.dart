@@ -172,13 +172,27 @@ final personsProvider = FutureProvider.autoDispose.family<List<Person>, String>(
 /// ==========================================
 
 /// 媒体库内容
-final libraryItemsProvider = FutureProvider.autoDispose.family<List<MediaItem>, ({String libraryId, String? sortBy, String? sortOrder})>(
+final libraryItemsProvider = FutureProvider.autoDispose.family<
+    List<MediaItem>,
+    ({
+      String libraryId,
+      String? sortBy,
+      String? sortOrder,
+      String? genres,
+      String? tags,
+      String? studios,
+      String? years,
+    })>(
   (ref, params) async {
     final api = ref.watch(apiClientProvider);
     return await api.library.getLibraryItems(
       libraryId: params.libraryId,
       sortBy: params.sortBy,
       sortOrder: params.sortOrder,
+      genres: params.genres,
+      tags: params.tags,
+      studios: params.studios,
+      years: params.years,
     );
   },
 );
@@ -187,6 +201,12 @@ final libraryItemsProvider = FutureProvider.autoDispose.family<List<MediaItem>, 
 final filtersProvider = FutureProvider.autoDispose.family<Filters, String>((ref, libraryId) async {
   final api = ref.watch(apiClientProvider);
   return await api.library.getFilters(libraryId);
+});
+
+/// 全部合集（BoxSet）——首页底部"合集"栏用，点开复用媒体库详情展示成员。
+final collectionsProvider = FutureProvider<List<MediaItem>>((ref) async {
+  final api = ref.watch(apiClientProvider);
+  return await api.library.getCollections();
 });
 
 /// ==========================================

@@ -135,6 +135,7 @@ final tvRouter = GoRouter(
           path: '/tv/library',
           builder: (context, state) => TvLibraryScreen(
             initialLibraryId: state.uri.queryParameters['libraryId'],
+            initialTitle: state.uri.queryParameters['title'],
           ),
         ),
         GoRoute(

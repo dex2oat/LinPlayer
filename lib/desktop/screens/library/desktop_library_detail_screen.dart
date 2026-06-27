@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/providers/media_providers.dart';
 import '../../../core/theme/app_motion.dart';
+import '../../../core/utils/library_filter_utils.dart';
 import '../../../core/widgets/app_shimmer.dart';
+import '../../../ui/widgets/common/library_filter_bar.dart';
 import '../../utils/desktop_smooth_scroll.dart';
 import '../../widgets/desktop_media_card.dart';
 
@@ -29,6 +31,7 @@ class _DesktopLibraryDetailScreenState
 
   String _sortBy = 'DateCreated';
   String _sortOrder = 'Descending';
+  LibraryFilterValue _filter = const LibraryFilterValue();
   final ScrollController _scrollController = DesktopSmoothScrollController();
 
   @override
@@ -44,7 +47,12 @@ class _DesktopLibraryDetailScreenState
       libraryId: widget.libraryId,
       sortBy: _sortBy,
       sortOrder: _sortOrder,
+      genres: _filter.genre,
+      tags: _filter.tag,
+      studios: _filter.studio,
+      years: _filter.yearsCsv,
     )));
+    final filtersAsync = ref.watch(filtersProvider(widget.libraryId));
     final theme = Theme.of(context);
 
     final libraryName = librariesAsync.maybeWhen(
@@ -87,6 +95,17 @@ class _DesktopLibraryDetailScreenState
                   _buildSortDropdown(theme),
                 ],
               ),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: filtersAsync.maybeWhen(
+              data: (facets) => LibraryFilterBar(
+                facets: facets,
+                value: _filter,
+                currentYear: DateTime.now().year,
+                onChanged: (v) => setState(() => _filter = v),
+              ),
+              orElse: () => const SizedBox.shrink(),
             ),
           ),
           libraryItemsAsync.when(

@@ -49,6 +49,10 @@ class MediaImage extends StatelessWidget {
   /// 服务器图标等第三方 CDN 资源需要，否则可能被拒导致图标损坏。
   final bool useDefaultUserAgent;
 
+  /// 图片解码完成后回调其真实宽高比（width/height）。
+  /// 给"按原图比例自适应尺寸"的卡片用，避免裁剪/留白。
+  final ValueChanged<double>? onAspectRatio;
+
   const MediaImage({
     super.key,
     required this.imageUrl,
@@ -65,6 +69,7 @@ class MediaImage extends StatelessWidget {
     this.gaplessPlayback = true,
     this.alignment = Alignment.center,
     this.useDefaultUserAgent = false,
+    this.onAspectRatio,
   });
 
   @override
@@ -93,6 +98,7 @@ class MediaImage extends StatelessWidget {
             cacheHeight: cacheHeight,
             gaplessPlayback: gaplessPlayback,
             useDefaultUserAgent: useDefaultUserAgent,
+            onAspectRatio: onAspectRatio,
             placeholderBuilder: () => placeholder ?? _buildPlaceholder(context),
             errorBuilder: () => errorWidget ?? _buildError(context),
           );
@@ -165,6 +171,7 @@ class _FallbackNetworkImage extends StatefulWidget {
   final int? cacheHeight;
   final bool gaplessPlayback;
   final bool useDefaultUserAgent;
+  final ValueChanged<double>? onAspectRatio;
   final Widget Function() placeholderBuilder;
   final Widget Function() errorBuilder;
 
@@ -178,6 +185,7 @@ class _FallbackNetworkImage extends StatefulWidget {
     required this.cacheHeight,
     required this.gaplessPlayback,
     required this.useDefaultUserAgent,
+    this.onAspectRatio,
     required this.placeholderBuilder,
     required this.errorBuilder,
   });
@@ -294,10 +302,12 @@ class _FallbackNetworkImageState extends State<_FallbackNetworkImage> {
         switch (state.extendedImageLoadState) {
           case LoadState.loading:
             if (state.extendedImageInfo != null || state.wasSynchronouslyLoaded) {
+              _reportAspect(state.extendedImageInfo);
               return state.completedWidget;
             }
             return widget.placeholderBuilder();
           case LoadState.completed:
+            _reportAspect(state.extendedImageInfo);
             return state.completedWidget;
           case LoadState.failed:
             if (_scheduleRetryIfPossible()) {
@@ -309,6 +319,22 @@ class _FallbackNetworkImageState extends State<_FallbackNetworkImage> {
         }
       },
     );
+  }
+
+  double? _reportedAspect;
+
+  /// 图片解码完成后把真实宽高比回报给上层（只报一次，且在帧后避免 build 中 setState）。
+  void _reportAspect(ImageInfo? info) {
+    final cb = widget.onAspectRatio;
+    if (cb == null || info == null) return;
+    final img = info.image;
+    if (img.height == 0) return;
+    final ratio = img.width / img.height;
+    if (_reportedAspect == ratio) return;
+    _reportedAspect = ratio;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) cb(ratio);
+    });
   }
 
   void _resetFallbackState() {

@@ -172,27 +172,41 @@ class MediaCounts {
 abstract class LibraryApi {
   /// 获取媒体库内容
   /// GET /Users/{UserId}/Items
+  /// [genres]/[tags]/[studios] 为单个可选值（Emby 服务端 AND 过滤）；
+  /// [years] 为逗号分隔年份（年代选项展开成该十年全部年份）。均为空表示不过滤。
   Future<List<MediaItem>> getLibraryItems({
     required String libraryId,
     String? sortBy,
     String? sortOrder,
     int startIndex = 0,
     int limit = 50,
+    String? genres,
+    String? tags,
+    String? studios,
+    String? years,
   });
 
   /// 获取筛选条件
   /// GET /Items/Filters
   Future<Filters> getFilters(String libraryId);
+
+  /// 获取全部合集（BoxSet）。合集不挂在媒体库下，单独一次查询即可。
+  /// GET /Users/{UserId}/Items?IncludeItemTypes=BoxSet&Recursive=true
+  Future<List<MediaItem>> getCollections();
 }
 
 class Filters {
   final List<String> genres;
   final List<String> years;
+  final List<String> tags;
+  final List<String> studios;
   final List<String> officialRatings;
 
   Filters({
     required this.genres,
     required this.years,
+    required this.tags,
+    required this.studios,
     required this.officialRatings,
   });
 }

@@ -136,12 +136,38 @@ class _TvHomeScreenState extends ConsumerState<TvHomeScreen> {
                 loading: () => const SizedBox.shrink(),
                 error: (_, __) => const SizedBox.shrink(),
               ),
+              SizedBox(height: m.spacingLg),
+              // 合集（最底部）
+              ref.watch(collectionsProvider).maybeWhen(
+                    data: (cols) {
+                      if (cols.isEmpty) return const SizedBox.shrink();
+                      return TvContentRow(
+                        title: '合集',
+                        items: _collectionCards(api, cols),
+                      );
+                    },
+                    orElse: () => const SizedBox.shrink(),
+                  ),
               SizedBox(height: m.spacingXxl),
             ],
           ),
         ),
       ),
     );
+  }
+
+  List<TvPosterCardData> _collectionCards(
+      ApiClientFactory api, List<MediaItem> cols) {
+    return cols.map((c) {
+      final urls = resolveMediaItemImageUrls(api, c, maxWidth: 400);
+      return TvPosterCardData(
+        imageUrl: urls.isNotEmpty ? urls.first : null,
+        title: c.name,
+        // 复用媒体库页展示合集成员；带 title 让标题正确显示。
+        onTap: () => context.go(
+            '/tv/library?libraryId=${c.id}&title=${Uri.encodeComponent(c.name)}'),
+      );
+    }).toList(growable: false);
   }
 
   // ============ 数据映射 ============

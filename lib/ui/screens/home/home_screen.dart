@@ -162,6 +162,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 // 各媒体库最新内容
                 const SliverToBoxAdapter(child: LatestItemsSections()),
 
+                // 合集（最底部）
+                const SliverToBoxAdapter(child: CollectionsSection()),
+
                 const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
               ],
             ),
@@ -1395,13 +1398,11 @@ class LibrariesSection extends ConsumerWidget {
               ),
             ),
             HorizontalList(
-              height: 172,
+              height: 124,
               spacing: 10,
               children: libraries.asMap().entries.map((entry) {
-                return SizedBox(
-                  width: 160,
-                  child: _LibraryCard(library: entry.value),
-                ).appEntrance(index: entry.key);
+                return _LibraryCard(library: entry.value)
+                    .appEntrance(index: entry.key);
               }).toList(),
             ),
           ],
@@ -1413,37 +1414,54 @@ class LibrariesSection extends ConsumerWidget {
   }
 }
 
-class _LibraryCard extends ConsumerWidget {
+class _LibraryCard extends ConsumerStatefulWidget {
   final Library library;
 
   const _LibraryCard({required this.library});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_LibraryCard> createState() => _LibraryCardState();
+}
+
+class _LibraryCardState extends ConsumerState<_LibraryCard> {
+  // 卡片固定高度，宽度按封面真实比例算 → 同栏每张同高、不裁剪不留白。
+  static const double _imageHeight = 90;
+  // 加载完成前的占位比例（16:9），收到真实比例后回填。
+  double _aspect = 16 / 9;
+
+  @override
+  Widget build(BuildContext context) {
     final api = ref.read(apiClientProvider);
-    final imageUrls = resolveLibraryImageUrls(api, library, maxWidth: 400);
+    final imageUrls =
+        resolveLibraryImageUrls(api, widget.library, maxWidth: 400);
     const borderRadius = BorderRadius.all(Radius.circular(16));
+    final width = _imageHeight * _aspect;
 
     return GestureDetector(
-      onTap: () => context.push('/library/${library.id}'),
+      onTap: () => context.push('/library/${widget.library.id}'),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           ClipRRect(
             borderRadius: borderRadius,
-            // 封面 cover 填满整张卡片，去掉旧版 contain 留下的彩色底/留白。
             child: SizedBox(
-              width: 160,
-              height: 118,
+              width: width,
+              height: _imageHeight,
               child: imageUrls.isNotEmpty
                   ? MediaImage(
                       imageUrl: imageUrls.first,
                       imageUrls:
                           imageUrls.length > 1 ? imageUrls.sublist(1) : null,
-                      width: 160,
-                      height: 118,
+                      width: width,
+                      height: _imageHeight,
+                      // 框=图（按真实比例），cover 不会裁；ratio 回来前用占位。
                       fit: BoxFit.cover,
                       borderRadius: borderRadius,
+                      onAspectRatio: (r) {
+                        if (r > 0 && (r - _aspect).abs() > 0.001) {
+                          setState(() => _aspect = r);
+                        }
+                      },
                     )
                   : Container(
                       color: const Color(0xFF5B8DEF).withValues(alpha: 0.12),
@@ -1459,9 +1477,9 @@ class _LibraryCard extends ConsumerWidget {
           ),
           const SizedBox(height: 6),
           SizedBox(
-            width: 160,
+            width: width,
             child: Text(
-              library.name,
+              widget.library.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
@@ -1470,6 +1488,51 @@ class _LibraryCard extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 合集区块（首页底部）——横向卡片栏，点开复用媒体库详情页展示合集成员。
+class CollectionsSection extends ConsumerWidget {
+  const CollectionsSection({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(collectionsProvider);
+    return async.maybeWhen(
+      data: (collections) {
+        if (collections.isEmpty) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Text(
+                '合集',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              ),
+            ),
+            HorizontalList(
+              height: 232,
+              spacing: 12,
+              children: collections.asMap().entries.map((entry) {
+                final c = entry.value;
+                return SizedBox(
+                  width: 118,
+                  child: MediaPoster(
+                    item: c,
+                    width: 118,
+                    height: 177,
+                    onTap: () => context.push('/library/${c.id}'),
+                    heroTag: 'collection_${c.id}',
+                  ),
+                ).appEntrance(index: entry.key);
+              }).toList(),
+            ),
+          ],
+        );
+      },
+      orElse: () => const SizedBox.shrink(),
     );
   }
 }

@@ -3,8 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/providers/media_providers.dart';
 import '../../../core/theme/app_motion.dart';
+import '../../../core/utils/library_filter_utils.dart';
 import '../../../core/widgets/app_shimmer.dart';
 import '../../utils/media_helpers.dart';
+import '../../widgets/common/library_filter_bar.dart';
 import '../../widgets/common/media_widgets.dart';
 
 /// 媒体库详情页
@@ -20,7 +22,8 @@ class LibraryDetailScreen extends ConsumerStatefulWidget {
 class _LibraryDetailScreenState extends ConsumerState<LibraryDetailScreen> {
   String? _sortBy;
   String? _sortOrder = 'Ascending';
-  
+  LibraryFilterValue _filter = const LibraryFilterValue();
+
   final List<Map<String, String>> _sortOptions = [
     {'value': 'DateCreated', 'label': '加入日期'},
     {'value': 'SortName', 'label': '标题'},
@@ -35,8 +38,13 @@ class _LibraryDetailScreenState extends ConsumerState<LibraryDetailScreen> {
       libraryId: widget.libraryId,
       sortBy: _sortBy,
       sortOrder: _sortOrder,
+      genres: _filter.genre,
+      tags: _filter.tag,
+      studios: _filter.studio,
+      years: _filter.yearsCsv,
     )));
-    
+    final filtersAsync = ref.watch(filtersProvider(widget.libraryId));
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('媒体库'),
@@ -89,7 +97,18 @@ class _LibraryDetailScreenState extends ConsumerState<LibraryDetailScreen> {
               ),
             ),
           ),
-          
+
+          // 筛选面板（类型/标签/时间，服务端过滤）
+          filtersAsync.maybeWhen(
+            data: (facets) => LibraryFilterBar(
+              facets: facets,
+              value: _filter,
+              currentYear: DateTime.now().year,
+              onChanged: (v) => setState(() => _filter = v),
+            ),
+            orElse: () => const SizedBox.shrink(),
+          ),
+
           // 内容网格
           Expanded(
             child: itemsAsync.when(

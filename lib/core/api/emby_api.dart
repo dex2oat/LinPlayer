@@ -535,6 +535,10 @@ class EmbyLibraryApi implements LibraryApi {
     String? sortOrder,
     int startIndex = 0,
     int limit = 50,
+    String? genres,
+    String? tags,
+    String? studios,
+    String? years,
   }) async {
     final uid = _requireUserId(_client);
     final params = <String, dynamic>{
@@ -550,6 +554,11 @@ class EmbyLibraryApi implements LibraryApi {
       params['SortBy'] = sortBy;
       params['SortOrder'] = sortOrder ?? 'Ascending';
     }
+    // 服务端过滤：Emby 的 Genres/Tags/Studios 用竖线分隔，Years 用逗号分隔。
+    if (genres != null && genres.isNotEmpty) params['Genres'] = genres;
+    if (tags != null && tags.isNotEmpty) params['Tags'] = tags;
+    if (studios != null && studios.isNotEmpty) params['Studios'] = studios;
+    if (years != null && years.isNotEmpty) params['Years'] = years;
     final resp =
         await _client.get('/Users/$uid/Items', queryParameters: params);
     return _parseItemList(resp.data);
@@ -558,11 +567,17 @@ class EmbyLibraryApi implements LibraryApi {
   @override
   Future<Filters> getFilters(String libraryId) async {
     final uid = _requireUserId(_client);
-    final resp = await _client.get('/Items/Filters', queryParameters: {
-      'UserId': uid,
-      'ParentId': libraryId,
-    });
-    final d = resp.data as Map<String, dynamic>;
+    // 分面一次取：/Items/Filters 带 Genres/Years/Tags/OfficialRatings；
+    // 工作室无分面字段，用专用 /Studios 端点，二者并行无额外延迟。
+    final results = await Future.wait([
+      _client.get('/Items/Filters', queryParameters: {
+        'UserId': uid,
+        'ParentId': libraryId,
+      }),
+      _fetchStudios(libraryId, uid),
+    ]);
+    final d = (results[0] as Response).data as Map<String, dynamic>;
+    final studios = results[1] as List<String>;
     return Filters(
       genres:
           (d['Genres'] as List<dynamic>?)?.map((e) => e.toString()).toList() ??
@@ -570,11 +585,48 @@ class EmbyLibraryApi implements LibraryApi {
       years:
           (d['Years'] as List<dynamic>?)?.map((e) => e.toString()).toList() ??
               [],
+      tags:
+          (d['Tags'] as List<dynamic>?)?.map((e) => e.toString()).toList() ??
+              [],
+      studios: studios,
       officialRatings: (d['OfficialRatings'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
           [],
     );
+  }
+
+  @override
+  Future<List<MediaItem>> getCollections() async {
+    final uid = _requireUserId(_client);
+    final resp = await _client.get('/Users/$uid/Items', queryParameters: {
+      'UserId': uid,
+      'IncludeItemTypes': 'BoxSet',
+      'Recursive': true,
+      'SortBy': 'SortName',
+      'SortOrder': 'Ascending',
+      'Fields': _libraryItemFields,
+    });
+    return _parseItemList(resp.data);
+  }
+
+  /// 工作室列表（库内，含计数排序）。失败不应拖垮整个面板，故吞错返回空。
+  Future<List<String>> _fetchStudios(String libraryId, String uid) async {
+    try {
+      final resp = await _client.get('/Studios', queryParameters: {
+        'UserId': uid,
+        'ParentId': libraryId,
+        'Recursive': true,
+      });
+      final items = (resp.data as Map<String, dynamic>)['Items'] as List<dynamic>?;
+      return items
+              ?.map((e) => (e as Map<String, dynamic>)['Name']?.toString() ?? '')
+              .where((s) => s.isNotEmpty)
+              .toList() ??
+          [];
+    } catch (_) {
+      return [];
+    }
   }
 }
 

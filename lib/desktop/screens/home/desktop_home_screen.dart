@@ -127,6 +127,9 @@ class _DesktopHomeScreenState extends ConsumerState<DesktopHomeScreen>
             const SliverToBoxAdapter(
               child: RepaintBoundary(child: _LatestItemsSection()),
             ),
+            const SliverToBoxAdapter(
+              child: RepaintBoundary(child: _CollectionsSection()),
+            ),
             const SliverPadding(padding: EdgeInsets.only(bottom: 48)),
           ],
         ],
@@ -1941,6 +1944,54 @@ class _LibrariesSection extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 合集区块（桌面首页底部）——海报横向栏，点开复用 /library 详情展示成员。
+class _CollectionsSection extends ConsumerWidget {
+  const _CollectionsSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(collectionsProvider);
+    return async.maybeWhen(
+      data: (collections) {
+        if (collections.isEmpty) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const DesktopSectionHeader(title: '合集'),
+            SizedBox(
+              height: 270,
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                scrollDirection: Axis.horizontal,
+                primary: false,
+                physics: const ClampingScrollPhysics(),
+                itemCount: collections.length,
+                itemBuilder: (context, index) {
+                  final c = collections[index];
+                  return Padding(
+                    padding: EdgeInsets.only(
+                        right: index == collections.length - 1 ? 0 : 14),
+                    child: SizedBox(
+                      width: 150,
+                      child: MediaPoster(
+                        item: c,
+                        width: 150,
+                        height: 225,
+                        onTap: () => context.push('/library/${c.id}'),
+                      ),
+                    ).appEntrance(index: index),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
+      orElse: () => const SizedBox.shrink(),
     );
   }
 }
