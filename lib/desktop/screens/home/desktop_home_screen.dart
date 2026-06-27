@@ -1955,7 +1955,14 @@ class _CollectionsSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(collectionsProvider);
-    return async.maybeWhen(
+    return async.when(
+      loading: () => const SizedBox.shrink(),
+      // 拉取失败时不再静默隐藏，露出错误便于排查（服务器无合集才是正常的空）。
+      error: (e, _) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+        child: Text('合集加载失败：$e',
+            style: TextStyle(color: Theme.of(context).colorScheme.error)),
+      ),
       data: (collections) {
         if (collections.isEmpty) return const SizedBox.shrink();
         return Column(
@@ -1991,7 +1998,6 @@ class _CollectionsSection extends ConsumerWidget {
           ],
         );
       },
-      orElse: () => const SizedBox.shrink(),
     );
   }
 }

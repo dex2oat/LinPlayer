@@ -4,10 +4,11 @@ import '../../../core/utils/library_filter_utils.dart';
 
 /// 媒体库筛选面板（移动端 + 桌面端共用，Material）。
 ///
-/// 数据来自 Emby `/Items/Filters` 的一次性返回（Genres / Years / Tags），
-/// 选中值经服务端过滤，不在本地分页拉全量。每组单选，再点一次取消。
-/// 标签组承载「地区」等信息——Emby 无独立地区分面，国产刮削器通常写进 Tags。
-class LibraryFilterBar extends StatefulWidget {
+/// 数据来自 Emby `/Items/Filters` 的一次性返回（Genres / Years / Tags）+ `/Studios`，
+/// 选中值经服务端过滤，不在本地分页拉全量。每组单选，再点一次取消。默认全部展开
+/// （类型/标签/工作室/时间 行直接铺开，不折叠）。标签组承载「地区」等信息——Emby
+/// 无独立地区分面，国产刮削器通常写进 Tags。
+class LibraryFilterBar extends StatelessWidget {
   final Filters facets;
   final LibraryFilterValue value;
   final int currentYear;
@@ -22,103 +23,64 @@ class LibraryFilterBar extends StatefulWidget {
   });
 
   @override
-  State<LibraryFilterBar> createState() => _LibraryFilterBarState();
-}
-
-class _LibraryFilterBarState extends State<LibraryFilterBar> {
-  bool _expanded = false;
-
-  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final f = widget.facets;
-    final v = widget.value;
-    final yearChips = buildYearChips(f.years, currentYear: widget.currentYear);
+    final f = facets;
+    final v = value;
+    final yearChips = buildYearChips(f.years, currentYear: currentYear);
     final hasAny = f.genres.isNotEmpty ||
         f.tags.isNotEmpty ||
         f.studios.isNotEmpty ||
         yearChips.isNotEmpty;
     if (!hasAny) return const SizedBox.shrink();
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          child: Row(
-            children: [
-              InkWell(
-                borderRadius: BorderRadius.circular(20),
-                onTap: () => setState(() => _expanded = !_expanded),
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.tune,
-                          size: 18, color: theme.colorScheme.primary),
-                      const SizedBox(width: 6),
-                      Text(
-                        v.activeCount > 0 ? '筛选 · ${v.activeCount}' : '筛选',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: theme.colorScheme.primary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      Icon(_expanded ? Icons.expand_less : Icons.expand_more,
-                          size: 18, color: theme.colorScheme.primary),
-                    ],
-                  ),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (v.activeCount > 0)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => onChanged(v.cleared()),
+                icon: const Icon(Icons.restart_alt, size: 16),
+                label: const Text('重置'),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 32),
                 ),
               ),
-              const Spacer(),
-              if (v.activeCount > 0)
-                TextButton(
-                  onPressed: () => widget.onChanged(v.cleared()),
-                  child: const Text('重置'),
-                ),
-            ],
-          ),
-        ),
-        if (_expanded)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (f.genres.isNotEmpty)
-                  _row(theme, '类型', [
-                    for (final g in f.genres)
-                      _chip(theme, g, v.genre == g,
-                          () => widget.onChanged(v.withGenre(v.genre == g ? null : g))),
-                  ]),
-                if (f.tags.isNotEmpty)
-                  _row(theme, '标签', [
-                    for (final t in f.tags)
-                      _chip(theme, t, v.tag == t,
-                          () => widget.onChanged(v.withTag(v.tag == t ? null : t))),
-                  ]),
-                if (f.studios.isNotEmpty)
-                  _row(theme, '工作室', [
-                    for (final s in f.studios)
-                      _chip(theme, s, v.studio == s,
-                          () => widget.onChanged(v.withStudio(v.studio == s ? null : s))),
-                  ]),
-                if (yearChips.isNotEmpty)
-                  _row(theme, '时间', [
-                    for (final yc in yearChips)
-                      _chip(theme, yc.label, v.yearLabel == yc.label, () {
-                        final on = v.yearLabel == yc.label;
-                        widget.onChanged(
-                            v.withYear(on ? null : yc.label, on ? null : yc.yearsCsv));
-                      }),
-                  ]),
-              ],
             ),
-          ),
-      ],
+          if (f.genres.isNotEmpty)
+            _row(theme, '类型', [
+              for (final g in f.genres)
+                _chip(theme, g, v.genre == g,
+                    () => onChanged(v.withGenre(v.genre == g ? null : g))),
+            ]),
+          if (f.tags.isNotEmpty)
+            _row(theme, '标签', [
+              for (final t in f.tags)
+                _chip(theme, t, v.tag == t,
+                    () => onChanged(v.withTag(v.tag == t ? null : t))),
+            ]),
+          if (f.studios.isNotEmpty)
+            _row(theme, '工作室', [
+              for (final s in f.studios)
+                _chip(theme, s, v.studio == s,
+                    () => onChanged(v.withStudio(v.studio == s ? null : s))),
+            ]),
+          if (yearChips.isNotEmpty)
+            _row(theme, '时间', [
+              for (final yc in yearChips)
+                _chip(theme, yc.label, v.yearLabel == yc.label, () {
+                  final on = v.yearLabel == yc.label;
+                  onChanged(
+                      v.withYear(on ? null : yc.label, on ? null : yc.yearsCsv));
+                }),
+            ]),
+        ],
+      ),
     );
   }
 
