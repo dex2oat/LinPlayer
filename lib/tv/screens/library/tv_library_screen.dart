@@ -181,7 +181,45 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
     );
   }
 
+  // 工作室/类型等高基数分面：项太多会把固定高的筛选区撑爆。默认只铺前 N 个 +
+  // 「展开」焦点项（其余不渲染，故不可被遥控器聚焦）；展开后限高约五行放进可滚动区，
+  // D-pad 聚焦时框架自动 ensureVisible 跟随滚动。
+  final Set<String> _expandedFacets = {};
+
   Widget _facetRow(TvMetrics m, String label, List<Widget> chips) {
+    const threshold = 12;
+    final overflow = chips.length > threshold;
+    final expanded = _expandedFacets.contains(label);
+
+    Widget chipArea;
+    if (!overflow) {
+      chipArea =
+          Wrap(spacing: m.spacingSm, runSpacing: m.spacingSm, children: chips);
+    } else if (!expanded) {
+      chipArea = Wrap(spacing: m.spacingSm, runSpacing: m.spacingSm, children: [
+        ...chips.take(threshold),
+        TvFocusable(
+          onSelect: () => setState(() => _expandedFacets.add(label)),
+          child: _chip(m,
+              label: '展开 +${chips.length - threshold}', selected: false),
+        ),
+      ]);
+    } else {
+      final rowH = m.fontSizeSm + m.spacingSm * 3; // 约一行间距
+      chipArea = ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: rowH * 5),
+        child: SingleChildScrollView(
+          child: Wrap(spacing: m.spacingSm, runSpacing: m.spacingSm, children: [
+            ...chips,
+            TvFocusable(
+              onSelect: () => setState(() => _expandedFacets.remove(label)),
+              child: _chip(m, label: '收起', selected: false),
+            ),
+          ]),
+        ),
+      );
+    }
+
     return Padding(
       padding: EdgeInsets.only(bottom: m.spacingSm),
       child: Row(
@@ -198,9 +236,7 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
               ),
             ),
           ),
-          Expanded(
-            child: Wrap(spacing: m.spacingSm, runSpacing: m.spacingSm, children: chips),
-          ),
+          Expanded(child: chipArea),
         ],
       ),
     );
