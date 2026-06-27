@@ -180,8 +180,10 @@ final libraryItemsProvider = FutureProvider.autoDispose.family<
       String? sortOrder,
       String? genres,
       String? tags,
-      String? studios,
+      String? studioIds,
       String? years,
+      double? ratingMin,
+      double? ratingMax,
     })>(
   (ref, params) async {
     final api = ref.watch(apiClientProvider);
@@ -191,8 +193,10 @@ final libraryItemsProvider = FutureProvider.autoDispose.family<
       sortOrder: params.sortOrder,
       genres: params.genres,
       tags: params.tags,
-      studios: params.studios,
+      studioIds: params.studioIds,
       years: params.years,
+      ratingMin: params.ratingMin,
+      ratingMax: params.ratingMax,
     );
   },
 );

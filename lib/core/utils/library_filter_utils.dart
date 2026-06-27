@@ -67,47 +67,68 @@ List<YearChip> buildYearChips(List<String> years, {required int currentYear}) {
 class LibraryFilterValue {
   final String? genre;
   final String? tag;
-  final String? studio;
+  final String? studio; // 显示名
+  final String? studioId; // 查询用（Emby StudioIds）
   final String? yearLabel;
   final String? yearsCsv;
+  final double? ratingMin;
+  final double? ratingMax;
 
   const LibraryFilterValue({
     this.genre,
     this.tag,
     this.studio,
+    this.studioId,
     this.yearLabel,
     this.yearsCsv,
+    this.ratingMin,
+    this.ratingMax,
   });
 
   bool get isEmpty =>
-      genre == null && tag == null && studio == null && yearsCsv == null;
+      genre == null &&
+      tag == null &&
+      studio == null &&
+      yearsCsv == null &&
+      ratingMin == null &&
+      ratingMax == null;
 
   int get activeCount =>
       (genre != null ? 1 : 0) +
       (tag != null ? 1 : 0) +
       (studio != null ? 1 : 0) +
-      (yearsCsv != null ? 1 : 0);
+      (yearsCsv != null ? 1 : 0) +
+      ((ratingMin != null || ratingMax != null) ? 1 : 0);
 
   LibraryFilterValue _copy({
     Object? genre = _keep,
     Object? tag = _keep,
     Object? studio = _keep,
+    Object? studioId = _keep,
     Object? yearLabel = _keep,
     Object? yearsCsv = _keep,
+    Object? ratingMin = _keep,
+    Object? ratingMax = _keep,
   }) =>
       LibraryFilterValue(
         genre: genre == _keep ? this.genre : genre as String?,
         tag: tag == _keep ? this.tag : tag as String?,
         studio: studio == _keep ? this.studio : studio as String?,
+        studioId: studioId == _keep ? this.studioId : studioId as String?,
         yearLabel: yearLabel == _keep ? this.yearLabel : yearLabel as String?,
         yearsCsv: yearsCsv == _keep ? this.yearsCsv : yearsCsv as String?,
+        ratingMin: ratingMin == _keep ? this.ratingMin : ratingMin as double?,
+        ratingMax: ratingMax == _keep ? this.ratingMax : ratingMax as double?,
       );
 
   LibraryFilterValue withGenre(String? g) => _copy(genre: g);
   LibraryFilterValue withTag(String? t) => _copy(tag: t);
-  LibraryFilterValue withStudio(String? s) => _copy(studio: s);
+  LibraryFilterValue withStudio(String? name, String? id) =>
+      _copy(studio: name, studioId: id);
   LibraryFilterValue withYear(String? label, String? csv) =>
       _copy(yearLabel: label, yearsCsv: csv);
+  LibraryFilterValue withRating(double? min, double? max) =>
+      _copy(ratingMin: min, ratingMax: max);
   LibraryFilterValue cleared() => const LibraryFilterValue();
 
   @override
@@ -116,11 +137,15 @@ class LibraryFilterValue {
       other.genre == genre &&
       other.tag == tag &&
       other.studio == studio &&
+      other.studioId == studioId &&
       other.yearLabel == yearLabel &&
-      other.yearsCsv == yearsCsv;
+      other.yearsCsv == yearsCsv &&
+      other.ratingMin == ratingMin &&
+      other.ratingMax == ratingMax;
 
   @override
-  int get hashCode => Object.hash(genre, tag, studio, yearLabel, yearsCsv);
+  int get hashCode => Object.hash(genre, tag, studio, studioId, yearLabel,
+      yearsCsv, ratingMin, ratingMax);
 }
 
 /// _copy 的"保持原值"哨兵——区分"不改"与"显式置 null"。

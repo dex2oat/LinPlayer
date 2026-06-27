@@ -172,8 +172,10 @@ class MediaCounts {
 abstract class LibraryApi {
   /// 获取媒体库内容
   /// GET /Users/{UserId}/Items
-  /// [genres]/[tags]/[studios] 为单个可选值（Emby 服务端 AND 过滤）；
-  /// [years] 为逗号分隔年份（年代选项展开成该十年全部年份）。均为空表示不过滤。
+  /// [genres]/[tags] 为单个可选值（Emby 服务端 AND 过滤、按名）；[studioIds] 为工作室
+  /// **Id**（Emby 的 `Studios=名` 不过滤，必须用 `StudioIds`）；[years] 为逗号分隔年份。
+  /// [ratingMin]/[ratingMax] 为社区评分区间（min 走服务端 MinCommunityRating，max 客户端
+  /// 兜底，Emby 无 MaxCommunityRating）。均为空/null 表示该维度不过滤。
   Future<List<MediaItem>> getLibraryItems({
     required String libraryId,
     String? sortBy,
@@ -182,8 +184,10 @@ abstract class LibraryApi {
     int limit = 50,
     String? genres,
     String? tags,
-    String? studios,
+    String? studioIds,
     String? years,
+    double? ratingMin,
+    double? ratingMax,
   });
 
   /// 获取筛选条件（类型/年份/标签/工作室/分级）
@@ -202,12 +206,16 @@ class Filters {
   final List<String> studios;
   final List<String> officialRatings;
 
+  /// 工作室名 → Id。Emby 的 `Studios=名` 不过滤，过滤必须用 `StudioIds`，故保留映射。
+  final Map<String, String> studioIds;
+
   Filters({
     required this.genres,
     required this.years,
     required this.tags,
     required this.studios,
     required this.officialRatings,
+    this.studioIds = const {},
   });
 }
 

@@ -161,8 +161,10 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
             final p = await _showFacetPicker(
                 m, '工作室', sortByPinyin(f.studios), _filter.studio);
             if (p != null) {
-              setState(() =>
-                  _filter = _filter.withStudio(p.isEmpty ? null : p));
+              // Emby 的 Studios=名 不过滤，必须存 Id（StudioIds）。
+              final name = p.isEmpty ? null : p;
+              setState(() => _filter = _filter.withStudio(
+                  name, name == null ? null : f.studioIds[name]));
             }
           }));
         }
@@ -323,8 +325,10 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
       sortOrder: _sortBy == 'SortName' ? 'Ascending' : 'Descending',
       genres: _filter.genre,
       tags: _filter.tag,
-      studios: _filter.studio,
+      studioIds: _filter.studioId,
       years: _filter.yearsCsv,
+      ratingMin: _filter.ratingMin,
+      ratingMax: _filter.ratingMax,
     )));
     final api = ref.read(apiClientProvider);
 

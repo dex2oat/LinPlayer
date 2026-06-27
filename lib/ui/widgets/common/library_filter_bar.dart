@@ -46,11 +46,15 @@ class LibraryFilterBar extends StatelessWidget {
       ]));
     }
     // 工作室取值可能很多，单独成一行回显当前值，点开居中可搜索弹窗选。
+    // 注意：过滤要 Id（Emby Studios=名 不生效），选中名后从 facet 映射取 Id 一起存。
     if (f.studios.isNotEmpty) {
       rows.add(_pickerRow(theme, '工作室', v.studio, () async {
         final picked =
             await _pick(context, '工作室', sortByPinyin(f.studios), v.studio);
-        if (picked != null) onChanged(v.withStudio(picked.isEmpty ? null : picked));
+        if (picked != null) {
+          final name = picked.isEmpty ? null : picked;
+          onChanged(v.withStudio(name, name == null ? null : f.studioIds[name]));
+        }
       }));
     }
     if (yearChips.isNotEmpty) {
@@ -63,15 +67,8 @@ class LibraryFilterBar extends StatelessWidget {
           }),
       ]));
     }
-
-    // 服务器对该库没有返回任何分面时，给个明确提示而非空白（避免误以为"功能没做"）。
-    if (rows.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.fromLTRB(16, 6, 16, 6),
-        child: Text('该媒体库暂无可筛选项',
-            style: TextStyle(fontSize: 12, color: Colors.grey)),
-      );
-    }
+    // 评分区间始终可用（与分面无关），放在最后一行。
+    rows.add(_RatingRow(value: v, onChanged: onChanged));
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
@@ -189,6 +186,110 @@ class LibraryFilterBar extends StatelessWidget {
       context: context,
       builder: (ctx) =>
           _FacetPickerDialog(title: title, options: options, current: current),
+    );
+  }
+}
+
+/// 评分区间一行：[最低] - [最高] 两个数字框，回车/完成时套用（避免每次按键都重拉网格）。
+class _RatingRow extends StatefulWidget {
+  final LibraryFilterValue value;
+  final ValueChanged<LibraryFilterValue> onChanged;
+  const _RatingRow({required this.value, required this.onChanged});
+
+  @override
+  State<_RatingRow> createState() => _RatingRowState();
+}
+
+class _RatingRowState extends State<_RatingRow> {
+  late final TextEditingController _min =
+      TextEditingController(text: _fmt(widget.value.ratingMin));
+  late final TextEditingController _max =
+      TextEditingController(text: _fmt(widget.value.ratingMax));
+
+  @override
+  void didUpdateWidget(covariant _RatingRow old) {
+    super.didUpdateWidget(old);
+    // 外部「重置」清空时，同步回输入框。
+    final v = widget.value;
+    if (v.ratingMin == null &&
+        v.ratingMax == null &&
+        (_min.text.isNotEmpty || _max.text.isNotEmpty)) {
+      _min.text = '';
+      _max.text = '';
+    }
+  }
+
+  @override
+  void dispose() {
+    _min.dispose();
+    _max.dispose();
+    super.dispose();
+  }
+
+  String _fmt(double? d) => d == null
+      ? ''
+      : (d == d.roundToDouble() ? d.toInt().toString() : d.toString());
+
+  void _apply() {
+    widget.onChanged(widget.value.withRating(
+      double.tryParse(_min.text.trim()),
+      double.tryParse(_max.text.trim()),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Container(
+            margin: const EdgeInsets.only(right: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primary.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text('评分',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.w600)),
+          ),
+          _field(theme, _min, '最低'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Text('-', style: TextStyle(color: theme.hintColor)),
+          ),
+          _field(theme, _max, '最高'),
+          const SizedBox(width: 8),
+          Text('（0–10）',
+              style: TextStyle(fontSize: 11, color: theme.hintColor)),
+        ],
+      ),
+    );
+  }
+
+  Widget _field(ThemeData theme, TextEditingController c, String hint) {
+    return SizedBox(
+      width: 58,
+      height: 34,
+      child: TextField(
+        controller: c,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontSize: 14),
+        decoration: InputDecoration(
+          hintText: hint,
+          isDense: true,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          border: const OutlineInputBorder(),
+        ),
+        onSubmitted: (_) => _apply(),
+        onEditingComplete: _apply,
+      ),
     );
   }
 }

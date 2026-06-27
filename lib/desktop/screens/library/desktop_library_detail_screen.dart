@@ -22,15 +22,6 @@ class DesktopLibraryDetailScreen extends ConsumerStatefulWidget {
 
 class _DesktopLibraryDetailScreenState
     extends ConsumerState<DesktopLibraryDetailScreen> {
-  static const Map<String, String> _sortMap = {
-    '加入日期': 'DateCreated',
-    '标题': 'SortName',
-    '首映日期': 'PremiereDate',
-    '评分': 'CommunityRating',
-  };
-
-  String _sortBy = 'DateCreated';
-  String _sortOrder = 'Descending';
   LibraryFilterValue _filter = const LibraryFilterValue();
   final ScrollController _scrollController = DesktopSmoothScrollController();
 
@@ -45,12 +36,14 @@ class _DesktopLibraryDetailScreenState
     final librariesAsync = ref.watch(librariesProvider);
     final libraryItemsAsync = ref.watch(libraryItemsProvider((
       libraryId: widget.libraryId,
-      sortBy: _sortBy,
-      sortOrder: _sortOrder,
+      sortBy: 'SortName',
+      sortOrder: 'Ascending',
       genres: _filter.genre,
       tags: _filter.tag,
-      studios: _filter.studio,
+      studioIds: _filter.studioId,
       years: _filter.yearsCsv,
+      ratingMin: _filter.ratingMin,
+      ratingMax: _filter.ratingMax,
     )));
     final filtersAsync = ref.watch(filtersProvider(widget.libraryId));
     final theme = Theme.of(context);
@@ -91,8 +84,6 @@ class _DesktopLibraryDetailScreenState
                       ),
                     ),
                   ),
-                  const SizedBox(width: 16),
-                  _buildSortDropdown(theme),
                 ],
               ),
             ),
@@ -199,50 +190,4 @@ class _DesktopLibraryDetailScreenState
     );
   }
 
-  Widget _buildSortDropdown(ThemeData theme) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: theme.dividerColor.withValues(alpha: 0.3),
-        ),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: _currentSortLabel,
-          isDense: true,
-          items: ['加入日期', '标题', '首映日期', '评分'].map((value) {
-            return DropdownMenuItem<String>(
-              value: value,
-              child: Text(value, style: const TextStyle(fontSize: 13)),
-            );
-          }).toList(),
-          onChanged: (newValue) {
-            if (newValue != null) {
-              setState(() {
-                final mappedValue = _sortMap[newValue] ?? _sortBy;
-                if (_sortBy == mappedValue) {
-                  _sortOrder =
-                      _sortOrder == 'Descending' ? 'Ascending' : 'Descending';
-                } else {
-                  _sortBy = mappedValue;
-                  _sortOrder = 'Descending';
-                }
-              });
-            }
-          },
-        ),
-      ),
-    );
-  }
-
-  String get _currentSortLabel {
-    return _sortMap.entries
-            .where((entry) => entry.value == _sortBy)
-            .firstOrNull
-            ?.key ??
-        '加入日期';
-  }
 }

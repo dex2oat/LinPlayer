@@ -24,7 +24,7 @@ void main() {
     expect(v0.isEmpty, true);
     expect(v0.activeCount, 0);
 
-    final v1 = v0.withGenre('喜剧').withStudio('正午阳光').withYear('2024', '2024');
+    final v1 = v0.withGenre('喜剧').withStudio('正午阳光', '7').withYear('2024', '2024');
     expect(v1.activeCount, 3);
     expect(v1.isEmpty, false);
 
@@ -35,7 +35,14 @@ void main() {
     expect(v2.studio, '正午阳光');
 
     expect(v1,
-        v0.withGenre('喜剧').withStudio('正午阳光').withYear('2024', '2024')); // 值相等
+        v0.withGenre('喜剧').withStudio('正午阳光', '7').withYear('2024', '2024')); // 值相等
+
+    // 评分区间算一个激活维度；清除回到空。
+    final v3 = v0.withRating(7.0, 9.0);
+    expect(v3.activeCount, 1);
+    expect(v3.ratingMin, 7.0);
+    expect(v3.ratingMax, 9.0);
+    expect(v3.withRating(null, null).isEmpty, true);
   });
 
   test('sortByPinyin: 中文按拼音首字母、英文原样，混合升序', () {

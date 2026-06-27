@@ -537,8 +537,10 @@ class EmbyLibraryApi implements LibraryApi {
     int limit = 50,
     String? genres,
     String? tags,
-    String? studios,
+    String? studioIds,
     String? years,
+    double? ratingMin,
+    double? ratingMax,
   }) async {
     final uid = _requireUserId(_client);
     final params = <String, dynamic>{
@@ -554,14 +556,28 @@ class EmbyLibraryApi implements LibraryApi {
       params['SortBy'] = sortBy;
       params['SortOrder'] = sortOrder ?? 'Ascending';
     }
-    // 服务端过滤：Emby 的 Genres/Tags/Studios 用竖线分隔，Years 用逗号分隔。
+    // 服务端过滤：Genres/Tags 用竖线分隔按名、Years 逗号分隔；工作室必须用 StudioIds
+    // （Emby 的 Studios=名 不生效）。评分下界走 MinCommunityRating。
     if (genres != null && genres.isNotEmpty) params['Genres'] = genres;
     if (tags != null && tags.isNotEmpty) params['Tags'] = tags;
-    if (studios != null && studios.isNotEmpty) params['Studios'] = studios;
+    if (studioIds != null && studioIds.isNotEmpty) params['StudioIds'] = studioIds;
     if (years != null && years.isNotEmpty) params['Years'] = years;
+    if (ratingMin != null) params['MinCommunityRating'] = ratingMin;
     final resp =
         await _client.get('/Users/$uid/Items', queryParameters: params);
-    return _parseItemList(resp.data);
+    var list = _parseItemList(resp.data);
+    // Emby 无 MaxCommunityRating；评分区间在本页客户端兜底（无评分项视为不在区间）。
+    // ponytail: 分页下夹逼后可能不足一页，个人库通常不大，先够用；要严谨需服务端支持上界。
+    if (ratingMin != null || ratingMax != null) {
+      list = list.where((it) {
+        final r = it.communityRating;
+        if (r == null) return false;
+        if (ratingMin != null && r < ratingMin) return false;
+        if (ratingMax != null && r > ratingMax) return false;
+        return true;
+      }).toList();
+    }
+    return list;
   }
 
   @override
@@ -570,19 +586,21 @@ class EmbyLibraryApi implements LibraryApi {
     // 不走 /Items/Filters：部分 Emby（实测 4.9.5）该端点 404，/Users/{uid}/Items/Filters2
     // 又 500（Unrecognized Guid format）。改用各分面专用端点并行取，
     // 这些端点在标准 Emby 上也都在，兼容性更好；各自吞错互不拖垮。
-    final results = await Future.wait([
+    final results = await Future.wait<Object>([
       _fetchFacetNames('/Genres', libraryId, uid),
       _fetchFacetNames('/Years', libraryId, uid),
       _fetchFacetNames('/Tags', libraryId, uid),
-      _fetchFacetNames('/Studios', libraryId, uid),
+      _fetchFacetEntries('/Studios', libraryId, uid), // 工作室要 Id 才能过滤
       _fetchFacetNames('/OfficialRatings', libraryId, uid),
     ]);
+    final studioMap = results[3] as Map<String, String>;
     return Filters(
-      genres: results[0],
-      years: results[1],
-      tags: results[2],
-      studios: results[3],
-      officialRatings: results[4],
+      genres: results[0] as List<String>,
+      years: results[1] as List<String>,
+      tags: results[2] as List<String>,
+      studios: studioMap.keys.toList(),
+      officialRatings: results[4] as List<String>,
+      studioIds: studioMap,
     );
   }
 
@@ -618,6 +636,30 @@ class EmbyLibraryApi implements LibraryApi {
           [];
     } catch (_) {
       return [];
+    }
+  }
+
+  /// 同 [_fetchFacetNames]，但返回 名→Id 映射（工作室过滤需 StudioIds）。保持服务端
+  /// 返回顺序，吞错返回空 map。
+  Future<Map<String, String>> _fetchFacetEntries(
+      String endpoint, String libraryId, String uid) async {
+    try {
+      final resp = await _client.get(endpoint, queryParameters: {
+        'UserId': uid,
+        'ParentId': libraryId,
+        'Recursive': true,
+      });
+      final items = (resp.data as Map<String, dynamic>)['Items'] as List<dynamic>?;
+      final map = <String, String>{};
+      for (final e in items ?? const []) {
+        final m = e as Map<String, dynamic>;
+        final name = m['Name']?.toString() ?? '';
+        final id = m['Id']?.toString() ?? '';
+        if (name.isNotEmpty && id.isNotEmpty) map[name] = id;
+      }
+      return map;
+    } catch (_) {
+      return {};
     }
   }
 }
