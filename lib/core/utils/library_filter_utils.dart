@@ -7,17 +7,18 @@ library;
 
 import 'package:lpinyin/lpinyin.dart';
 
+/// 取一个字符串的拼音小写形式（中文转拼音、英文/数字原样），用于排序键与搜索匹配。
+String pinyinOf(String s) {
+  final p =
+      PinyinHelper.getPinyinE(s.trim(), separator: '', defPinyin: '').toLowerCase();
+  return p.isEmpty ? s.trim().toLowerCase() : p;
+}
+
 /// 按拼音首字母升序排序（中文转拼音、英文/数字原样），用于筛选弹窗里那一长串
 /// 类型/标签/工作室的取值列表。原列表不变，返回新列表。
 List<String> sortByPinyin(List<String> items) {
-  String key(String s) {
-    final p = PinyinHelper.getPinyinE(s.trim(), separator: '', defPinyin: '')
-        .toLowerCase();
-    return p.isEmpty ? s.trim().toLowerCase() : p;
-  }
-
   final copy = [...items];
-  copy.sort((a, b) => key(a).compareTo(key(b)));
+  copy.sort((a, b) => pinyinOf(a).compareTo(pinyinOf(b)));
   return copy;
 }
 

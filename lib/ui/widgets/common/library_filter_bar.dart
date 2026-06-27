@@ -140,63 +140,149 @@ class LibraryFilterBar extends StatelessWidget {
     );
   }
 
-  /// 底部选择器：拼音排序后的取值列表 + 顶部「全部」。返回 null=未改、''=全部、其余=选中值。
+  /// 居中弹窗选择器：胶囊网格 + 右上角搜索框。返回 null=未改、''=全部、其余=选中值。
   Future<String?> _pick(BuildContext context, String title,
       List<String> options, String? current) {
-    return showModalBottomSheet<String>(
+    return showDialog<String>(
       context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (ctx) {
-        final theme = Theme.of(ctx);
-        return SafeArea(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(ctx).size.height * 0.7,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-                  child: Text(title,
+      builder: (ctx) =>
+          _FacetPickerDialog(title: title, options: options, current: current),
+    );
+  }
+}
+
+/// 居中的筛选取值选择器：标题 + 右上角实时搜索框（中文按拼音匹配），下方一个个胶囊，
+/// 选中即返回。「全部」固定在最前用于清除。
+class _FacetPickerDialog extends StatefulWidget {
+  final String title;
+  final List<String> options;
+  final String? current;
+
+  const _FacetPickerDialog({
+    required this.title,
+    required this.options,
+    required this.current,
+  });
+
+  @override
+  State<_FacetPickerDialog> createState() => _FacetPickerDialogState();
+}
+
+class _FacetPickerDialogState extends State<_FacetPickerDialog> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final q = _query.trim().toLowerCase();
+    final filtered = q.isEmpty
+        ? widget.options
+        : widget.options
+            .where((o) =>
+                o.toLowerCase().contains(q) || pinyinOf(o).contains(q))
+            .toList();
+
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 460,
+          maxHeight: MediaQuery.of(context).size.height * 0.7,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(widget.title,
                       style: theme.textTheme.titleMedium
                           ?.copyWith(fontWeight: FontWeight.w700)),
-                ),
-                Flexible(
-                  child: ListView(
-                    shrinkWrap: true,
+                  const Spacer(),
+                  SizedBox(
+                    width: 160,
+                    height: 36,
+                    child: TextField(
+                      autofocus: false,
+                      style: const TextStyle(fontSize: 14),
+                      decoration: InputDecoration(
+                        hintText: '搜索',
+                        prefixIcon: const Icon(Icons.search, size: 18),
+                        isDense: true,
+                        contentPadding:
+                            const EdgeInsets.symmetric(horizontal: 8),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                      ),
+                      onChanged: (v) => setState(() => _query = v),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
                     children: [
-                      _option(ctx, '全部', current == null, () => Navigator.pop(ctx, '')),
-                      for (final o in options)
-                        _option(ctx, o, o == current,
-                            () => Navigator.pop(ctx, o)),
+                      if (q.isEmpty)
+                        _capsule(theme, '全部', widget.current == null,
+                            () => Navigator.pop(context, '')),
+                      for (final o in filtered)
+                        _capsule(theme, o, o == widget.current,
+                            () => Navigator.pop(context, o)),
+                      if (filtered.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Text('无匹配项',
+                              style: TextStyle(
+                                  fontSize: 13, color: theme.hintColor)),
+                        ),
                     ],
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
-  Widget _option(
-      BuildContext context, String label, bool selected, VoidCallback onTap) {
-    final theme = Theme.of(context);
-    return ListTile(
-      dense: true,
-      title: Text(label,
-          style: TextStyle(
-            color: selected ? theme.colorScheme.primary : null,
-            fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
-          )),
-      trailing: selected
-          ? Icon(Icons.check, size: 18, color: theme.colorScheme.primary)
-          : null,
-      onTap: onTap,
+  Widget _capsule(
+      ThemeData theme, String label, bool selected, VoidCallback onTap) {
+    final primary = theme.colorScheme.primary;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: selected
+                ? primary.withValues(alpha: 0.14)
+                : theme.colorScheme.surfaceContainerHighest
+                    .withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: selected ? primary : Colors.transparent,
+              width: 1.5,
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 14,
+              color: selected ? primary : theme.textTheme.bodyMedium?.color,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
