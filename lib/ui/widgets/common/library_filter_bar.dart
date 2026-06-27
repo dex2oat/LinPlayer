@@ -113,13 +113,7 @@ class LibraryFilterBar extends StatelessWidget {
               ),
             ),
           ),
-          Expanded(
-            child: Wrap(
-              spacing: 6,
-              runSpacing: 4,
-              children: chips,
-            ),
-          ),
+          Expanded(child: _ExpandableChips(chips: chips)),
         ],
       ),
     );
@@ -142,6 +136,69 @@ class LibraryFilterBar extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 单组芯片：项太多时默认折叠（约两行），点「展开」放开到约五行并可上下滚动，
+/// 避免工作室/类型等高基数分面把整个面板撑爆。少于阈值则原样平铺、不显示按钮。
+class _ExpandableChips extends StatefulWidget {
+  final List<Widget> chips;
+  const _ExpandableChips({required this.chips});
+
+  @override
+  State<_ExpandableChips> createState() => _ExpandableChipsState();
+}
+
+class _ExpandableChipsState extends State<_ExpandableChips> {
+  bool _expanded = false;
+  static const _threshold = 14; // 超过这么多项才折叠
+  static const _collapsedH = 68.0; // 约两行
+  static const _expandedH = 168.0; // 约五行（可滚）
+
+  @override
+  Widget build(BuildContext context) {
+    final chips = widget.chips;
+    final wrap = Wrap(spacing: 6, runSpacing: 4, children: chips);
+    if (chips.length <= _threshold) return wrap;
+
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+                maxHeight: _expanded ? _expandedH : _collapsedH),
+            child: _expanded
+                ? SingleChildScrollView(child: wrap)
+                : ClipRect(
+                    child: Align(
+                        alignment: Alignment.topLeft,
+                        heightFactor: 1,
+                        child: wrap)),
+          ),
+        ),
+        InkWell(
+          onTap: () => setState(() => _expanded = !_expanded),
+          borderRadius: BorderRadius.circular(6),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_expanded ? '收起' : '展开',
+                    style:
+                        TextStyle(fontSize: 12, color: theme.colorScheme.primary)),
+                Icon(_expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 16, color: theme.colorScheme.primary),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
