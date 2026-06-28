@@ -1,3 +1,4 @@
+import '../../../core/widgets/app_shimmer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -42,7 +43,7 @@ class TvAniRssDetailScreen extends ConsumerWidget {
       backgroundColor: TvDesignTokens.background,
       body: asyncDetail.when(
         loading: () => const Center(
-            child: CircularProgressIndicator(color: TvDesignTokens.brand)),
+            child: AppLoadingIndicator(size: 48, color: TvDesignTokens.brand)),
         error: (e, _) => Center(
           child: Padding(
             padding: EdgeInsets.all(m.spacingXl),

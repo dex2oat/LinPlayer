@@ -1,3 +1,4 @@
+import '../../../core/widgets/app_shimmer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -135,7 +136,7 @@ class _TvSourceBrowseViewState extends ConsumerState<TvSourceBrowseView> {
   Widget _buildBody(TvMetrics m, SourceBrowseController c) {
     if (c.loading && c.entries.isEmpty) {
       return const Center(
-          child: CircularProgressIndicator(color: TvDesignTokens.brand));
+          child: AppLoadingIndicator(size: 48, color: TvDesignTokens.brand));
     }
     if (c.error != null) {
       return Center(

@@ -79,26 +79,26 @@ class PlayerSettingsScreen extends ConsumerWidget {
             subtitle: Text('${playbackSpeed}x'),
             onTap: () => _showSpeedSelector(context, ref),
           ),
-          SwitchListTile(
+          TdSwitchTile(
             title: const Text('后台播放'),
             value: backgroundPlayback,
             onChanged: (value) =>
                 ref.read(backgroundPlaybackProvider.notifier).state = value,
           ),
-          SwitchListTile(
+          TdSwitchTile(
             title: const Text('自动播放下一集'),
             value: autoPlayNext,
             onChanged: (value) =>
                 ref.read(autoPlayNextProvider.notifier).state = value,
           ),
-          SwitchListTile(
+          TdSwitchTile(
             title: const Text('自动跳过片头/片尾'),
             subtitle: const Text('联网识别剧集片头片尾，进入时显示跳过按钮'),
             value: autoSkipSegments,
             onChanged: (value) =>
                 ref.read(autoSkipSegmentsProvider.notifier).state = value,
           ),
-          SwitchListTile(
+          TdSwitchTile(
             title: const Text('预加载'),
             subtitle: const Text('进入集/电影详情页时提前预热播放流，点播放更接近秒开（会消耗少量流量）'),
             value: preloadEnabled,
@@ -113,7 +113,7 @@ class PlayerSettingsScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _openMultiThreadLoadingSettings(context, ref),
           ),
-          SwitchListTile(
+          TdSwitchTile(
             title: const Text('STRM 直链播放'),
             subtitle: const Text('STRM 可获取直链时直接直链播放；部分服务器不兼容可能导致无法播放，仅在明确需要时开启'),
             value: strmDirectPlay,
@@ -237,7 +237,7 @@ class PlayerSettingsScreen extends ConsumerWidget {
             subtitle: Text(subtitleFont),
             onTap: () => _showSubtitleFontSelector(context, ref),
           ),
-          SwitchListTile(
+          TdSwitchTile(
             title: const Text('字幕黑色背景'),
             subtitle: const Text('为字幕添加半透明黑色背景'),
             value: subtitleBackground,
@@ -275,14 +275,14 @@ class PlayerSettingsScreen extends ConsumerWidget {
               ),
             ),
           ),
-          SwitchListTile(
+          TdSwitchTile(
             title: const Text('硬件解码'),
             value: hardwareDecoding,
             onChanged: (value) =>
                 ref.read(hardwareDecodingProvider.notifier).state = value,
           ),
           if (playerCore == 'mpv' || playerCore == 'nativeMpv')
-            SwitchListTile(
+            TdSwitchTile(
               title: const Text('杜比视界自动切换软解'),
               subtitle: const Text(
                   '播放杜比视界时自动启用 gpu-next 渲染 + 软件解码，修正硬解偏色',
@@ -292,7 +292,7 @@ class PlayerSettingsScreen extends ConsumerWidget {
                   .read(dolbyAutoGpuNextSwProvider.notifier)
                   .state = value,
             ),
-          SwitchListTile(
+          TdSwitchTile(
             title: const Text('记忆亮度'),
             subtitle: const Text('记住上次调整的播放亮度'),
             value: rememberBrightness,
@@ -314,7 +314,7 @@ class PlayerSettingsScreen extends ConsumerWidget {
                 ),
               ),
             ),
-            SwitchListTile(
+            TdSwitchTile(
               title: const Text('自动修正杜比视界颜色'),
               subtitle: const Text('开启后软件修正杜比视界颜色偏差'),
               value: mpvDolbyVisionFix,
@@ -337,7 +337,7 @@ class PlayerSettingsScreen extends ConsumerWidget {
                 ),
               ),
             ),
-            SwitchListTile(
+            TdSwitchTile(
               title: const Text('启用 gpu-next 渲染'),
               subtitle: const Text('使用 libplacebo/gpu-next 渲染（需要 SurfaceView 支持）'),
               value: gpuNextEnabled,
@@ -392,7 +392,7 @@ class PlayerSettingsScreen extends ConsumerWidget {
             ),
           ],
           if (!isDesktopPlatform && playerCore == 'exoPlayer')
-            SwitchListTile(
+            TdSwitchTile(
               title: const Text('EXO 启用 ASS 原生渲染'),
               subtitle: const Text(
                   '关闭时将 ASS 转为 SRT 兼容播放；开启后优先使用 Media3/libass 管线保留 ASS 效果'),
@@ -531,7 +531,7 @@ class PlayerSettingsScreen extends ConsumerWidget {
                     child: Text('暂无服务器'),
                   )
                 else
-                  ...servers.map((s) => SwitchListTile(
+                  ...servers.map((s) => TdSwitchTile(
                         dense: true,
                         title: Text(s.name),
                         value: allowed.contains(s.id),

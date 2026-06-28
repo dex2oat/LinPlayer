@@ -91,6 +91,9 @@ dependencies:
   app_links: ^7.1.2
   # 筛选弹窗按拼音首字母排序（中文转拼音，纯 Dart 离线）
   lpinyin: ^2.0.3
+
+  # 统一三端组件风格（腾讯 TDesign，移动优先 Material 体系）
+  tdesign_flutter: ^0.2.7
 dependency_overrides:
   # vendored 的 third_party/flutter_qjs 已放宽 ffi 约束为 >=1.0.0 <3.0.0，
   # 与项目 ffi ^2.2.0 兼容，无需 override。

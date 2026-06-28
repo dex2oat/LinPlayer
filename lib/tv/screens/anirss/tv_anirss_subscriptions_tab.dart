@@ -1,3 +1,4 @@
+import '../../../core/widgets/app_shimmer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -35,7 +36,7 @@ class TvAniRssSubscriptionsTab extends ConsumerWidget {
         Expanded(
           child: asyncList.when(
             loading: () => const Center(
-                child: CircularProgressIndicator(color: TvDesignTokens.brand)),
+                child: AppLoadingIndicator(size: 48, color: TvDesignTokens.brand)),
             error: (e, _) => _centerHint(m, '加载失败：$e'),
             data: (anis) {
               final torrents = asyncTorrents.valueOrNull ?? const [];
@@ -740,7 +741,7 @@ class _AddSubscriptionPanelState extends State<_AddSubscriptionPanel> {
   Widget _buildResults(TvMetrics m) {
     if (_loading) {
       return const Center(
-          child: CircularProgressIndicator(color: TvDesignTokens.brand));
+          child: AppLoadingIndicator(size: 48, color: TvDesignTokens.brand));
     }
     if (_error != null) {
       return Center(

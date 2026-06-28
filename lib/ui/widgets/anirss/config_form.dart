@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/widgets/td_switch_tile.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/sources/anirss/anirss_config_spec.dart';
@@ -77,7 +78,7 @@ class _FieldRow extends StatelessWidget {
   Widget build(BuildContext context) {
     switch (field.type) {
       case CfgType.bool_:
-        return SwitchListTile(
+        return TdSwitchTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
           title: Text(field.label),

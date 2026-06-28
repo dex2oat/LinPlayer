@@ -86,7 +86,7 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
               onTap: () => _importCustomFont(context, ref, isApp: true),
             );
           }),
-          SwitchListTile(
+          TdSwitchTile(
             title: const Text('隐藏每日推荐'),
             subtitle: const Text('开启后只隐藏每日推荐，继续观看仍会保留'),
             value: hideDailyRecommendations,
@@ -94,7 +94,7 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
                 .read(hideDailyRecommendationsProvider.notifier)
                 .state = value,
           ),
-          SwitchListTile(
+          TdSwitchTile(
             title: const Text('使用视频背景'),
             subtitle: const Text('开启后在详情页使用预告片视频作为背景（如可用），关闭则使用封面图'),
             value: ref.watch(useVideoBackgroundProvider),

@@ -120,7 +120,7 @@ class _ResumeSyncScreenState extends ConsumerState<ResumeSyncScreen> {
             ),
           ),
           Card(
-            child: SwitchListTile(
+            child: TdSwitchTile(
               secondary: const Icon(Icons.sync_alt),
               title: const Text('跨服务器续播'),
               subtitle: const Text('换服务器观看同一内容时自动续播到最新进度'),
@@ -147,7 +147,7 @@ class _ResumeSyncScreenState extends ConsumerState<ResumeSyncScreen> {
           ),
           const SizedBox(height: 8),
           Card(
-            child: SwitchListTile(
+            child: TdSwitchTile(
               secondary: const Icon(Icons.cloud_upload_outlined),
               title: const Text('看完后回传到其它服务器'),
               subtitle: const Text('把已看完 / 进度同步到其它服务器'),
@@ -168,7 +168,7 @@ class _ResumeSyncScreenState extends ConsumerState<ResumeSyncScreen> {
               ),
             ),
             Card(
-              child: SwitchListTile(
+              child: TdSwitchTile(
                 secondary: const Icon(Icons.timelapse),
                 title: const Text('同步播放进度'),
                 subtitle: const Text('不仅回传「已看完」，也回传当前播放进度'),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/theme/td_platform_theme.dart';
 import 'tv_design_tokens.dart';
 import 'tv_metrics.dart';
 
@@ -18,6 +19,8 @@ class TvTheme {
   static ThemeData themeFor(TvMetrics m) => ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
+        // TV 尺寸档的 TDesign 扩展：TD 组件在 TV 上按放大尺寸呈现（10 尺远距）。
+        extensions: [tdThemeFor(AppFormFactor.tv, dark: true)],
         scaffoldBackgroundColor: TvDesignTokens.background,
         colorScheme: const ColorScheme.dark(
           primary: TvDesignTokens.brand,

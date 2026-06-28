@@ -1,3 +1,4 @@
+import '../../../core/widgets/app_shimmer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -94,7 +95,7 @@ class _TvLanControlScreenState extends ConsumerState<TvLanControlScreen> {
   Widget _buildBody(TvMetrics m) {
     if (_starting) {
       return const Center(
-        child: CircularProgressIndicator(color: TvDesignTokens.brand),
+        child: AppLoadingIndicator(size: 48, color: TvDesignTokens.brand),
       );
     }
     if (_error != null || _url == null) {

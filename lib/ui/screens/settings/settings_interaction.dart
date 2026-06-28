@@ -51,7 +51,7 @@ class InteractionSettingsScreen extends ConsumerWidget {
               provider: rightVerticalGestureProvider,
             ),
           ),
-          SwitchListTile(
+          TdSwitchTile(
             secondary: const Icon(Icons.swipe),
             title: const Text('横向滑动调节进度'),
             subtitle: const Text('左右滑动快进/快退；关闭后横滑不再改变进度'),
@@ -59,7 +59,7 @@ class InteractionSettingsScreen extends ConsumerWidget {
             onChanged: (v) =>
                 ref.read(horizontalSeekGestureProvider.notifier).state = v,
           ),
-          SwitchListTile(
+          TdSwitchTile(
             secondary: const Icon(Icons.touch_app),
             title: const Text('双击两侧快进/快退'),
             subtitle: const Text('双击屏幕左/右两侧快退/快进；中间区域始终播放/暂停'),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'app_colors.dart';
+import 'td_platform_theme.dart';
 
 /// Material 3 主题配置
 class AppTheme {
@@ -163,6 +164,92 @@ class AppTheme {
     );
   }
 
+  // ---- TDesign 风格组件主题（统一观感，不替换 Material 控件本身）----
+  // TDesign token：按钮/输入框圆角 6，对话框圆角 12（radiusExtraLarge）。
+  static const double _tdRadiusDefault = 6;
+  static const double _tdRadiusDialog = 12;
+  static const Size _tdButtonMinSize = Size(0, 48);
+  static const EdgeInsets _tdButtonPadding = EdgeInsets.symmetric(horizontal: 24);
+  static final RoundedRectangleBorder _tdButtonShape = RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(_tdRadiusDefault),
+  );
+  static const TextStyle _tdButtonText =
+      TextStyle(fontSize: textSizeBase, fontWeight: FontWeight.w600);
+
+  /// 实心/凸起按钮（FilledButton / ElevatedButton）：TDesign 实心按钮观感。
+  static final FilledButtonThemeData _filledButtonTheme = FilledButtonThemeData(
+    style: FilledButton.styleFrom(
+      elevation: 0,
+      minimumSize: _tdButtonMinSize,
+      padding: _tdButtonPadding,
+      shape: _tdButtonShape,
+      textStyle: _tdButtonText,
+    ),
+  );
+  static final ElevatedButtonThemeData _elevatedButtonTheme =
+      ElevatedButtonThemeData(
+    style: ElevatedButton.styleFrom(
+      elevation: 0,
+      minimumSize: _tdButtonMinSize,
+      padding: _tdButtonPadding,
+      shape: _tdButtonShape,
+      textStyle: _tdButtonText,
+    ),
+  );
+
+  /// 描边按钮：TDesign outline 风格。
+  static final OutlinedButtonThemeData _outlinedButtonTheme =
+      OutlinedButtonThemeData(
+    style: OutlinedButton.styleFrom(
+      minimumSize: _tdButtonMinSize,
+      padding: _tdButtonPadding,
+      shape: _tdButtonShape,
+      textStyle: _tdButtonText,
+    ),
+  );
+
+  /// 文字按钮：TDesign text 风格（字重略轻）。
+  static final TextButtonThemeData _textButtonTheme = TextButtonThemeData(
+    style: TextButton.styleFrom(
+      padding: _tdButtonPadding,
+      shape: _tdButtonShape,
+      textStyle: const TextStyle(fontSize: textSizeBase, fontWeight: FontWeight.w500),
+    ),
+  );
+
+  /// 对话框：TDesign 圆角 12 + 标题字重。
+  static final DialogThemeData _dialogTheme = DialogThemeData(
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(_tdRadiusDialog),
+    ),
+    titleTextStyle: const TextStyle(
+      fontSize: textSizeLG,
+      fontWeight: FontWeight.w600,
+    ),
+  );
+
+  /// 输入框：TDesign 填充式 + 圆角 6，聚焦描品牌色。fillColor 随明暗。
+  static InputDecorationTheme _inputTheme(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+    final fill = dark ? AppColors.darkSurface : AppColors.lightSurface;
+    final brand = dark ? AppColors.brandLight : AppColors.brand;
+    OutlineInputBorder border(Color color, double width) => OutlineInputBorder(
+          borderRadius: BorderRadius.circular(_tdRadiusDefault),
+          borderSide: BorderSide(color: color, width: width),
+        );
+    return InputDecorationTheme(
+      filled: true,
+      fillColor: fill,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      border: border(Colors.transparent, 0),
+      enabledBorder: border(
+        dark ? AppColors.darkDivider : AppColors.lightDivider,
+        1,
+      ),
+      focusedBorder: border(brand, 1.5),
+    );
+  }
+
   /// 把自定义字体家族名套用到一份 [ThemeData] 的全部文本主题上。
   /// [family] 为空时原样返回（用系统默认字体）。供三端在构建 MaterialApp 时调用。
   static ThemeData withFontFamily(ThemeData base, String? family) {
@@ -177,6 +264,9 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.light,
+      // TDesign 主题挂到 Material 扩展上，TD 组件随明暗自动取色（见 needMultiTheme）。
+      // 移动端尺寸档；桌面端在 _desktopTheme 覆盖为 desktop 档。
+      extensions: [tdThemeFor(AppFormFactor.mobile)],
       colorScheme: const ColorScheme.light(
         primary: AppColors.brand,
         onPrimary: Colors.white,
@@ -218,6 +308,12 @@ class AppTheme {
         thickness: 1,
       ),
       textTheme: _lightTextTheme,
+      filledButtonTheme: _filledButtonTheme,
+      elevatedButtonTheme: _elevatedButtonTheme,
+      outlinedButtonTheme: _outlinedButtonTheme,
+      textButtonTheme: _textButtonTheme,
+      dialogTheme: _dialogTheme,
+      inputDecorationTheme: _inputTheme(Brightness.light),
       snackBarTheme: _snackBarTheme(Brightness.light),
       scrollbarTheme: ScrollbarThemeData(
         thickness: WidgetStateProperty.all(8),
@@ -232,6 +328,7 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
+      extensions: [tdThemeFor(AppFormFactor.mobile, dark: true)],
       colorScheme: const ColorScheme.dark(
         primary: AppColors.brandLight,
         onPrimary: Colors.black,
@@ -273,6 +370,12 @@ class AppTheme {
         thickness: 1,
       ),
       textTheme: _darkTextTheme,
+      filledButtonTheme: _filledButtonTheme,
+      elevatedButtonTheme: _elevatedButtonTheme,
+      outlinedButtonTheme: _outlinedButtonTheme,
+      textButtonTheme: _textButtonTheme,
+      dialogTheme: _dialogTheme,
+      inputDecorationTheme: _inputTheme(Brightness.dark),
       snackBarTheme: _snackBarTheme(Brightness.dark),
       scrollbarTheme: ScrollbarThemeData(
         thickness: WidgetStateProperty.all(8),

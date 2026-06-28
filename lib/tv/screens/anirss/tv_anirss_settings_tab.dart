@@ -1,3 +1,4 @@
+import '../../../core/widgets/app_shimmer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -65,7 +66,7 @@ class _TvAniRssSettingsTabState extends ConsumerState<TvAniRssSettingsTab> {
             padding: EdgeInsets.all(m.spacingLg),
             child: const Center(
                 child:
-                    CircularProgressIndicator(color: TvDesignTokens.brand)),
+                    AppLoadingIndicator(size: 48, color: TvDesignTokens.brand)),
           ),
           error: (e, _) => Padding(
             padding: EdgeInsets.all(m.spacingMd),

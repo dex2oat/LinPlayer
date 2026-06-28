@@ -1,3 +1,4 @@
+import '../../../core/widgets/app_shimmer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -30,7 +31,7 @@ class _TvAniRssHomeTabState extends ConsumerState<TvAniRssHomeTab> {
     final asyncList = ref.watch(aniListProvider);
     return asyncList.when(
       loading: () => const Center(
-          child: CircularProgressIndicator(color: TvDesignTokens.brand)),
+          child: AppLoadingIndicator(size: 48, color: TvDesignTokens.brand)),
       error: (e, _) => _centerHint(m, '加载失败：$e'),
       data: (list) {
         if (list.isEmpty) {

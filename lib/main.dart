@@ -17,6 +17,7 @@ import 'core/services/font_service.dart';
 import 'core/services/portable_paths.dart';
 import 'core/theme/app_motion.dart';
 import 'core/utils/platform_utils.dart';
+import 'package:tdesign_flutter/tdesign_flutter.dart';
 import 'desktop/desktop_app.dart';
 import 'desktop/window/desktop_window_chrome.dart';
 import 'plugins/plugin_system.dart';
@@ -37,6 +38,9 @@ Future<void> main() async {
 
   // 统一三端动效基线（时长/曲线），见 core/theme/app_motion.dart
   AppMotion.applyGlobalDefaults();
+
+  // TDesign 多主题：让 TDTheme.of(context) 从 Material 扩展按明暗取色（见 app_theme.dart）。
+  TDTheme.needMultiTheme();
 
   // media_kit 仅在非 Android 平台初始化
   // Android 使用原生 MPV (libplayer.so) 通过平台通道调用

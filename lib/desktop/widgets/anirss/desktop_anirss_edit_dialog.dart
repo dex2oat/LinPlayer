@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/td_switch_tile.dart';
+
 import '../../../core/sources/anirss/anirss_api.dart';
 import '../../../core/sources/anirss/anirss_providers.dart';
 import '../../../core/sources/anirss/models/ani.dart';
@@ -569,7 +571,7 @@ class _EditDialogState extends State<_EditDialog>
   }
 
   Widget _switch(String label, String key, {bool def = false}) {
-    return SwitchListTile(
+    return TdSwitchTile(
       contentPadding: EdgeInsets.zero,
       dense: true,
       title: Text(label),

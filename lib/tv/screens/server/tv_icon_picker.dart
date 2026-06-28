@@ -1,3 +1,4 @@
+import '../../../core/widgets/app_shimmer.dart';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -174,7 +175,7 @@ class _TvIconPickerDialogState extends State<_TvIconPickerDialog> {
   Widget _buildBody(TvMetrics m) {
     if (_loading) {
       return const Center(
-        child: CircularProgressIndicator(color: TvDesignTokens.brand),
+        child: AppLoadingIndicator(size: 48, color: TvDesignTokens.brand),
       );
     }
     if (_error != null) {

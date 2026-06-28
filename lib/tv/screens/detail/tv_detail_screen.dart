@@ -1,3 +1,4 @@
+import '../../../core/widgets/app_shimmer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -72,7 +73,7 @@ class _TvDetailScreenState extends ConsumerState<TvDetailScreen> {
       body: itemAsync.when(
         data: (item) => _buildContent(item, m),
         loading: () => const Center(
-          child: CircularProgressIndicator(color: TvDesignTokens.brand),
+          child: AppLoadingIndicator(size: 48, color: TvDesignTokens.brand),
         ),
         error: (e, _) => _errorBody('加载详情失败：$e', m),
       ),
@@ -400,7 +401,7 @@ class _TvDetailScreenState extends ConsumerState<TvDetailScreen> {
       },
       loading: () => Padding(
         padding: EdgeInsets.all(m.spacingLg),
-        child: const CircularProgressIndicator(color: TvDesignTokens.brand),
+        child: const AppLoadingIndicator(size: 48, color: TvDesignTokens.brand),
       ),
       error: (_, __) => const SizedBox.shrink(),
     );
@@ -495,7 +496,7 @@ class _TvDetailScreenState extends ConsumerState<TvDetailScreen> {
       },
       loading: () => Padding(
         padding: EdgeInsets.all(m.spacingLg),
-        child: const CircularProgressIndicator(color: TvDesignTokens.brand),
+        child: const AppLoadingIndicator(size: 48, color: TvDesignTokens.brand),
       ),
       error: (_, __) => const SizedBox.shrink(),
     );

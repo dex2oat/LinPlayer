@@ -1,3 +1,4 @@
+import '../../../core/widgets/app_shimmer.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -1082,7 +1083,7 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
               _buildError(m)
             else
               const Center(
-                child: CircularProgressIndicator(color: TvDesignTokens.brand),
+                child: AppLoadingIndicator(size: 48, color: TvDesignTokens.brand),
               ),
             // 弹幕层（视频之上、触控/控制条之下；鼠标/遥控穿透）。
             if (_ready) _buildDanmakuOverlay(),

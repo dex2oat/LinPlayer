@@ -165,7 +165,7 @@ class _NetworkSettingsScreenState extends ConsumerState<NetworkSettingsScreen> {
             ),
             const SizedBox(height: 16),
             Card(
-              child: SwitchListTile(
+              child: TdSwitchTile(
                 value: _proxyMedia,
                 title: const Text('代理媒体流播放'),
                 subtitle: Text(

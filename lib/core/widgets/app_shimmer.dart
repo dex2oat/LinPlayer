@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:tdesign_flutter/tdesign_flutter.dart';
 import '../theme/app_motion.dart';
 
 /// 共享加载态组件（三端复用）。
@@ -46,10 +47,11 @@ class ShimmerBox extends StatelessWidget {
   }
 }
 
-/// 统一加载指示器：淡入的 [CircularProgressIndicator]。
+/// 统一加载指示器：淡入的 TDesign 环形 loading（[TDCircleIndicator]）。
 ///
 /// 直接替换裸 `CircularProgressIndicator`，避免 spinner“突然出现”，
-/// 并统一尺寸/线宽/配色。
+/// 并统一为 TDesign 观感。任意 px 尺寸（TV 大屏也够大）；配色默认取主题主色
+/// （不强推 TD 蓝，与 App 一致）。
 class AppLoadingIndicator extends StatelessWidget {
   final double size;
   final double strokeWidth;
@@ -65,13 +67,10 @@ class AppLoadingIndicator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: SizedBox(
-        width: size,
-        height: size,
-        child: CircularProgressIndicator(
-          strokeWidth: strokeWidth,
-          valueColor: color != null ? AlwaysStoppedAnimation(color!) : null,
-        ),
+      child: TDCircleIndicator(
+        size: size,
+        lineWidth: strokeWidth,
+        color: color ?? Theme.of(context).colorScheme.primary,
       ),
     ).appFadeIn(duration: AppMotion.fast);
   }

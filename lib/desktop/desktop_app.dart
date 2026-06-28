@@ -6,6 +6,7 @@ import 'package:macos_ui/macos_ui.dart' as macos;
 import '../core/providers/app_providers.dart';
 import '../core/services/font_service.dart';
 import '../core/theme/app_theme.dart';
+import '../core/theme/td_platform_theme.dart';
 import '../ui/widgets/common/app_update_gate.dart';
 import 'platform/desktop_ui_style.dart';
 import 'routes/desktop_router.dart';
@@ -390,6 +391,11 @@ ThemeData _desktopTheme(ThemeData base, [String? customFamily]) {
     appBarTheme: base.appBarTheme.copyWith(
       titleTextStyle: textTheme.titleLarge,
     ),
+    // 用 PC 尺寸档覆盖移动档的 TDesign 扩展，使 TD 组件在桌面按 PC 尺寸呈现。
+    extensions: [
+      tdThemeFor(AppFormFactor.desktop,
+          dark: base.brightness == Brightness.dark),
+    ],
   );
 }
 

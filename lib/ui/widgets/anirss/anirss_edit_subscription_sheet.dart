@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/widgets/td_switch_tile.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -207,7 +208,7 @@ class _EditBodyState extends State<_EditBody> {
               _text(_match, '包含关键字 / 正则（可空）'),
               _text(_exclude, '排除关键字（多个用逗号或换行分隔）',
                   maxLines: 2),
-              SwitchListTile(
+              TdSwitchTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('应用全局排除规则'),
                 value: _globalExclude,
@@ -215,7 +216,7 @@ class _EditBodyState extends State<_EditBody> {
               ),
               const SizedBox(height: 8),
               _section('下载'),
-              SwitchListTile(
+              TdSwitchTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('自定义下载位置'),
                 value: _customDownloadPath,
@@ -224,13 +225,13 @@ class _EditBodyState extends State<_EditBody> {
               if (_customDownloadPath) _text(_downloadPath, '下载路径'),
               const SizedBox(height: 8),
               _section('选项'),
-              SwitchListTile(
+              TdSwitchTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('启用订阅'),
                 value: _enable,
                 onChanged: (v) => setState(() => _enable = v),
               ),
-              SwitchListTile(
+              TdSwitchTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('OVA / 剧场版（不按季集匹配）'),
                 value: _ova,

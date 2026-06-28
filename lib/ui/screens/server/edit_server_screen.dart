@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/widgets/td_switch_tile.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/providers/app_providers.dart';
@@ -119,7 +120,7 @@ class _EditServerScreenState extends ConsumerState<EditServerScreen> {
                 ),
                 borderRadius: BorderRadius.circular(4),
               ),
-              child: SwitchListTile(
+              child: TdSwitchTile(
                 value: _allowInsecureTls,
                 onChanged: (v) => setState(() => _allowInsecureTls = v),
                 title: const Text('信任自签名证书（不安全）'),

@@ -429,7 +429,7 @@ class _WhisperSectionState extends ConsumerState<_WhisperSection> {
 
     return Column(
       children: [
-        SwitchListTile(
+        TdSwitchTile(
           title: const Text('启用 Whisper 本地转写'),
           subtitle: const Text('为无字幕片源边播边生成字幕并翻译（仅 PC，吃 CPU/显卡）'),
           value: enabled,

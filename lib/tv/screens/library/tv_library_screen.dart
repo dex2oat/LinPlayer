@@ -1,3 +1,4 @@
+import '../../../core/widgets/app_shimmer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -70,7 +71,7 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
             );
           },
           loading: () =>
-              const Center(child: CircularProgressIndicator(color: TvDesignTokens.brand)),
+              const Center(child: AppLoadingIndicator(size: 48, color: TvDesignTokens.brand)),
           error: (e, _) => _centerHint('加载媒体库失败：$e'),
         ),
       ),
@@ -401,7 +402,7 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
         );
       },
       loading: () =>
-          const Center(child: CircularProgressIndicator(color: TvDesignTokens.brand)),
+          const Center(child: AppLoadingIndicator(size: 48, color: TvDesignTokens.brand)),
       error: (e, _) => _centerHint('加载失败：$e'),
     );
   }

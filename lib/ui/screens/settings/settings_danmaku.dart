@@ -19,7 +19,7 @@ class DanmakuSettingsScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.only(bottom: 120),
         children: [
-          SwitchListTile(
+          TdSwitchTile(
             title: const Text('弹幕开关'),
             value: enabled,
             onChanged: (value) =>
@@ -74,7 +74,7 @@ class DanmakuSettingsScreen extends ConsumerWidget {
               },
             ),
           ),
-          SwitchListTile(
+          TdSwitchTile(
             title: const Text('描边文字'),
             subtitle: const Text('黑边彩字，关闭则用半透明底框'),
             value: stroke,
@@ -125,7 +125,7 @@ class DanmakuSettingsScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _showBlockwordManager(context, ref),
           ),
-          SwitchListTile(
+          TdSwitchTile(
             title: const Text('弹幕去重'),
             subtitle: const Text('合并相同文本弹幕，显示重复次数'),
             value: ref.watch(danmakuDedupProvider),
