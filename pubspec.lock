@@ -1108,10 +1108,9 @@ packages:
   tdesign_flutter:
     dependency: "direct main"
     description:
-      name: tdesign_flutter
-      sha256: "79c1ed3fc67836426a8a93e5e0dcd764befa1341eae13a904bcf9e7de996f05c"
-      url: "https://pub.dev"
-    source: hosted
+      path: "third_party/tdesign_flutter"
+      relative: true
+    source: path
     version: "0.2.7"
   tdesign_flutter_adaptation:
     dependency: transitive
