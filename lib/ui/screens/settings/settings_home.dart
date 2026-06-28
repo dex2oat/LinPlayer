@@ -286,20 +286,10 @@ class _SettingsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // TDesign 单元格：彩色图标盒沿用原样式（leftIconWidget），副标题用 description，
-    // 右侧箭头用 arrow。外层 Container 保留原「分隔圆角卡片」观感（间距/圆角）。
-    return Container(
+    return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardTheme.color,
-        borderRadius: BorderRadius.circular(AppTheme.borderRadiusLarge),
-      ),
-      child: TDCell(
-        arrow: true,
-        title: title,
-        description: subtitle,
-        leftIconWidget: Container(
+      child: ListTile(
+        leading: Container(
           width: 48,
           height: 48,
           decoration: BoxDecoration(
@@ -308,7 +298,10 @@ class _SettingsCard extends StatelessWidget {
           ),
           child: Icon(icon, color: const Color(0xFF5B8DEF)),
         ),
-        onClick: (_) => onTap(),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Text(subtitle),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onTap,
       ),
     );
   }
