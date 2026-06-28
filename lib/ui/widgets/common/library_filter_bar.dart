@@ -30,7 +30,18 @@ class LibraryFilterBar extends StatelessWidget {
 
     final theme = Theme.of(context);
     final rows = <Widget>[];
-    // 类型/标签/时间项不多，直接一行行铺开成可点选胶囊（单选，再点取消）。
+    // 顺序（自上而下）：时间 → 类型 → 标签 → 评分 → 工作室。
+    if (yearChips.isNotEmpty) {
+      rows.add(_chipRow(theme, '时间', [
+        for (final yc in yearChips)
+          _chip(theme, yc.label, v.yearLabel == yc.label, () {
+            final on = v.yearLabel == yc.label;
+            onChanged(
+                v.withYear(on ? null : yc.label, on ? null : yc.yearsCsv));
+          }),
+      ]));
+    }
+    // 类型/标签项不多，直接一行行铺开成可点选胶囊（单选，再点取消）。
     if (f.genres.isNotEmpty) {
       rows.add(_chipRow(theme, '类型', [
         for (final g in f.genres)
@@ -45,8 +56,9 @@ class LibraryFilterBar extends StatelessWidget {
               () => onChanged(v.withTag(v.tag == t ? null : t))),
       ]));
     }
+    // 评分区间始终可用（与分面无关）。
+    rows.add(_RatingRow(value: v, onChanged: onChanged));
     // 工作室取值可能很多，单独成一行回显当前值，点开居中可搜索弹窗选。
-    // 注意：过滤要 Id（Emby Studios=名 不生效），选中名后从 facet 映射取 Id 一起存。
     if (f.studios.isNotEmpty) {
       rows.add(_pickerRow(theme, '工作室', v.studio, () async {
         final picked =
@@ -57,18 +69,8 @@ class LibraryFilterBar extends StatelessWidget {
         }
       }));
     }
-    if (yearChips.isNotEmpty) {
-      rows.add(_chipRow(theme, '时间', [
-        for (final yc in yearChips)
-          _chip(theme, yc.label, v.yearLabel == yc.label, () {
-            final on = v.yearLabel == yc.label;
-            onChanged(
-                v.withYear(on ? null : yc.label, on ? null : yc.yearsCsv));
-          }),
-      ]));
-    }
-    // 评分区间始终可用（与分面无关），放在最后一行。
-    rows.add(_RatingRow(value: v, onChanged: onChanged));
+    // 最后一行：排序按钮（更新时间 / 标题排序 / 官方评级，各自升降序可切）。
+    rows.add(_SortRow(value: v, onChanged: onChanged));
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
@@ -289,6 +291,99 @@ class _RatingRowState extends State<_RatingRow> {
         ),
         onSubmitted: (_) => _apply(),
         onEditingComplete: _apply,
+      ),
+    );
+  }
+}
+
+/// 排序按钮行：更新时间 / 标题排序 / 官方评级。点选中项切升/降序，点未选中项切到该字段。
+const List<({String label, String key})> kLibrarySortOptions = [
+  (label: '更新时间', key: 'DateCreated'),
+  (label: '标题排序', key: 'SortName'),
+  (label: '官方评级', key: 'OfficialRating'),
+];
+
+class _SortRow extends StatelessWidget {
+  final LibraryFilterValue value;
+  final ValueChanged<LibraryFilterValue> onChanged;
+  const _SortRow({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            margin: const EdgeInsets.only(top: 4, right: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: primary.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text('排序',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: primary,
+                    fontWeight: FontWeight.w600)),
+          ),
+          Expanded(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final o in kLibrarySortOptions)
+                  _button(theme, o.label, o.key),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _button(ThemeData theme, String label, String key) {
+    final selected = value.sortBy == key;
+    final primary = theme.colorScheme.primary;
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: () => onChanged(value.toggledSort(key)),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected
+              ? primary.withValues(alpha: 0.14)
+              : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: selected ? primary : Colors.transparent,
+            width: 1.5,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: selected ? primary : theme.textTheme.bodyMedium?.color,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+                )),
+            if (selected) ...[
+              const SizedBox(width: 2),
+              Icon(
+                value.sortDescending
+                    ? Icons.arrow_downward
+                    : Icons.arrow_upward,
+                size: 15,
+                color: primary,
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

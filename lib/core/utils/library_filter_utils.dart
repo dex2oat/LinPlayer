@@ -74,6 +74,11 @@ class LibraryFilterValue {
   final double? ratingMin;
   final double? ratingMax;
 
+  /// 排序：[sortBy] 为 Emby SortBy 字段（更新时间=DateCreated、标题=SortName、
+  /// 官方评级=OfficialRating），[sortDescending] 决定升/降序。默认按标题升序。
+  final String sortBy;
+  final bool sortDescending;
+
   const LibraryFilterValue({
     this.genre,
     this.tag,
@@ -83,6 +88,8 @@ class LibraryFilterValue {
     this.yearsCsv,
     this.ratingMin,
     this.ratingMax,
+    this.sortBy = 'SortName',
+    this.sortDescending = false,
   });
 
   bool get isEmpty =>
@@ -109,6 +116,8 @@ class LibraryFilterValue {
     Object? yearsCsv = _keep,
     Object? ratingMin = _keep,
     Object? ratingMax = _keep,
+    Object? sortBy = _keep,
+    Object? sortDescending = _keep,
   }) =>
       LibraryFilterValue(
         genre: genre == _keep ? this.genre : genre as String?,
@@ -119,6 +128,9 @@ class LibraryFilterValue {
         yearsCsv: yearsCsv == _keep ? this.yearsCsv : yearsCsv as String?,
         ratingMin: ratingMin == _keep ? this.ratingMin : ratingMin as double?,
         ratingMax: ratingMax == _keep ? this.ratingMax : ratingMax as double?,
+        sortBy: sortBy == _keep ? this.sortBy : sortBy as String,
+        sortDescending:
+            sortDescending == _keep ? this.sortDescending : sortDescending as bool,
       );
 
   LibraryFilterValue withGenre(String? g) => _copy(genre: g);
@@ -129,6 +141,13 @@ class LibraryFilterValue {
       _copy(yearLabel: label, yearsCsv: csv);
   LibraryFilterValue withRating(double? min, double? max) =>
       _copy(ratingMin: min, ratingMax: max);
+
+  /// 点排序按钮：选中同一字段则升/降序互换；切到新字段则用其默认序
+  /// （标题升序、其余降序——最近更新/高评级在前更符合直觉）。
+  LibraryFilterValue toggledSort(String key) => sortBy == key
+      ? _copy(sortDescending: !sortDescending)
+      : _copy(sortBy: key, sortDescending: key != 'SortName');
+
   LibraryFilterValue cleared() => const LibraryFilterValue();
 
   @override
@@ -141,11 +160,13 @@ class LibraryFilterValue {
       other.yearLabel == yearLabel &&
       other.yearsCsv == yearsCsv &&
       other.ratingMin == ratingMin &&
-      other.ratingMax == ratingMax;
+      other.ratingMax == ratingMax &&
+      other.sortBy == sortBy &&
+      other.sortDescending == sortDescending;
 
   @override
   int get hashCode => Object.hash(genre, tag, studio, studioId, yearLabel,
-      yearsCsv, ratingMin, ratingMax);
+      yearsCsv, ratingMin, ratingMax, sortBy, sortDescending);
 }
 
 /// _copy 的"保持原值"哨兵——区分"不改"与"显式置 null"。

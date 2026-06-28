@@ -33,9 +33,7 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
   static const List<double> _densityFactors = [0.85, 1.0, 1.3];
   int _densityIndex = 1;
   String? _libraryId;
-  // 排序字段：名称 / 最近添加 / 评分 / 首播日期
-  String _sortBy = 'SortName';
-  // 类型/标签/时间 筛选（服务端过滤，来自 /Items/Filters）
+  // 筛选 + 排序（服务端过滤；排序字段/升降序也并入 _filter）
   LibraryFilterValue _filter = const LibraryFilterValue();
 
   @override
@@ -112,12 +110,11 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
     );
   }
 
-  /// 排序选项：名称 / 最近添加 / 评分 / 首播日期。
-  static const List<({String label, String value})> _sortOptions = [
-    (label: '名称', value: 'SortName'),
-    (label: '最近添加', value: 'DateCreated'),
-    (label: '评分', value: 'CommunityRating'),
-    (label: '首播日期', value: 'PremiereDate'),
+  /// 排序选项：更新时间 / 标题排序 / 官方评级。点选中项切升/降序，点未选中项切到该字段。
+  static const List<({String label, String key})> _sortOptions = [
+    (label: '更新时间', key: 'DateCreated'),
+    (label: '标题排序', key: 'SortName'),
+    (label: '官方评级', key: 'OfficialRating'),
   ];
 
   Widget _buildSortRow(TvMetrics m) {
@@ -127,8 +124,17 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
       children: [
         for (final opt in _sortOptions)
           TvFocusable(
-            onSelect: () => setState(() => _sortBy = opt.value),
-            child: _chip(m, label: opt.label, selected: _sortBy == opt.value),
+            onSelect: () => setState(() => _filter = _filter.toggledSort(opt.key)),
+            child: _chip(
+              m,
+              icon: _filter.sortBy == opt.key
+                  ? (_filter.sortDescending
+                      ? Icons.arrow_downward
+                      : Icons.arrow_upward)
+                  : null,
+              label: opt.label,
+              selected: _filter.sortBy == opt.key,
+            ),
           ),
       ],
     );
@@ -142,6 +148,17 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
       data: (f) {
         final years = buildYearChips(f.years, currentYear: DateTime.now().year);
         final rows = <Widget>[];
+        // 顺序（自上而下）：时间 → 类型 → 标签 → 工作室。
+        if (years.isNotEmpty) {
+          rows.add(_facetChipRow(m, '时间', [
+            for (final yc in years)
+              _facetChip(m, yc.label, _filter.yearLabel == yc.label, () {
+                final on = _filter.yearLabel == yc.label;
+                _filter = _filter.withYear(
+                    on ? null : yc.label, on ? null : yc.yearsCsv);
+              }),
+          ]));
+        }
         if (f.genres.isNotEmpty) {
           rows.add(_facetChipRow(m, '类型', [
             for (final g in f.genres)
@@ -161,22 +178,12 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
             final p = await _showFacetPicker(
                 m, '工作室', sortByPinyin(f.studios), _filter.studio);
             if (p != null) {
-              // Emby 的 Studios=名 不过滤，必须存 Id（StudioIds）。
+              // 工作室优先存 Id（StudioIds），服务端 GUID 严格时 API 层自动退回按名过滤。
               final name = p.isEmpty ? null : p;
               setState(() => _filter = _filter.withStudio(
                   name, name == null ? null : f.studioIds[name]));
             }
           }));
-        }
-        if (years.isNotEmpty) {
-          rows.add(_facetChipRow(m, '时间', [
-            for (final yc in years)
-              _facetChip(m, yc.label, _filter.yearLabel == yc.label, () {
-                final on = _filter.yearLabel == yc.label;
-                _filter = _filter.withYear(
-                    on ? null : yc.label, on ? null : yc.yearsCsv);
-              }),
-          ]));
         }
         if (rows.isEmpty) return const SizedBox.shrink();
         return Padding(
@@ -318,14 +325,14 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
   }
 
   Widget _buildGrid(TvMetrics m, String libraryId) {
-    // 名称按升序（A→Z），其余（最近添加/评分/首播日期）按降序（新→旧 / 高→低）。
     final itemsAsync = ref.watch(libraryItemsProvider((
       libraryId: libraryId,
-      sortBy: _sortBy,
-      sortOrder: _sortBy == 'SortName' ? 'Ascending' : 'Descending',
+      sortBy: _filter.sortBy,
+      sortOrder: _filter.sortDescending ? 'Descending' : 'Ascending',
       genres: _filter.genre,
       tags: _filter.tag,
       studioIds: _filter.studioId,
+      studios: _filter.studio,
       years: _filter.yearsCsv,
       ratingMin: _filter.ratingMin,
       ratingMax: _filter.ratingMax,

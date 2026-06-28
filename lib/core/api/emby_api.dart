@@ -538,6 +538,7 @@ class EmbyLibraryApi implements LibraryApi {
     String? genres,
     String? tags,
     String? studioIds,
+    String? studios,
     String? years,
     double? ratingMin,
     double? ratingMax,
@@ -556,15 +557,26 @@ class EmbyLibraryApi implements LibraryApi {
       params['SortBy'] = sortBy;
       params['SortOrder'] = sortOrder ?? 'Ascending';
     }
-    // 服务端过滤：Genres/Tags 用竖线分隔按名、Years 逗号分隔；工作室必须用 StudioIds
-    // （Emby 的 Studios=名 不生效）。评分下界走 MinCommunityRating。
+    // 服务端过滤：Genres/Tags 用竖线分隔按名、Years 逗号分隔。评分下界走 MinCommunityRating。
     if (genres != null && genres.isNotEmpty) params['Genres'] = genres;
     if (tags != null && tags.isNotEmpty) params['Tags'] = tags;
-    if (studioIds != null && studioIds.isNotEmpty) params['StudioIds'] = studioIds;
     if (years != null && years.isNotEmpty) params['Years'] = years;
     if (ratingMin != null) params['MinCommunityRating'] = ratingMin;
-    final resp =
-        await _client.get('/Users/$uid/Items', queryParameters: params);
+    // 工作室优先按 Id（StudioIds）过滤；部分 Emby 对 GUID 严格、格式不符直接 500
+    // （同 Filters2 的 "Unrecognized Guid format"），故捕获后退回按名（Studios）重试，
+    // 两者标准 Emby/Jellyfin 都支持，确保至少能过滤、不再整页报错。
+    final hasStudioId = studioIds != null && studioIds.isNotEmpty;
+    final hasStudioName = studios != null && studios.isNotEmpty;
+    if (hasStudioId) params['StudioIds'] = studioIds;
+    Response resp;
+    try {
+      resp = await _client.get('/Users/$uid/Items', queryParameters: params);
+    } on DioException {
+      if (!hasStudioId || !hasStudioName) rethrow;
+      params.remove('StudioIds');
+      params['Studios'] = studios;
+      resp = await _client.get('/Users/$uid/Items', queryParameters: params);
+    }
     var list = _parseItemList(resp.data);
     // Emby 无 MaxCommunityRating；评分区间在本页客户端兜底（无评分项视为不在区间）。
     // ponytail: 分页下夹逼后可能不足一页，个人库通常不大，先够用；要严谨需服务端支持上界。

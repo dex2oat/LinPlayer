@@ -26,11 +26,12 @@ class _LibraryDetailScreenState extends ConsumerState<LibraryDetailScreen> {
   Widget build(BuildContext context) {
     final itemsAsync = ref.watch(libraryItemsProvider((
       libraryId: widget.libraryId,
-      sortBy: 'SortName',
-      sortOrder: 'Ascending',
+      sortBy: _filter.sortBy,
+      sortOrder: _filter.sortDescending ? 'Descending' : 'Ascending',
       genres: _filter.genre,
       tags: _filter.tag,
       studioIds: _filter.studioId,
+      studios: _filter.studio,
       years: _filter.yearsCsv,
       ratingMin: _filter.ratingMin,
       ratingMax: _filter.ratingMax,

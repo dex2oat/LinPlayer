@@ -172,10 +172,10 @@ class MediaCounts {
 abstract class LibraryApi {
   /// 获取媒体库内容
   /// GET /Users/{UserId}/Items
-  /// [genres]/[tags] 为单个可选值（Emby 服务端 AND 过滤、按名）；[studioIds] 为工作室
-  /// **Id**（Emby 的 `Studios=名` 不过滤，必须用 `StudioIds`）；[years] 为逗号分隔年份。
-  /// [ratingMin]/[ratingMax] 为社区评分区间（min 走服务端 MinCommunityRating，max 客户端
-  /// 兜底，Emby 无 MaxCommunityRating）。均为空/null 表示该维度不过滤。
+  /// [genres]/[tags] 为单个可选值（Emby 服务端 AND 过滤、按名）；工作室优先用 [studioIds]
+  /// （Id），若服务端对 GUID 严格（实测部分 Emby 直接 500）则自动退回按名 [studios] 过滤；
+  /// [years] 为逗号分隔年份。[ratingMin]/[ratingMax] 为社区评分区间（min 走服务端
+  /// MinCommunityRating，max 客户端兜底，Emby 无 MaxCommunityRating）。均为空/null 表示该维度不过滤。
   Future<List<MediaItem>> getLibraryItems({
     required String libraryId,
     String? sortBy,
@@ -185,6 +185,7 @@ abstract class LibraryApi {
     String? genres,
     String? tags,
     String? studioIds,
+    String? studios,
     String? years,
     double? ratingMin,
     double? ratingMax,

@@ -36,11 +36,12 @@ class _DesktopLibraryDetailScreenState
     final librariesAsync = ref.watch(librariesProvider);
     final libraryItemsAsync = ref.watch(libraryItemsProvider((
       libraryId: widget.libraryId,
-      sortBy: 'SortName',
-      sortOrder: 'Ascending',
+      sortBy: _filter.sortBy,
+      sortOrder: _filter.sortDescending ? 'Descending' : 'Ascending',
       genres: _filter.genre,
       tags: _filter.tag,
       studioIds: _filter.studioId,
+      studios: _filter.studio,
       years: _filter.yearsCsv,
       ratingMin: _filter.ratingMin,
       ratingMax: _filter.ratingMax,
@@ -174,12 +175,16 @@ class _DesktopLibraryDetailScreenState
             loading: () => const SliverFillRemaining(
               child: AppLoadingIndicator(),
             ),
-            error: (_, __) => SliverFillRemaining(
+            error: (e, __) => SliverFillRemaining(
               child: Center(
-                child: Text(
-                  '加载媒体库失败',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.textTheme.bodySmall?.color,
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    '加载媒体库失败：$e',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.textTheme.bodySmall?.color,
+                    ),
                   ),
                 ),
               ),

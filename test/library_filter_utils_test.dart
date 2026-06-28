@@ -45,6 +45,29 @@ void main() {
     expect(v3.withRating(null, null).isEmpty, true);
   });
 
+  test('toggledSort: 同字段切升降序、换字段用默认序', () {
+    const v0 = LibraryFilterValue();
+    expect(v0.sortBy, 'SortName');
+    expect(v0.sortDescending, false);
+
+    // 点已选中的 SortName：升->降
+    final v1 = v0.toggledSort('SortName');
+    expect(v1.sortBy, 'SortName');
+    expect(v1.sortDescending, true);
+
+    // 换到新字段 DateCreated：默认降序（最近更新在前）
+    final v2 = v1.toggledSort('DateCreated');
+    expect(v2.sortBy, 'DateCreated');
+    expect(v2.sortDescending, true);
+    // 再点一次：降->升
+    expect(v2.toggledSort('DateCreated').sortDescending, false);
+
+    // 排序不计入筛选激活数；清除回默认序。
+    expect(v2.activeCount, 0);
+    expect(v2.cleared().sortBy, 'SortName');
+    expect(v2.cleared().sortDescending, false);
+  });
+
   test('sortByPinyin: 中文按拼音首字母、英文原样，混合升序', () {
     // 爱情(a) < 科幻(k) < 战争(z)；Drama(d) 落在 a 与 k 之间。
     final sorted = sortByPinyin(['科幻', '战争', '爱情', 'Drama']);
