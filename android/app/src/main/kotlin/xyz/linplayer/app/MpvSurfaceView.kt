@@ -1,4 +1,4 @@
-package com.example.linplayer_mobile
+package xyz.linplayer.app
 
 import android.content.Context
 import android.util.AttributeSet
@@ -52,7 +52,7 @@ class MpvSurfaceView @JvmOverloads constructor(
             attachToMpv()
             pendingAttach = false
         } else if (mpvInitialized && !isAttachedToMpv) {
-            // Surface was recreated by Flutter's virtual display — reattach to mpv
+            // Surface was recreated by Flutter's virtual display 鈥?reattach to mpv
             android.util.Log.i(TAG, "Surface recreated, re-attaching to mpv")
             attachToMpv()
         }
@@ -108,7 +108,7 @@ class MpvSurfaceView @JvmOverloads constructor(
                 android.util.Log.w(TAG, "Error detaching surface: ${e.message}")
             }
             isAttachedToMpv = false
-            mpvInitialized = false  // Full detach — no auto-reattach
+            mpvInitialized = false  // Full detach 鈥?no auto-reattach
             android.util.Log.i(TAG, "Surface detached successfully")
         } else {
             android.util.Log.d(TAG, "detachFromMpv called but was not attached")

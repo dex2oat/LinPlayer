@@ -1,4 +1,4 @@
-package com.example.linplayer_mobile
+package xyz.linplayer.app
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -104,7 +104,7 @@ class ExoPlayerPlugin(
                 val dolbyVisionFix = call.argument<Boolean>("dolbyVisionFix") ?: false
                 val preferredSubtitleLanguage = call.argument<String>("preferredSubtitleLanguage")
                 val enableAssSupport = call.argument<Boolean>("enableAssSupport") ?: false
-                // 统一 UA：部分 CDN 拒绝默认 UA 导致取流失败。
+                // 缁熶竴 UA锛氶儴鍒?CDN 鎷掔粷榛樿 UA 瀵艰嚧鍙栨祦澶辫触銆?
                 val userAgent = call.argument<String>("userAgent")
                 createPlayer(
                     videoUrl,
@@ -224,7 +224,7 @@ class ExoPlayerPlugin(
             }
             "setAspectRatio" -> {
                 val playerId = call.argument<String>("playerId") ?: ""
-                val ratio = call.argument<String>("ratio") ?: "自动"
+                val ratio = call.argument<String>("ratio") ?: "鑷姩"
                 getPlayer(playerId)?.setAspectRatio(ratio)
                 result.success(true)
             }
@@ -271,8 +271,8 @@ class ExoPlayerPlugin(
 
                 android.util.Log.i("ExoPlayerPlugin", "Creating ExoPlayer with Media3 extension renderers")
 
-                // 统一 UA：用自定义 HTTP DataSource 工厂覆盖 ExoPlayer 默认 UA，
-                // 部分 CDN 拒绝默认 UA 导致取流失败（403/空响应）。
+                // 缁熶竴 UA锛氱敤鑷畾涔?HTTP DataSource 宸ュ巶瑕嗙洊 ExoPlayer 榛樿 UA锛?
+                // 閮ㄥ垎 CDN 鎷掔粷榛樿 UA 瀵艰嚧鍙栨祦澶辫触锛?03/绌哄搷搴旓級銆?
                 val playerBuilder = ExoPlayer.Builder(context)
                     .setTrackSelector(trackSelector)
 
@@ -452,7 +452,7 @@ class ExoPlayerPlugin(
                         android.util.Log.i("ExoPlayerPlugin", "selectTrack: subtitle type=$subType")
                         emitEvent("subtitleType", subType)
                         
-                        // PGS/SUP 图形字幕需要额外确保 bitmap 字幕渲染开启
+                        // PGS/SUP 鍥惧舰瀛楀箷闇€瑕侀澶栫‘淇?bitmap 瀛楀箷娓叉煋寮€鍚?
                         if (subType == "bitmap") {
                             isBitmapSubtitle = true
                             emitEvent("subtitle", "")
@@ -638,11 +638,11 @@ class ExoPlayerPlugin(
         private var isBitmapSubtitle: Boolean = false
         private var toneMappingApplied: Boolean = false
 
-        /// 检测当前选中的视频轨是否为 HDR / 杜比视界；是则启用 Media3 的
-        /// effects 管线（DefaultVideoFrameProcessor）做 HDR→SDR tone-map。
-        /// 视频输出到 Flutter 的 SurfaceTexture（SDR 表面），若不 tone-map，
-        /// BT.2020 PQ 会直接灌到 SDR 表面 → 画面发灰/去饱和。
-        /// 仅在检测到 HDR 时启用，避免给普通 SDR 视频引入 GL 处理开销。
+        /// 妫€娴嬪綋鍓嶉€変腑鐨勮棰戣建鏄惁涓?HDR / 鏉滄瘮瑙嗙晫锛涙槸鍒欏惎鐢?Media3 鐨?
+        /// effects 绠＄嚎锛圖efaultVideoFrameProcessor锛夊仛 HDR鈫扴DR tone-map銆?
+        /// 瑙嗛杈撳嚭鍒?Flutter 鐨?SurfaceTexture锛圫DR 琛ㄩ潰锛夛紝鑻ヤ笉 tone-map锛?
+        /// BT.2020 PQ 浼氱洿鎺ョ亴鍒?SDR 琛ㄩ潰 鈫?鐢婚潰鍙戠伆/鍘婚ケ鍜屻€?
+        /// 浠呭湪妫€娴嬪埌 HDR 鏃跺惎鐢紝閬垮厤缁欐櫘閫?SDR 瑙嗛寮曞叆 GL 澶勭悊寮€閿€銆?
         @OptIn(UnstableApi::class)
         private fun maybeEnableHdrToneMapping(tracks: Tracks) {
             if (toneMappingApplied) return
@@ -667,8 +667,8 @@ class ExoPlayerPlugin(
             }
             if (!isHdr) return
             try {
-                // 空 effects 列表即可让帧经 DefaultVideoFrameProcessor，
-                // 在 SDR 输出表面上自动对 HDR 源做 tone-mapping。
+                // 绌?effects 鍒楄〃鍗冲彲璁╁抚缁?DefaultVideoFrameProcessor锛?
+                // 鍦?SDR 杈撳嚭琛ㄩ潰涓婅嚜鍔ㄥ HDR 婧愬仛 tone-mapping銆?
                 exoPlayer.setVideoEffects(emptyList())
                 toneMappingApplied = true
                 android.util.Log.i("ExoPlayerPlugin", "HDR/DV detected -> enabled SDR tone mapping")
@@ -730,9 +730,9 @@ class ExoPlayerPlugin(
                                 bmpInfo["top"] = cue.line
                             }
                             if (cue.size != Cue.DIMEN_UNSET) bmpInfo["width"] = cue.size
-                            // 关键：转发 bitmapHeight（高度占帧高的比例）。ass-media 渲染
-                            // ASS 时给每个事件一张精确定位的位图并带 left/top/width/height，
-                            // 之前漏掉 height 导致 Flutter 侧只能按宽度缩放、字号/位置失真。
+                            // 鍏抽敭锛氳浆鍙?bitmapHeight锛堥珮搴﹀崰甯ч珮鐨勬瘮渚嬶級銆俛ss-media 娓叉煋
+                            // ASS 鏃剁粰姣忎釜浜嬩欢涓€寮犵簿纭畾浣嶇殑浣嶅浘骞跺甫 left/top/width/height锛?
+                            // 涔嬪墠婕忔帀 height 瀵艰嚧 Flutter 渚у彧鑳芥寜瀹藉害缂╂斁銆佸瓧鍙?浣嶇疆澶辩湡銆?
                             if (cue.bitmapHeight != Cue.DIMEN_UNSET) bmpInfo["height"] = cue.bitmapHeight
                         } catch (_: Exception) {}
                         bitmapParts.add(bmpInfo)
@@ -753,8 +753,8 @@ class ExoPlayerPlugin(
                 isBitmapSubtitle = true
                 if (bitmapParts.isNotEmpty()) {
                     val images = bitmapParts.map { it["data"] as String }
-                    // positions 与 images 严格按下标对齐（旧实现用 mapNotNull 丢掉无位置项，
-                    // 导致两列表错位）。每项仅带已知的几何字段，缺失则交给 Flutter 兜底。
+                    // positions 涓?images 涓ユ牸鎸変笅鏍囧榻愶紙鏃у疄鐜扮敤 mapNotNull 涓㈡帀鏃犱綅缃」锛?
+                    // 瀵艰嚧涓ゅ垪琛ㄩ敊浣嶏級銆傛瘡椤逛粎甯﹀凡鐭ョ殑鍑犱綍瀛楁锛岀己澶卞垯浜ょ粰 Flutter 鍏滃簳銆?
                     val positions = bitmapParts.map { m ->
                         val p = HashMap<String, Any>()
                         (m["left"] as? Float)?.let { p["left"] = it }

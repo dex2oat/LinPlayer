@@ -1,4 +1,4 @@
-package com.example.linplayer_mobile
+package xyz.linplayer.app
 
 import android.content.Context
 import android.view.View
@@ -19,7 +19,7 @@ class MpvSurfaceViewFactory : PlatformViewFactory(StandardMessageCodec.INSTANCE)
     override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
         val creationParams = args as? Map<String, Any?> ?: emptyMap()
         // Use the surfaceViewId from creation params if provided, otherwise use Flutter's viewId
-        // Dart 传过来的 int 在 Android 端可能是 Long，用 Number 兼容
+        // Dart 浼犺繃鏉ョ殑 int 鍦?Android 绔彲鑳芥槸 Long锛岀敤 Number 鍏煎
         val surfaceViewId = (creationParams["surfaceViewId"] as? Number)?.toInt() ?: viewId
         android.util.Log.i(TAG, "Creating platform view: surfaceViewId=$surfaceViewId, flutterViewId=$viewId")
         return MpvSurfacePlatformView(context, surfaceViewId, creationParams)

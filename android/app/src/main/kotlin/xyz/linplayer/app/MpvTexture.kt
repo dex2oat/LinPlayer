@@ -1,4 +1,4 @@
-package com.example.linplayer_mobile
+package xyz.linplayer.app
 
 import android.util.Log
 import io.flutter.view.TextureRegistry

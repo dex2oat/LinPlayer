@@ -38,7 +38,7 @@ val excludedCiAbis = if (ciTargetAbis.isNotEmpty()) {
 }
 
 android {
-    namespace = "com.example.linplayer_mobile"
+    namespace = "xyz.linplayer.app"
     compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
@@ -52,7 +52,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.linplayer_mobile"
+        applicationId = "xyz.linplayer.app"
         minSdk = 24  // Vulkan 支持需要 API 24+ (Android 7.0+)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

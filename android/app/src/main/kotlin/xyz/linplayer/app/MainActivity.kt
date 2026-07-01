@@ -1,4 +1,4 @@
-package com.example.linplayer_mobile
+package xyz.linplayer.app
 
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
@@ -23,19 +23,19 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // 全覆盖崩溃取证：JVM 未捕获异常（任何线程，含 mpv 原生事件线程回调）在被系统
-        // 记录为 CRASH(JVM) 时，ApplicationExitInfo 往往拿不到回溯文本（实测为 null）。
-        // 这里装一个默认未捕获异常处理器，把完整 Java 堆栈直接追加进可导出的 App 日志，
-        // 再链回原处理器（不改变崩溃行为，只补取证）。
+        // 鍏ㄨ鐩栧穿婧冨彇璇侊細JVM 鏈崟鑾峰紓甯革紙浠讳綍绾跨▼锛屽惈 mpv 鍘熺敓浜嬩欢绾跨▼鍥炶皟锛夊湪琚郴缁?
+        // 璁板綍涓?CRASH(JVM) 鏃讹紝ApplicationExitInfo 寰€寰€鎷夸笉鍒板洖婧枃鏈紙瀹炴祴涓?null锛夈€?
+        // 杩欓噷瑁呬竴涓粯璁ゆ湭鎹曡幏寮傚父澶勭悊鍣紝鎶婂畬鏁?Java 鍫嗘爤鐩存帴杩藉姞杩涘彲瀵煎嚭鐨?App 鏃ュ織锛?
+        // 鍐嶉摼鍥炲師澶勭悊鍣紙涓嶆敼鍙樺穿婧冭涓猴紝鍙ˉ鍙栬瘉锛夈€?
         installCrashLogger()
 
-        // 注册 MpvSurfaceView 平台视图工厂（用于 gpu-next 渲染）
+        // 娉ㄥ唽 MpvSurfaceView 骞冲彴瑙嗗浘宸ュ巶锛堢敤浜?gpu-next 娓叉煋锛?
         flutterEngine.platformViewsController.registry.registerViewFactory(
             "com.linplayer/mpv_surface",
             MpvSurfaceViewFactory()
         )
 
-        // 注册 ExoPlayer 插件（v2 - 支持字幕轨道）
+        // 娉ㄥ唽 ExoPlayer 鎻掍欢锛坴2 - 鏀寔瀛楀箷杞ㄩ亾锛?
         exoPlayerPlugin = ExoPlayerPlugin(
             this,
             flutterEngine.dartExecutor.binaryMessenger,
@@ -44,7 +44,7 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.linplayer/exoplayer")
             .setMethodCallHandler(exoPlayerPlugin)
 
-        // 注册原生 MPV 插件（通过 libplayer.so 直接调用 libmpv）
+        // 娉ㄥ唽鍘熺敓 MPV 鎻掍欢锛堥€氳繃 libplayer.so 鐩存帴璋冪敤 libmpv锛?
         mpvPlayerPlugin = MpvPlayerPlugin(
             this,
             flutterEngine.dartExecutor.binaryMessenger,
@@ -53,8 +53,8 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.linplayer/mpv")
             .setMethodCallHandler(mpvPlayerPlugin)
 
-        // 注册 legacy libass JNI 桥接 MethodChannel
-        // 当前 ExoPlayer 已优先走 Media3/libass 原生字幕管线，这里仅保留兼容实现
+        // 娉ㄥ唽 legacy libass JNI 妗ユ帴 MethodChannel
+        // 褰撳墠 ExoPlayer 宸蹭紭鍏堣蛋 Media3/libass 鍘熺敓瀛楀箷绠＄嚎锛岃繖閲屼粎淇濈暀鍏煎瀹炵幇
         libassChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "com.linplayer/libass"
@@ -63,7 +63,7 @@ class MainActivity : FlutterActivity() {
             handleLibassCall(this, call, result)
         }
 
-        // 注册 mihomo 代理内核桥接（仅 TV 构建含内核，其余构建调用 start 会返回内核缺失）
+        // 娉ㄥ唽 mihomo 浠ｇ悊鍐呮牳妗ユ帴锛堜粎 TV 鏋勫缓鍚唴鏍革紝鍏朵綑鏋勫缓璋冪敤 start 浼氳繑鍥炲唴鏍哥己澶憋級
         proxyChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "com.linplayer/proxy"
@@ -72,10 +72,10 @@ class MainActivity : FlutterActivity() {
             ProxyBridge.handle(this, call, result)
         }
 
-        // 诊断：取上次进程退出原因（含原生崩溃 tombstone 回溯）。
-        // 原生 SIGSEGV（如 libmpv 闪退）在 Dart/Java 层抓不到、应用日志里只有"戛然而止"。
-        // 用 ActivityManager.getHistoricalProcessExitReasons（API 30+，免权限）能拿到
-        // 上次崩溃的原生回溯，启动后由 Dart 写入可导出的 App 日志，便于定位。
+        // 璇婃柇锛氬彇涓婃杩涚▼閫€鍑哄師鍥狅紙鍚師鐢熷穿婧?tombstone 鍥炴函锛夈€?
+        // 鍘熺敓 SIGSEGV锛堝 libmpv 闂€€锛夊湪 Dart/Java 灞傛姄涓嶅埌銆佸簲鐢ㄦ棩蹇楅噷鍙湁"鎴涚劧鑰屾"銆?
+        // 鐢?ActivityManager.getHistoricalProcessExitReasons锛圓PI 30+锛屽厤鏉冮檺锛夎兘鎷垮埌
+        // 涓婃宕╂簝鐨勫師鐢熷洖婧紝鍚姩鍚庣敱 Dart 鍐欏叆鍙鍑虹殑 App 鏃ュ織锛屼究浜庡畾浣嶃€?
         diagnosticsChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "com.linplayer/diagnostics"
@@ -87,7 +87,7 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        // 媒体：把播放器截图字节写入系统相册（之前 Dart 侧只拿到字节、从未落盘）。
+        // 濯掍綋锛氭妸鎾斁鍣ㄦ埅鍥惧瓧鑺傚啓鍏ョ郴缁熺浉鍐岋紙涔嬪墠 Dart 渚у彧鎷垮埌瀛楄妭銆佷粠鏈惤鐩橈級銆?
         mediaChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "com.linplayer/media"
@@ -110,9 +110,9 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * 把截图字节保存到系统「下载」目录下的 Linpic 子文件夹（Download/Linpic）。
-     * Android 10+（Q）走 MediaStore.Downloads 作用域存储，**无需任何存储权限**；
-     * Android 9 及以下写入公共 Download/Linpic（需 WRITE_EXTERNAL_STORAGE，清单已声明 maxSdk28）。
+     * 鎶婃埅鍥惧瓧鑺備繚瀛樺埌绯荤粺銆屼笅杞姐€嶇洰褰曚笅鐨?Linpic 瀛愭枃浠跺す锛圖ownload/Linpic锛夈€?
+     * Android 10+锛圦锛夎蛋 MediaStore.Downloads 浣滅敤鍩熷瓨鍌紝**鏃犻渶浠讳綍瀛樺偍鏉冮檺**锛?
+     * Android 9 鍙婁互涓嬪啓鍏ュ叕鍏?Download/Linpic锛堥渶 WRITE_EXTERNAL_STORAGE锛屾竻鍗曞凡澹版槑 maxSdk28锛夈€?
      */
     private fun saveImageToGallery(bytes: ByteArray, displayName: String): Boolean {
         val fileName = if (displayName.endsWith(".jpg", true)) displayName else "$displayName.jpg"
@@ -143,7 +143,7 @@ class MainActivity : FlutterActivity() {
                 val dir = java.io.File(downloadDir, "Linpic").apply { mkdirs() }
                 val file = java.io.File(dir, fileName)
                 file.outputStream().use { it.write(bytes) }
-                // 通知媒体扫描，让文件管理器/相册能立刻看到。
+                // 閫氱煡濯掍綋鎵弿锛岃鏂囦欢绠＄悊鍣?鐩稿唽鑳界珛鍒荤湅鍒般€?
                 android.media.MediaScannerConnection.scanFile(
                     this, arrayOf(file.absolutePath), arrayOf("image/jpeg"), null
                 )
@@ -155,24 +155,24 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /** 装默认未捕获异常处理器：把堆栈写入 App 日志后链回原处理器。 */
+    /** 瑁呴粯璁ゆ湭鎹曡幏寮傚父澶勭悊鍣細鎶婂爢鏍堝啓鍏?App 鏃ュ織鍚庨摼鍥炲師澶勭悊鍣ㄣ€?*/
     private fun installCrashLogger() {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
                 val sw = java.io.StringWriter()
                 throwable.printStackTrace(java.io.PrintWriter(sw))
-                val text = "线程 ${thread.name} 未捕获异常:\n$sw"
+                val text = "绾跨▼ ${thread.name} 鏈崟鑾峰紓甯?\n$sw"
                 android.util.Log.e("UncaughtCrash", text)
                 appendCrashToLog(text)
             } catch (_: Throwable) {
-                // 取证失败绝不影响崩溃链路本身。
+                // 鍙栬瘉澶辫触缁濅笉褰卞搷宕╂簝閾捐矾鏈韩銆?
             }
             previous?.uncaughtException(thread, throwable)
         }
     }
 
-    /** 把崩溃文本追加进 AppLogger 同名日志文件（…/files/linplayer_logs/linplayer-<date>.log）。 */
+    /** 鎶婂穿婧冩枃鏈拷鍔犺繘 AppLogger 鍚屽悕鏃ュ織鏂囦欢锛堚€?files/linplayer_logs/linplayer-<date>.log锛夈€?*/
     private fun appendCrashToLog(text: String) {
         try {
             val dir = java.io.File(getExternalFilesDir(null), "linplayer_logs")
@@ -187,7 +187,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /** 读取最近的进程退出记录；崩溃/ANR 附带原生回溯文本（tombstone/anr trace）。 */
+    /** 璇诲彇鏈€杩戠殑杩涚▼閫€鍑鸿褰曪紱宕╂簝/ANR 闄勫甫鍘熺敓鍥炴函鏂囨湰锛坱ombstone/anr trace锛夈€?*/
     private fun getRecentExitReasons(): List<Map<String, Any?>> {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return emptyList()
         return try {
@@ -231,8 +231,8 @@ class MainActivity : FlutterActivity() {
 }
 
 /**
- * libass JNI 桥接的 MethodChannel 处理
- * 对应 Dart 层 LibassBridge 的调用
+ * libass JNI 妗ユ帴鐨?MethodChannel 澶勭悊
+ * 瀵瑰簲 Dart 灞?LibassBridge 鐨勮皟鐢?
  */
 private fun handleLibassCall(context: Context, call: MethodCall, result: MethodChannel.Result) {
     when (call.method) {
@@ -325,7 +325,7 @@ object LibassBridge {
                 val libassFile = java.io.File(nativeDir, "libass.so")
                 val libmpvFile = java.io.File(nativeDir, "libmpv.so")
                 
-                // 检查库文件是否真实存在，不存在则提供空路径让JNI回退处理
+                // 妫€鏌ュ簱鏂囦欢鏄惁鐪熷疄瀛樺湪锛屼笉瀛樺湪鍒欐彁渚涚┖璺緞璁㎎NI鍥為€€澶勭悊
                 val libassPath = if (libassFile.exists()) libassFile.absolutePath else ""
                 val libmpvPath = if (libmpvFile.exists()) libmpvFile.absolutePath else ""
                 

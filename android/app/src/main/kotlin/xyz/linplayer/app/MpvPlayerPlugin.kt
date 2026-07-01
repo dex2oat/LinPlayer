@@ -1,4 +1,4 @@
-package com.example.linplayer_mobile
+package xyz.linplayer.app
 
 import android.content.Context
 import android.os.Handler
@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap
  * Follows the same MethodChannel + EventChannel pattern as ExoPlayerPlugin.
  * Each player instance wraps an MPVLib-managed mpv context. The video surface
  * from Flutter's TextureRegistry is attached to mpv via MPVLib.attachSurface(),
- * which sets the "wid" option — mpv creates its own EGL context on the surface
+ * which sets the "wid" option 鈥?mpv creates its own EGL context on the surface
  * and manages all rendering internally.
  */
 class MpvPlayerPlugin(
@@ -46,23 +46,23 @@ class MpvPlayerPlugin(
                 val dolbyVisionFix = call.argument<Boolean>("dolbyVisionFix") ?: false
                 val preferredSubtitleLanguage = call.argument<String>("preferredSubtitleLanguage")
                 val hardwareDecoding = call.argument<Boolean>("hardwareDecoding") ?: true
-                // Dart 传过来的 int 在 Android 端可能是 Long，用 Number 兼容
+                // Dart 浼犺繃鏉ョ殑 int 鍦?Android 绔彲鑳芥槸 Long锛岀敤 Number 鍏煎
                 val surfaceViewId = call.argument<Number>("surfaceViewId")?.toInt()
                 val useGpuNext = call.argument<Boolean>("useGpuNext") ?: false
-                // 用户自定义代理（仅 HTTP 代理可被 mpv 消费；为空则直连）
+                // 鐢ㄦ埛鑷畾涔変唬鐞嗭紙浠?HTTP 浠ｇ悊鍙 mpv 娑堣垂锛涗负绌哄垯鐩磋繛锛?
                 val httpProxy = call.argument<String>("httpProxy")
-                // 统一 UA：部分 CDN 拒绝 mpv 默认 UA 导致取流失败。
+                // 缁熶竴 UA锛氶儴鍒?CDN 鎷掔粷 mpv 榛樿 UA 瀵艰嚧鍙栨祦澶辫触銆?
                 val userAgent = call.argument<String>("userAgent")
-                // 逐流 HTTP 头（网盘/聚合源直链需 Cookie/Authorization/Referer）。
+                // 閫愭祦 HTTP 澶达紙缃戠洏/鑱氬悎婧愮洿閾鹃渶 Cookie/Authorization/Referer锛夈€?
                 val httpHeaders = call.argument<Map<String, String>>("httpHeaders")
-                // 网络播放磁盘缓存（按用户 300MB–8GB 设置；本地文件为空/0 表示不启用）
+                // 缃戠粶鎾斁纾佺洏缂撳瓨锛堟寜鐢ㄦ埛 300MB鈥?GB 璁剧疆锛涙湰鍦版枃浠朵负绌?0 琛ㄧず涓嶅惎鐢級
                 val videoCacheDir = call.argument<String>("videoCacheDir")
                 val diskCacheForwardBytes = call.argument<Number>("diskCacheForwardBytes")?.toLong() ?: 0L
                 val diskCacheBackBytes = call.argument<Number>("diskCacheBackBytes")?.toLong() ?: 0L
                 createPlayer(videoUrl, startPositionMs, hardwareDecoding, surfaceViewId, useGpuNext, httpProxy, userAgent, httpHeaders, videoCacheDir, diskCacheForwardBytes, diskCacheBackBytes, result)
             }
             "reloadPlayer" -> {
-                // L2 原地重载：外层重解析重签后的新 URL，复用同一 surface/texture，免黑屏。
+                // L2 鍘熷湴閲嶈浇锛氬灞傞噸瑙ｆ瀽閲嶇鍚庣殑鏂?URL锛屽鐢ㄥ悓涓€ surface/texture锛屽厤榛戝睆銆?
                 val playerId = call.argument<String>("playerId") ?: ""
                 val videoUrl = call.argument<String>("videoUrl") ?: ""
                 val startPositionMs = call.argument<Number>("startPositionMs")?.toInt() ?: 0
@@ -217,7 +217,7 @@ class MpvPlayerPlugin(
             }
             "setAspectRatio" -> {
                 val playerId = call.argument<String>("playerId") ?: ""
-                val ratio = call.argument<String>("ratio") ?: "自动"
+                val ratio = call.argument<String>("ratio") ?: "鑷姩"
                 getPlayer(playerId)?.setAspectRatio(ratio)
                 result.success(true)
             }
@@ -280,8 +280,8 @@ class MpvPlayerPlugin(
     ) {
         var surfaceTextureEntry: TextureRegistry.SurfaceTextureEntry? = null
         try {
-            // MPVLib is a singleton — only one mpv context can exist at a time.
-            // Dispose any existing player first.（放进 try：release 内部异常也不外泄）
+            // MPVLib is a singleton 鈥?only one mpv context can exist at a time.
+            // Dispose any existing player first.锛堟斁杩?try锛歳elease 鍐呴儴寮傚父涔熶笉澶栨硠锛?
             if (players.isNotEmpty()) {
                 android.util.Log.w(TAG, "createPlayer: disposing existing player(s)")
                 players.values.forEach { it.release() }
@@ -304,15 +304,15 @@ class MpvPlayerPlugin(
             val surface = Surface(surfaceTexture)
 
             // Create mpv context.
-            // 这一步会触发 MPVLib 的 init{}（首次访问时 System.loadLibrary("mpv"/"player")），
-            // 从而把 libmpv.so 及其依赖 libavcodec.so 真正加载进进程。
+            // 杩欎竴姝ヤ細瑙﹀彂 MPVLib 鐨?init{}锛堥娆¤闂椂 System.loadLibrary("mpv"/"player")锛夛紝
+            // 浠庤€屾妸 libmpv.so 鍙婂叾渚濊禆 libavcodec.so 鐪熸鍔犺浇杩涜繘绋嬨€?
             MPVLib.create(context)
 
-            // 注册 JavaVM 给 ffmpeg（av_jni_set_java_vm，mediacodec 硬解必需）。
-            // 必须放在 MPVLib.create() 之后：nativeRegisterJavaVm 通过 dlsym 取
-            // av_jni_set_java_vm 符号，而该符号来自 libavcodec.so——首帧播放时若在
-            // libmpv 加载前调用，dlsym 返回 null、原生侧调用空指针 → SIGSEGV 闪退。
-            // 崩溃会重启进程，使每次播放又成"首帧" → 表现为"每次播放必闪退"。
+            // 娉ㄥ唽 JavaVM 缁?ffmpeg锛坅v_jni_set_java_vm锛宮ediacodec 纭В蹇呴渶锛夈€?
+            // 蹇呴』鏀惧湪 MPVLib.create() 涔嬪悗锛歯ativeRegisterJavaVm 閫氳繃 dlsym 鍙?
+            // av_jni_set_java_vm 绗﹀彿锛岃€岃绗﹀彿鏉ヨ嚜 libavcodec.so鈥斺€旈甯ф挱鏀炬椂鑻ュ湪
+            // libmpv 鍔犺浇鍓嶈皟鐢紝dlsym 杩斿洖 null銆佸師鐢熶晶璋冪敤绌烘寚閽?鈫?SIGSEGV 闂€€銆?
+            // 宕╂簝浼氶噸鍚繘绋嬶紝浣挎瘡娆℃挱鏀惧張鎴?棣栧抚" 鈫?琛ㄧ幇涓?姣忔鎾斁蹇呴棯閫€"銆?
             MpvInitBridge.ensureJavaVmRegistered()
 
             // Set mpv options (must be before init)
@@ -351,7 +351,7 @@ class MpvPlayerPlugin(
                 mainHandler = mainHandler
             )
 
-            // Register observer（含日志订阅：把 mpv 原生 warn/error/fatal 落到 App 日志）
+            // Register observer锛堝惈鏃ュ織璁㈤槄锛氭妸 mpv 鍘熺敓 warn/error/fatal 钀藉埌 App 鏃ュ織锛?
             MPVLib.addObserver(instance)
             MPVLib.addLogObserver(instance)
 
@@ -373,10 +373,10 @@ class MpvPlayerPlugin(
 
             // Load the video
             if (videoUrl.isNotEmpty()) {
-                // 续播：在 loadfile 之前通过 start 属性指定起始位置，让 mpv 在加载时
-                // 直接定位到续播点。旧做法是 loadfile 之后立刻发 seek，但 loadfile 是
-                // 异步的，文件尚未解封装完成时 seek 会落空被丢弃，导致"时不时从头播放"。
-                // 用 start 选项可彻底消除该竞态，且不会出现先闪一下片头的问题。
+                // 缁挱锛氬湪 loadfile 涔嬪墠閫氳繃 start 灞炴€ф寚瀹氳捣濮嬩綅缃紝璁?mpv 鍦ㄥ姞杞芥椂
+                // 鐩存帴瀹氫綅鍒扮画鎾偣銆傛棫鍋氭硶鏄?loadfile 涔嬪悗绔嬪埢鍙?seek锛屼絾 loadfile 鏄?
+                // 寮傛鐨勶紝鏂囦欢灏氭湭瑙ｅ皝瑁呭畬鎴愭椂 seek 浼氳惤绌鸿涓㈠純锛屽鑷?鏃朵笉鏃朵粠澶存挱鏀?銆?
+                // 鐢?start 閫夐」鍙交搴曟秷闄よ绔炴€侊紝涓斾笉浼氬嚭鐜板厛闂竴涓嬬墖澶寸殑闂銆?
                 if (startPositionMs > 0) {
                     MPVLib.setPropertyString("start", "${startPositionMs / 1000.0}")
                     android.util.Log.i(TAG, "Resume playback from ${startPositionMs / 1000.0}s")
@@ -398,19 +398,19 @@ class MpvPlayerPlugin(
             android.util.Log.i(TAG, "Created player with SurfaceTexture (textureId=${surfaceTextureEntry.id()})")
             result.success(resultMap)
         } catch (e: Throwable) {
-            // 关键：必须捕获 Throwable 而非 Exception。
-            // MPVLib / MpvInitBridge 首次访问会触发 object 的 init{} 静态初始化里的
-            // System.loadLibrary()，.so 缺失/加载失败抛的是 UnsatisfiedLinkError /
-            // ExceptionInInitializerError —— 它们继承 Error 而非 Exception，会绕过
-            // catch(Exception) 直接在主线程未捕获 → 整个 App 崩溃(日志表现为 CRASH(JVM)、
-            // 既无"初始化完成"也无"初始化失败")。捕获 Throwable 后降级为可恢复的错误，
-            // 播放页按统一文案提示，并把真实原因抛回 Dart 落入日志。
+            // 鍏抽敭锛氬繀椤绘崟鑾?Throwable 鑰岄潪 Exception銆?
+            // MPVLib / MpvInitBridge 棣栨璁块棶浼氳Е鍙?object 鐨?init{} 闈欐€佸垵濮嬪寲閲岀殑
+            // System.loadLibrary()锛?so 缂哄け/鍔犺浇澶辫触鎶涚殑鏄?UnsatisfiedLinkError /
+            // ExceptionInInitializerError 鈥斺€?瀹冧滑缁ф壙 Error 鑰岄潪 Exception锛屼細缁曡繃
+            // catch(Exception) 鐩存帴鍦ㄤ富绾跨▼鏈崟鑾?鈫?鏁翠釜 App 宕╂簝(鏃ュ織琛ㄧ幇涓?CRASH(JVM)銆?
+            // 鏃㈡棤"鍒濆鍖栧畬鎴?涔熸棤"鍒濆鍖栧け璐?)銆傛崟鑾?Throwable 鍚庨檷绾т负鍙仮澶嶇殑閿欒锛?
+            // 鎾斁椤垫寜缁熶竴鏂囨鎻愮ず锛屽苟鎶婄湡瀹炲師鍥犳姏鍥?Dart 钀藉叆鏃ュ織銆?
             android.util.Log.e(TAG, "createPlayer failed", e)
             try { MPVLib.destroy() } catch (_: Throwable) {}
             try { surfaceTextureEntry?.release() } catch (_: Throwable) {}
             try { players.clear() } catch (_: Throwable) {}
-            // 带上原生库加载失败详情（若有），让 Dart 日志直接看到"哪个 .so、为何加载失败"，
-            // 而不是只看到下游的 "MPVLib.create 无实现"。
+            // 甯︿笂鍘熺敓搴撳姞杞藉け璐ヨ鎯咃紙鑻ユ湁锛夛紝璁?Dart 鏃ュ織鐩存帴鐪嬪埌"鍝釜 .so銆佷负浣曞姞杞藉け璐?锛?
+            // 鑰屼笉鏄彧鐪嬪埌涓嬫父鐨?"MPVLib.create 鏃犲疄鐜?銆?
             val libInfo = MPVLib.loadErrors.let { if (it.isEmpty()) "" else " nativeLibLoad=[$it]" }
             result.error(
                 "CREATE_ERROR",
@@ -421,7 +421,7 @@ class MpvPlayerPlugin(
     }
 
     /**
-     * 检测设备是否支持杜比视界显示
+     * 妫€娴嬭澶囨槸鍚︽敮鎸佹潨姣旇鐣屾樉绀?
      */
     private fun isDolbyVisionSupported(): Boolean {
         return try {
@@ -432,7 +432,7 @@ class MpvPlayerPlugin(
             // Display.HdrCapabilities.DOLBY_VISION = 2
             supportedHdrTypes.contains(2)
         } catch (e: Exception) {
-            android.util.Log.w(TAG, "检测杜比视界支持失败: ${e.message}")
+            android.util.Log.w(TAG, "妫€娴嬫潨姣旇鐣屾敮鎸佸け璐? ${e.message}")
             false
         }
     }
@@ -447,20 +447,20 @@ class MpvPlayerPlugin(
         diskCacheForwardBytes: Long = 0L,
         diskCacheBackBytes: Long = 0L,
     ) {
-        // 用户自定义 HTTP 代理（mpv 不支持 SOCKS，SOCKS 场景在 TV 上经 mihomo 本地口中转）
+        // 鐢ㄦ埛鑷畾涔?HTTP 浠ｇ悊锛坢pv 涓嶆敮鎸?SOCKS锛孲OCKS 鍦烘櫙鍦?TV 涓婄粡 mihomo 鏈湴鍙ｄ腑杞級
         if (!httpProxy.isNullOrEmpty()) {
             MPVLib.setOptionString("http-proxy", httpProxy)
             android.util.Log.i(TAG, "mpv http-proxy enabled")
         }
 
-        // 统一 UA：部分 CDN 拒绝 mpv/libavformat 默认 UA 导致取流失败（403/空响应）。
+        // 缁熶竴 UA锛氶儴鍒?CDN 鎷掔粷 mpv/libavformat 榛樿 UA 瀵艰嚧鍙栨祦澶辫触锛?03/绌哄搷搴旓級銆?
         if (!userAgent.isNullOrEmpty()) {
             MPVLib.setOptionString("user-agent", userAgent)
             android.util.Log.i(TAG, "mpv user-agent set: $userAgent")
         }
 
-        // 逐流 HTTP 头（网盘/聚合源直链需 Cookie/Authorization/Referer）。
-        // mpv 用 http-header-fields（逗号分隔的 "Key: Value"，不含 User-Agent）。
+        // 閫愭祦 HTTP 澶达紙缃戠洏/鑱氬悎婧愮洿閾鹃渶 Cookie/Authorization/Referer锛夈€?
+        // mpv 鐢?http-header-fields锛堥€楀彿鍒嗛殧鐨?"Key: Value"锛屼笉鍚?User-Agent锛夈€?
         if (!httpHeaders.isNullOrEmpty()) {
             val fields = httpHeaders.entries
                 .filter { it.key.lowercase() != "user-agent" }
@@ -493,58 +493,58 @@ class MpvPlayerPlugin(
         MPVLib.setOptionString("gpu-context", "android")
         MPVLib.setOptionString("opengl-es", "yes")
 
-        // HDR/杜比视界设置
+        // HDR/鏉滄瘮瑙嗙晫璁剧疆
         MPVLib.setOptionString("target-colorspace-hint", "yes")
 
         if (actuallyUsingGpuNext) {
-            // gpu-next 模式：libplacebo 处理 DV RPU 元数据，正确映射 IPT-PQ 色空间
+            // gpu-next 妯″紡锛歭ibplacebo 澶勭悊 DV RPU 鍏冩暟鎹紝姝ｇ‘鏄犲皠 IPT-PQ 鑹茬┖闂?
             MPVLib.setOptionString("dolby-vision-mode", "auto")
             MPVLib.setOptionString("tone-mapping", "spline")
-            // hdr-compute-peak 是逐帧 GPU 直方图（compute shader），在移动 GPU 上开销很大。
-            // 软解时 CPU 已被解码吃满，再叠加 per-frame 峰值检测会让画面明显卡顿，故软解路径
-            // 关闭、改用静态元数据；硬解有 GPU 余量时保留以求更准的动态色调映射。
+            // hdr-compute-peak 鏄€愬抚 GPU 鐩存柟鍥撅紙compute shader锛夛紝鍦ㄧЩ鍔?GPU 涓婂紑閿€寰堝ぇ銆?
+            // 杞В鏃?CPU 宸茶瑙ｇ爜鍚冩弧锛屽啀鍙犲姞 per-frame 宄板€兼娴嬩細璁╃敾闈㈡槑鏄惧崱椤匡紝鏁呰蒋瑙ｈ矾寰?
+            // 鍏抽棴銆佹敼鐢ㄩ潤鎬佸厓鏁版嵁锛涚‖瑙ｆ湁 GPU 浣欓噺鏃朵繚鐣欎互姹傛洿鍑嗙殑鍔ㄦ€佽壊璋冩槧灏勩€?
             MPVLib.setOptionString("hdr-compute-peak", if (hardwareDecoding) "yes" else "no")
             android.util.Log.i(TAG, "DV: gpu-next mode, libplacebo handles DV RPU (compute-peak=$hardwareDecoding)")
         } else {
-            // gpu 模式：不处理 DV RPU，用 video filter 去除 DV 标记避免绿屏
+            // gpu 妯″紡锛氫笉澶勭悊 DV RPU锛岀敤 video filter 鍘婚櫎 DV 鏍囪閬垮厤缁垮睆
             MPVLib.setOptionString("vf", "format:dolbyvision=no")
             android.util.Log.i(TAG, "DV: gpu mode, stripping DV metadata via vf filter")
         }
 
         // Hardware decoding
         if (hardwareDecoding) {
-            // 盲修闪退：只用 mediacodec-copy（拷贝模式），不再优先 direct mediacodec。
-            // direct mediacodec 把解码帧直接交给 Android Surface，需要 vo 与解码器共享
-            // surface 并走 AImageReader 句柄，在部分机型/编码上首帧握手失败会原生 SIGSEGV，
-            // 是"每次播放必闪退"的常见根源。copy 模式把帧拷回 CPU 再走 GL 上传，自包含、
-            // 不依赖 surface 句柄交接，稳定得多；性能损失对流式直连可忽略。解码失败时 mpv
-            // 仍会自动回退软解。
+            // 鐩蹭慨闂€€锛氬彧鐢?mediacodec-copy锛堟嫹璐濇ā寮忥級锛屼笉鍐嶄紭鍏?direct mediacodec銆?
+            // direct mediacodec 鎶婅В鐮佸抚鐩存帴浜ょ粰 Android Surface锛岄渶瑕?vo 涓庤В鐮佸櫒鍏变韩
+            // surface 骞惰蛋 AImageReader 鍙ユ焺锛屽湪閮ㄥ垎鏈哄瀷/缂栫爜涓婇甯ф彙鎵嬪け璐ヤ細鍘熺敓 SIGSEGV锛?
+            // 鏄?姣忔鎾斁蹇呴棯閫€"鐨勫父瑙佹牴婧愩€俢opy 妯″紡鎶婂抚鎷峰洖 CPU 鍐嶈蛋 GL 涓婁紶锛岃嚜鍖呭惈銆?
+            // 涓嶄緷璧?surface 鍙ユ焺浜ゆ帴锛岀ǔ瀹氬緱澶氾紱鎬ц兘鎹熷け瀵规祦寮忕洿杩炲彲蹇界暐銆傝В鐮佸け璐ユ椂 mpv
+            // 浠嶄細鑷姩鍥為€€杞В銆?
             MPVLib.setOptionString("hwdec", "mediacodec-copy")
             MPVLib.setOptionString("hwdec-codecs",
                 "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1")
         } else {
             MPVLib.setOptionString("hwdec", "no")
-            // 软解性能优化：4K HEVC/杜比视界纯软解极吃 CPU，默认配置下移动端会严重卡顿。
-            // ① 解码线程铺满 CPU 核心——mpv 的 auto 在部分机型只用了一半核，显式给满。
+            // 杞В鎬ц兘浼樺寲锛?K HEVC/鏉滄瘮瑙嗙晫绾蒋瑙ｆ瀬鍚?CPU锛岄粯璁ら厤缃笅绉诲姩绔細涓ラ噸鍗￠】銆?
+            // 鈶?瑙ｇ爜绾跨▼閾烘弧 CPU 鏍稿績鈥斺€攎pv 鐨?auto 鍦ㄩ儴鍒嗘満鍨嬪彧鐢ㄤ簡涓€鍗婃牳锛屾樉寮忕粰婊°€?
             val decodeThreads = Runtime.getRuntime().availableProcessors().coerceIn(2, 16)
             MPVLib.setOptionString("vd-lavc-threads", decodeThreads.toString())
-            // ② 跳过非参考帧的环路去块滤波 + 启用快速(非严格合规)解码路径：省下可观 CPU，
-            //    肉眼几乎无损，是软解能否跑到实时帧率的关键。
+            // 鈶?璺宠繃闈炲弬鑰冨抚鐨勭幆璺幓鍧楁护娉?+ 鍚敤蹇€?闈炰弗鏍煎悎瑙?瑙ｇ爜璺緞锛氱渷涓嬪彲瑙?CPU锛?
+            //    鑲夌溂鍑犱箮鏃犳崯锛屾槸杞В鑳藉惁璺戝埌瀹炴椂甯х巼鐨勫叧閿€?
             MPVLib.setOptionString("vd-lavc-skiploopfilter", "nonref")
             MPVLib.setOptionString("vd-lavc-fast", "yes")
-            // ③ 解码器直接渲染，省一次帧拷贝。
+            // 鈶?瑙ｇ爜鍣ㄧ洿鎺ユ覆鏌擄紝鐪佷竴娆″抚鎷疯礉銆?
             MPVLib.setOptionString("vd-lavc-dr", "yes")
-            // ④ 仍跟不上实时时允许在 VO 丢帧追平，避免音画不同步与持续卡顿堆积。
+            // 鈶?浠嶈窡涓嶄笂瀹炴椂鏃跺厑璁稿湪 VO 涓㈠抚杩藉钩锛岄伩鍏嶉煶鐢讳笉鍚屾涓庢寔缁崱椤垮爢绉€?
             MPVLib.setOptionString("framedrop", "vo")
             android.util.Log.i(TAG, "Software decode tuned: threads=$decodeThreads, skiploopfilter=nonref, fast=yes")
         }
 
-        // Audio output - 强制立体声降混，解决 TrueHD 等多声道音频无声问题
+        // Audio output - 寮哄埗绔嬩綋澹伴檷娣凤紝瑙ｅ喅 TrueHD 绛夊澹伴亾闊抽鏃犲０闂
         MPVLib.setOptionString("ao", "audiotrack,opensles")
         MPVLib.setOptionString("audio-channels", "stereo")
         MPVLib.setOptionString("ad-lavc-downmix", "yes")
-        // 简化音频过滤器 - 移除可能导致问题的 pan filter
-        // 让 ad-lavc-downmix 自动处理多声道到立体声的转换
+        // 绠€鍖栭煶棰戣繃婊ゅ櫒 - 绉婚櫎鍙兘瀵艰嚧闂鐨?pan filter
+        // 璁?ad-lavc-downmix 鑷姩澶勭悊澶氬０閬撳埌绔嬩綋澹扮殑杞崲
         // MPVLib.setOptionString("af", "lavfi=[pan=stereo|c0=c2+0.30*c0+0.30*c4|c1=c2+0.30*c1+0.30*c5]")
 
         // Config
@@ -559,21 +559,21 @@ class MpvPlayerPlugin(
 
         // Subtitles
         MPVLib.setOptionString("sub-visibility", "yes")
-        // 字幕走 OSD 覆盖层渲染，不混入视频帧。blend-subtitles=video 会让
-        // PGS/SUP 位图字幕每次刷新都重绘整帧，造成视频画面闪现。
+        // 瀛楀箷璧?OSD 瑕嗙洊灞傛覆鏌擄紝涓嶆贩鍏ヨ棰戝抚銆俠lend-subtitles=video 浼氳
+        // PGS/SUP 浣嶅浘瀛楀箷姣忔鍒锋柊閮介噸缁樻暣甯э紝閫犳垚瑙嗛鐢婚潰闂幇銆?
         MPVLib.setOptionString("blend-subtitles", "no")
         MPVLib.setOptionString("sub-auto", "all")
         MPVLib.setOptionString("sub-ass", "yes")
         MPVLib.setOptionString("sub-codepage", "utf-8")
-        // 关键：Android 上 libass 没有 fontconfig，必须显式给字体目录，否则内封/外挂的
-        // 文本字幕(SRT/ASS)因找不到任何字体而整段不渲染——表现为"选了字幕也不显示"。
-        // 指向系统字体目录，libass 可扫描到 NotoSansCJK / DroidSansFallback 等中文字体并
-        // 在请求的字体名缺失时回退到可用字体（位图 PGS/SUP 不依赖字体，本就不受影响）。
+        // 鍏抽敭锛欰ndroid 涓?libass 娌℃湁 fontconfig锛屽繀椤绘樉寮忕粰瀛椾綋鐩綍锛屽惁鍒欏唴灏?澶栨寕鐨?
+        // 鏂囨湰瀛楀箷(SRT/ASS)鍥犳壘涓嶅埌浠讳綍瀛椾綋鑰屾暣娈典笉娓叉煋鈥斺€旇〃鐜颁负"閫変簡瀛楀箷涔熶笉鏄剧ず"銆?
+        // 鎸囧悜绯荤粺瀛椾綋鐩綍锛宭ibass 鍙壂鎻忓埌 NotoSansCJK / DroidSansFallback 绛変腑鏂囧瓧浣撳苟
+        // 鍦ㄨ姹傜殑瀛椾綋鍚嶇己澶辨椂鍥為€€鍒板彲鐢ㄥ瓧浣擄紙浣嶅浘 PGS/SUP 涓嶄緷璧栧瓧浣擄紝鏈氨涓嶅彈褰卞搷锛夈€?
         MPVLib.setOptionString("sub-fonts-dir", "/system/fonts")
 
         // Cache
-        // 网络播放：按用户设置（300MB–8GB）把缓冲落到磁盘，避免大缓冲占满内存导致
-        // 低配机/TV OOM 闪退。videoCacheDir 为空（本地文件）时退回小额内存缓冲即可。
+        // 缃戠粶鎾斁锛氭寜鐢ㄦ埛璁剧疆锛?00MB鈥?GB锛夋妸缂撳啿钀藉埌纾佺洏锛岄伩鍏嶅ぇ缂撳啿鍗犳弧鍐呭瓨瀵艰嚧
+        // 浣庨厤鏈?TV OOM 闂€€銆倂ideoCacheDir 涓虹┖锛堟湰鍦版枃浠讹級鏃堕€€鍥炲皬棰濆唴瀛樼紦鍐插嵆鍙€?
         if (!videoCacheDir.isNullOrEmpty() && diskCacheForwardBytes > 0L) {
             File(videoCacheDir).mkdirs()
             MPVLib.setOptionString("cache", "yes")
@@ -582,14 +582,14 @@ class MpvPlayerPlugin(
             MPVLib.setOptionString("demuxer-max-bytes", diskCacheForwardBytes.toString())
             MPVLib.setOptionString("demuxer-max-back-bytes", diskCacheBackBytes.toString())
             MPVLib.setOptionString("demuxer-readahead-secs", "180")
-            // L1 预防层：网络掉线时 libavformat 透明重连(连当前 URL)，瞬断在缓冲区内消化。
-            // 只开 reconnect_on_network_error，不开 http_error——网盘 302 过期的 4xx/5xx 要
-            // 上抛交给 Dart 层 L2 重解析重签，不能让 ffmpeg 死磕过期链把错误吞掉。
+            // L1 棰勯槻灞傦細缃戠粶鎺夌嚎鏃?libavformat 閫忔槑閲嶈繛(杩炲綋鍓?URL)锛岀灛鏂湪缂撳啿鍖哄唴娑堝寲銆?
+            // 鍙紑 reconnect_on_network_error锛屼笉寮€ http_error鈥斺€旂綉鐩?302 杩囨湡鐨?4xx/5xx 瑕?
+            // 涓婃姏浜ょ粰 Dart 灞?L2 閲嶈В鏋愰噸绛撅紝涓嶈兘璁?ffmpeg 姝荤杩囨湡閾炬妸閿欒鍚炴帀銆?
             MPVLib.setOptionString("stream-lavf-o",
                 "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=30")
             android.util.Log.i(TAG, "mpv disk cache: dir=$videoCacheDir fwd=$diskCacheForwardBytes back=$diskCacheBackBytes")
         } else {
-            // 本地文件：无需大缓冲，沿用小额内存缓冲。
+            // 鏈湴鏂囦欢锛氭棤闇€澶х紦鍐诧紝娌跨敤灏忛鍐呭瓨缂撳啿銆?
             MPVLib.setOptionString("demuxer-max-bytes", "64MiB")
             MPVLib.setOptionString("demuxer-max-back-bytes", "32MiB")
         }
@@ -670,9 +670,9 @@ class MpvPlayerPlugin(
         }
 
         fun reload(videoUrl: String, startPositionMs: Int) {
-            // L2 原地重载：与 createPlayer 的加载逻辑一致——先用 start 属性定位再 loadfile
-            // replace，避免 loadfile 后立刻 seek 落空的竞态。网络/缓存/重连等 mpv 选项已在
-            // createPlayer 时写入同一 mpv 上下文，重载无需重设，直接复用。
+            // L2 鍘熷湴閲嶈浇锛氫笌 createPlayer 鐨勫姞杞介€昏緫涓€鑷粹€斺€斿厛鐢?start 灞炴€у畾浣嶅啀 loadfile
+            // replace锛岄伩鍏?loadfile 鍚庣珛鍒?seek 钀界┖鐨勭珵鎬併€傜綉缁?缂撳瓨/閲嶈繛绛?mpv 閫夐」宸插湪
+            // createPlayer 鏃跺啓鍏ュ悓涓€ mpv 涓婁笅鏂囷紝閲嶈浇鏃犻渶閲嶈锛岀洿鎺ュ鐢ㄣ€?
             if (startPositionMs > 0) {
                 MPVLib.setPropertyString("start", "${startPositionMs / 1000.0}")
             } else {
@@ -748,15 +748,15 @@ class MpvPlayerPlugin(
         // ---- Screenshot ----
 
         fun screenshot(): ByteArray? {
-            // 优先用 mpv 原生 screenshot-to-file 截「video」帧：按片源原始分辨率输出、
-            // 宽高比正确、完整无裁切。grabThumbnail(1920) 会按固定边长缩放，导致
-            // 截图比例失真 / 截不全（用户反馈的核心问题），仅作兜底。
+            // 浼樺厛鐢?mpv 鍘熺敓 screenshot-to-file 鎴€寁ideo銆嶅抚锛氭寜鐗囨簮鍘熷鍒嗚鲸鐜囪緭鍑恒€?
+            // 瀹介珮姣旀纭€佸畬鏁存棤瑁佸垏銆俫rabThumbnail(1920) 浼氭寜鍥哄畾杈归暱缂╂斁锛屽鑷?
+            // 鎴浘姣斾緥澶辩湡 / 鎴笉鍏紙鐢ㄦ埛鍙嶉鐨勬牳蹇冮棶棰橈級锛屼粎浣滃厹搴曘€?
             try {
                 val tmp = java.io.File(
                     context.cacheDir,
                     "mpv_shot_${System.currentTimeMillis()}.jpg"
                 )
-                // 第三参数 "video"：只截解码后的视频帧（不含 OSD/字幕），原始分辨率。
+                // 绗笁鍙傛暟 "video"锛氬彧鎴В鐮佸悗鐨勮棰戝抚锛堜笉鍚?OSD/瀛楀箷锛夛紝鍘熷鍒嗚鲸鐜囥€?
                 MPVLib.command(arrayOf("screenshot-to-file", tmp.absolutePath, "video"))
                 if (tmp.exists() && tmp.length() > 0L) {
                     val bytes = tmp.readBytes()
@@ -767,7 +767,7 @@ class MpvPlayerPlugin(
             } catch (e: Exception) {
                 android.util.Log.w(
                     "MpvScreenshot",
-                    "screenshot-to-file 失败，回退 grabThumbnail: ${e.message}"
+                    "screenshot-to-file 澶辫触锛屽洖閫€ grabThumbnail: ${e.message}"
                 )
             }
             val bitmap = MPVLib.grabThumbnail(1920) ?: return null
@@ -780,17 +780,17 @@ class MpvPlayerPlugin(
         // ---- Aspect ratio ----
 
         fun setAspectRatio(ratio: String) {
-            // 原生 mpv 在屏幕大小的 surface 里自行做缩放/letterbox，故比例由 mpv 属性控制：
-            // video-aspect-override 改显示宽高比；keepaspect=no 变形拉伸铺满；panscan=1 保持
-            // 比例放大裁切铺满。每个模式都把另外两项复位，避免上次模式残留。
+            // 鍘熺敓 mpv 鍦ㄥ睆骞曞ぇ灏忕殑 surface 閲岃嚜琛屽仛缂╂斁/letterbox锛屾晠姣斾緥鐢?mpv 灞炴€ф帶鍒讹細
+            // video-aspect-override 鏀规樉绀哄楂樻瘮锛沰eepaspect=no 鍙樺舰鎷変几閾烘弧锛沺anscan=1 淇濇寔
+            // 姣斾緥鏀惧ぇ瑁佸垏閾烘弧銆傛瘡涓ā寮忛兘鎶婂彟澶栦袱椤瑰浣嶏紝閬垮厤涓婃妯″紡娈嬬暀銆?
             when (ratio) {
                 "16:9" -> applyAspect(override = "16:9")
                 "4:3" -> applyAspect(override = "4:3")
                 "21:9" -> applyAspect(override = "21:9")
-                "原始" -> applyAspect(override = "0") // 用片源原始比例
-                "拉伸" -> applyAspect(override = "-1", keepAspect = false) // 变形铺满
-                "铺满" -> applyAspect(override = "-1", panscan = 1.0) // 裁切铺满
-                else -> applyAspect(override = "-1") // 自适应 / 自动
+                "鍘熷" -> applyAspect(override = "0") // 鐢ㄧ墖婧愬師濮嬫瘮渚?
+                "鎷変几" -> applyAspect(override = "-1", keepAspect = false) // 鍙樺舰閾烘弧
+                "閾烘弧" -> applyAspect(override = "-1", panscan = 1.0) // 瑁佸垏閾烘弧
+                else -> applyAspect(override = "-1") // 鑷€傚簲 / 鑷姩
             }
         }
 
@@ -844,7 +844,7 @@ class MpvPlayerPlugin(
         // ---- EventObserver implementation ----
 
         override fun eventProperty(property: String) {
-            // NONE format — just a notification that the property changed
+            // NONE format 鈥?just a notification that the property changed
             // We'll handle it when the typed value arrives
         }
 
@@ -861,10 +861,10 @@ class MpvPlayerPlugin(
             when (property) {
                 "pause" -> emitEvent("playing", !value)
                 "paused-for-cache" -> emitEvent("buffering", value)
-                // 不再用 eof-reached / idle-active 属性推断"播放完成"。
-                // seek（尤其向前 seek）或缓冲枯竭时 mpv 会把 eof-reached 瞬时置 true，
-                // 用它发 completed 会被上层当成"播放结束"→停止播放、画面消失、进度条停在
-                // seek 点，正是"重新 seek 续播后没画面"的根因。真正的结束只认 END_FILE 事件。
+                // 涓嶅啀鐢?eof-reached / idle-active 灞炴€ф帹鏂?鎾斁瀹屾垚"銆?
+                // seek锛堝挨鍏跺悜鍓?seek锛夋垨缂撳啿鏋鏃?mpv 浼氭妸 eof-reached 鐬椂缃?true锛?
+                // 鐢ㄥ畠鍙?completed 浼氳涓婂眰褰撴垚"鎾斁缁撴潫"鈫掑仠姝㈡挱鏀俱€佺敾闈㈡秷澶便€佽繘搴︽潯鍋滃湪
+                // seek 鐐癸紝姝ｆ槸"閲嶆柊 seek 缁挱鍚庢病鐢婚潰"鐨勬牴鍥犮€傜湡姝ｇ殑缁撴潫鍙 END_FILE 浜嬩欢銆?
             }
         }
 
@@ -888,12 +888,12 @@ class MpvPlayerPlugin(
 
         // ---- LogObserver implementation ----
 
-        // mpv 自身的日志（来自 libmpv，经 libplayer.so 回调）。原本无人订阅，导致
-        // 原生崩溃前的「最后遗言」全部丢失、用户导出的日志里什么都没有。这里订阅并把
-        // 警告/错误/致命级别转发到 Flutter 侧 AppLogger 落盘，便于崩溃后取证。
-        // mpv 级别：FATAL=10 ERROR=20 WARN=30 INFO=40 V=50 DEBUG=60 TRACE=70，数字越小越严重。
+        // mpv 鑷韩鐨勬棩蹇楋紙鏉ヨ嚜 libmpv锛岀粡 libplayer.so 鍥炶皟锛夈€傚師鏈棤浜鸿闃咃紝瀵艰嚧
+        // 鍘熺敓宕╂簝鍓嶇殑銆屾渶鍚庨仐瑷€銆嶅叏閮ㄤ涪澶便€佺敤鎴峰鍑虹殑鏃ュ織閲屼粈涔堥兘娌℃湁銆傝繖閲岃闃呭苟鎶?
+        // 璀﹀憡/閿欒/鑷村懡绾у埆杞彂鍒?Flutter 渚?AppLogger 钀界洏锛屼究浜庡穿婧冨悗鍙栬瘉銆?
+        // mpv 绾у埆锛欶ATAL=10 ERROR=20 WARN=30 INFO=40 V=50 DEBUG=60 TRACE=70锛屾暟瀛楄秺灏忚秺涓ラ噸銆?
         override fun logMessage(prefix: String, level: Int, text: String) {
-            if (level > MPVLib.MpvLogLevel.WARN) return // 仅转发 warn/error/fatal，避免刷屏
+            if (level > MPVLib.MpvLogLevel.WARN) return // 浠呰浆鍙?warn/error/fatal锛岄伩鍏嶅埛灞?
             val trimmed = text.trimEnd()
             if (trimmed.isEmpty()) return
             emitEvent(
@@ -909,11 +909,11 @@ class MpvPlayerPlugin(
                     android.util.Log.i(TAG, "START_FILE")
                 }
                 MPVLib.MpvEvent.FILE_LOADED -> {
-                    android.util.Log.i(TAG, "FILE_LOADED — emitting tracks and duration")
+                    android.util.Log.i(TAG, "FILE_LOADED 鈥?emitting tracks and duration")
                     emitEvent("buffering", false)
                     loadTracks()
 
-                    // 诊断日志：检查当前音频和字幕状态
+                    // 璇婃柇鏃ュ織锛氭鏌ュ綋鍓嶉煶棰戝拰瀛楀箷鐘舵€?
                     val audioCodec = MPVLib.getPropertyString("audio-codec")
                     val audioCodecName = MPVLib.getPropertyString("audio-codec-name")
                     val currentAid = MPVLib.getPropertyInt("aid")
@@ -928,7 +928,7 @@ class MpvPlayerPlugin(
                     android.util.Log.i(TAG, "  sub-visibility: $subVisibility")
                     android.util.Log.i(TAG, "  audio-channels: $audioChannels")
 
-                    // 检查解码器列表
+                    // 妫€鏌ヨВ鐮佸櫒鍒楄〃
                     val decoderList = MPVLib.getPropertyString("decoder-list")
                     if (decoderList != null) {
                         val hasTruehd = decoderList.contains("truehd", ignoreCase = true)
@@ -939,7 +939,7 @@ class MpvPlayerPlugin(
                         android.util.Log.i(TAG, "  decoder-list contains subrip: $hasSubrip")
                         android.util.Log.i(TAG, "  decoder-list contains srt: $hasSrt")
                         android.util.Log.i(TAG, "  decoder-list contains ass: $hasAss")
-                        // 打印前500字符的解码器列表
+                        // 鎵撳嵃鍓?00瀛楃鐨勮В鐮佸櫒鍒楄〃
                         android.util.Log.i(TAG, "  decoder-list (first 500): ${decoderList.take(500)}")
                     }
 
@@ -949,7 +949,7 @@ class MpvPlayerPlugin(
                     }
                 }
                 MPVLib.MpvEvent.END_FILE -> {
-                    android.util.Log.i(TAG, "END_FILE — emitting completed")
+                    android.util.Log.i(TAG, "END_FILE 鈥?emitting completed")
                     val reason = MPVLib.getPropertyInt("eof-reached")
                     emitEvent("completed", true)
                 }
@@ -1016,7 +1016,7 @@ class MpvPlayerPlugin(
             val w = MPVLib.getPropertyInt("video-params/w") ?: return
             val h = MPVLib.getPropertyInt("video-params/h") ?: return
             if (w > 0 && h > 0) {
-                // Don't update SurfaceTexture buffer — let mpv handle aspect ratio
+                // Don't update SurfaceTexture buffer 鈥?let mpv handle aspect ratio
                 // and letterboxing internally at the surface's native dimensions
                 emitEvent("videoSize", mapOf("width" to w, "height" to h))
             }

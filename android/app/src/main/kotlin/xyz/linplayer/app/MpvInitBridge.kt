@@ -1,4 +1,4 @@
-package com.example.linplayer_mobile
+package xyz.linplayer.app
 
 /**
  * Bridge to register the JavaVM with ffmpeg for mpv Android EGL support.
@@ -9,9 +9,9 @@ package com.example.linplayer_mobile
  */
 object MpvInitBridge {
     init {
-        // 必须捕获：loadLibrary 失败抛 UnsatisfiedLinkError(Error)，若不捕获会让本 object 的
-        // 首次访问抛 ExceptionInInitializerError，绕过调用处的 catch(Exception) 直接崩溃 App。
-        // 捕获后即便 mpv_init_jni 缺失也只是 JavaVM 未注册(硬解回退软解)，绝不致崩。
+        // 蹇呴』鎹曡幏锛歭oadLibrary 澶辫触鎶?UnsatisfiedLinkError(Error)锛岃嫢涓嶆崟鑾蜂細璁╂湰 object 鐨?
+        // 棣栨璁块棶鎶?ExceptionInInitializerError锛岀粫杩囪皟鐢ㄥ鐨?catch(Exception) 鐩存帴宕╂簝 App銆?
+        // 鎹曡幏鍚庡嵆渚?mpv_init_jni 缂哄け涔熷彧鏄?JavaVM 鏈敞鍐?纭В鍥為€€杞В)锛岀粷涓嶈嚧宕┿€?
         try {
             System.loadLibrary("mpv_init_jni")
         } catch (e: Throwable) {
@@ -29,7 +29,7 @@ object MpvInitBridge {
         try {
             nativeRegisterJavaVm()
         } catch (e: Throwable) {
-            // mediacodec 硬解所需的 JavaVM 注册失败：不致命，mpv 会自动回退软件解码。
+            // mediacodec 纭В鎵€闇€鐨?JavaVM 娉ㄥ唽澶辫触锛氫笉鑷村懡锛宮pv 浼氳嚜鍔ㄥ洖閫€杞欢瑙ｇ爜銆?
             android.util.Log.e("MpvInitBridge", "nativeRegisterJavaVm failed: ${e.message}")
         }
     }
