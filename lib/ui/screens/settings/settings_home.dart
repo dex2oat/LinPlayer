@@ -21,6 +21,12 @@ class SettingsScreen extends ConsumerWidget {
         ),
         children: [
           _SettingsCard(
+            icon: Icons.dns,
+            title: 'Emby 服务器',
+            subtitle: '添加、编辑、切换服务器',
+            onTap: () => _showServers(context),
+          ),
+          _SettingsCard(
             icon: Icons.palette,
             title: '通用设置',
             subtitle: '外观、语言、启动页等',
@@ -98,54 +104,36 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
-  void _showGeneralSettings(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const GeneralSettingsScreen()),
+  // 子页一律 push 到根导航器：原先落在 GoRouter 的 shell 分支导航器上，Android
+  // 系统返回手势经 GoRouter 分发时不识别分支内的命令式路由 → 整个 app 被弹回桌面
+  //（只有 AppBar 的 Navigator.pop 有效）。落到根导航器后返回手势/返回键都能正确
+  // 回退一级。子页内再 push（如播放器→交互）会自动落到根导航器，无需单独处理。
+  void _openSubPage(BuildContext context, Widget page) {
+    Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute(builder: (_) => page),
     );
   }
 
-  void _showPlayerSettings(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const PlayerSettingsScreen()),
-    );
-  }
+  void _showGeneralSettings(BuildContext context) =>
+      _openSubPage(context, const GeneralSettingsScreen());
 
-  void _showDanmakuSettings(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const DanmakuSettingsScreen()),
-    );
-  }
+  void _showPlayerSettings(BuildContext context) =>
+      _openSubPage(context, const PlayerSettingsScreen());
 
-  void _showNetworkSettings(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const NetworkSettingsScreen()),
-    );
-  }
+  void _showDanmakuSettings(BuildContext context) =>
+      _openSubPage(context, const DanmakuSettingsScreen());
 
-  void _showResumeSync(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const ResumeSyncScreen()),
-    );
-  }
+  void _showNetworkSettings(BuildContext context) =>
+      _openSubPage(context, const NetworkSettingsScreen());
 
-  void _showSyncSettings(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const SyncSettingsScreen()),
-    );
-  }
+  void _showResumeSync(BuildContext context) =>
+      _openSubPage(context, const ResumeSyncScreen());
 
-  void _showTranslationSettings(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const TranslationSettingsScreen()),
-    );
-  }
+  void _showSyncSettings(BuildContext context) =>
+      _openSubPage(context, const SyncSettingsScreen());
+
+  void _showTranslationSettings(BuildContext context) =>
+      _openSubPage(context, const TranslationSettingsScreen());
 
   void _showAbout(BuildContext context) {
     showDialog(
@@ -203,19 +191,14 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
-  void _showBackupRestore(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const BackupRestoreScreen()),
-    );
-  }
+  void _showBackupRestore(BuildContext context) =>
+      _openSubPage(context, const BackupRestoreScreen());
 
-  void _showPlugins(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const PluginManagementScreen()),
-    );
-  }
+  void _showPlugins(BuildContext context) =>
+      _openSubPage(context, const PluginManagementScreen());
+
+  void _showServers(BuildContext context) =>
+      _openSubPage(context, const ServerListScreen());
 
   Future<void> _pickUpdateChannel(BuildContext context, WidgetRef ref) async {
     final current = ref.read(updateChannelProvider);

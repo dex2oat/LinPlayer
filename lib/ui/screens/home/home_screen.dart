@@ -257,6 +257,53 @@ class _ServerSelectorOverlayState extends State<_ServerSelectorOverlay>
     });
   }
 
+  /// 列表底部「添加服务器」入口，跳转到添加服务器流程。
+  Widget _buildAddServerRow(BuildContext context, ThemeData theme) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          _dismiss();
+          context.push('/add');
+        },
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border(
+              top: BorderSide(
+                color: theme.dividerColor.withValues(alpha: 0.5),
+              ),
+            ),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF5B8DEF).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.add,
+                    size: 18, color: Color(0xFF5B8DEF)),
+              ),
+              const SizedBox(width: 10),
+              const Text(
+                '添加服务器',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF5B8DEF),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // 计算最大文本宽度：基于最长服务器名字
@@ -311,8 +358,11 @@ class _ServerSelectorOverlayState extends State<_ServerSelectorOverlay>
                           child: ListView.builder(
                             shrinkWrap: true,
                             padding: EdgeInsets.zero,
-                            itemCount: widget.servers.length,
+                            itemCount: widget.servers.length + 1,
                             itemBuilder: (context, index) {
+                              if (index == widget.servers.length) {
+                                return _buildAddServerRow(context, theme);
+                              }
                               final server = widget.servers[index];
                               final isCurrent = server.id == currentServerId;
                               return Material(
@@ -320,22 +370,21 @@ class _ServerSelectorOverlayState extends State<_ServerSelectorOverlay>
                                 child: InkWell(
                                   borderRadius: BorderRadius.circular(12),
                                   onTap: () {
-                                    _dismiss();
-                                    Future.delayed(
-                                        const Duration(milliseconds: 150), () {
+                                    // 同步切换：原先用 Future.delayed 延迟读取，
+                                    // 而 ref 属于随时可能被销毁的 overlay，回调触发
+                                    // 时 overlay 已拆除 → 读取失效、切换静默失败。
+                                    ref
+                                        .read(currentServerProvider.notifier)
+                                        .state = server;
+                                    if (server.authToken != null) {
                                       ref
-                                          .read(currentServerProvider.notifier)
-                                          .state = server;
-                                      if (server.authToken != null) {
-                                        ref
-                                            .read(authStateProvider.notifier)
-                                            .state = AuthState.authenticated;
-                                      }
-                                      ref.invalidate(librariesProvider);
-                                      ref.invalidate(resumeItemsProvider);
-                                      ref.invalidate(
-                                          randomRecommendationsProvider);
-                                    });
+                                          .read(authStateProvider.notifier)
+                                          .state = AuthState.authenticated;
+                                    }
+                                    ref.invalidate(librariesProvider);
+                                    ref.invalidate(resumeItemsProvider);
+                                    ref.invalidate(randomRecommendationsProvider);
+                                    _dismiss();
                                   },
                                   child: Container(
                                     padding: const EdgeInsets.symmetric(
