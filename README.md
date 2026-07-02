@@ -144,9 +144,7 @@ $env:LINPLAYER_SKIP_LIBMPV_UPGRADE = "1"; flutter build windows
 
 ## 项目活跃度
 
-![Alt](https://repobeats.axiom.co/api/embed/zzzwannasleep-LinPlayer.svg "Repobeats analytics image")
-
-<!-- Commit 热力图/贡献统计。首次使用需到 https://repobeats.axiom.co 用 GitHub 登录、粘贴仓库地址生成专属 embed 链接后替换上面这行。 -->
+![Alt](https://repobeats.axiom.co/api/embed/4858243f2148dfeaa4e82f119fa918f3ec581a11.svg "Repobeats analytics image")
 
 ## 加入频道
 
