@@ -105,6 +105,8 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  # 微软商店打包：dart run msix:create 生成 .msix（Store 代签）
+  msix: ^3.16.0
 
 flutter:
   uses-material-design: true
@@ -113,5 +115,28 @@ flutter:
     - assets/images/
     - assets/icons/
     - assets/mpv/shaders/
+
+# ============================================================
+# 微软商店 MSIX 打包配置
+# CI 里 `dart run msix:create --version <x.x.x.0>` 打包已构建的 Release 目录。
+# store: true → 产出未签名 .msix，由商店代签上传。
+#
+# ⚠️ 上架前把下面 3 个 TODO 换成 Partner Center 里保留应用后分配的值：
+#   合作伙伴中心 → 你的应用 → 产品管理 → 产品标识
+#     publisher            = 那里的 "发布者(Publisher)"，形如 CN=ABCD1234-...
+#     publisher_display_name = "发布者显示名称"
+#     identity_name        = "包/标识/名称"，形如 12345MyPublisher.0Player
+# 换之前 CI 也能打出 .msix（用占位值），只是不能真正上传到商店。
+# ============================================================
+msix_config:
+  display_name: 0Player
+  publisher_display_name: 0Player          # TODO: 换成 Partner Center 的发布者显示名称
+  identity_name: 0Player.App               # TODO: 换成 Partner Center 分配的包标识名称
+  publisher: CN=0Player                    # TODO: 换成 Partner Center 分配的 CN=... 串
+  msix_version: 1.0.0.0                     # 4 段，末段(revision)必须为 0；CI 用 --version 覆盖递增
+  logo_path: assets/images/app_icon_source.png
+  # 联网 + 局域网(连 LAN 上的 Emby / 手机扫码遥控内置服务)
+  capabilities: internetClient, privateNetworkClientServer
+  store: true
 
 

@@ -9,7 +9,7 @@
         android:maxSdkVersion="28" />
     
     <application
-        android:label="Linplayer"
+        android:label="0Player"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher">

@@ -690,6 +690,27 @@ jobs:
             Write-Host "::warning::内置 ffmpeg 失败（不阻断构建）: $_"
           }
 
+      - name: Build MSIX for Microsoft Store
+        shell: pwsh
+        run: |
+          # msix:create 默认不重新编译，直接打包上面已增强的 Release 目录
+          # （含完整版 libmpv-2.dll 与内置 ffmpeg.exe）。store/logo/capabilities 在 pubspec msix_config。
+          $base = ((Select-String -Path pubspec.yaml -Pattern '^version:').Line -replace 'version:\s*','' -replace '\+.*','').Trim()
+          $p = $base.Split('.')
+          # 商店要求版本 4 段且末段(revision)为 0；用 run_number 作 build 段，保证每次上传单调递增。
+          $msixVer = "$($p[0]).$($p[1]).${{ github.run_number }}.0"
+          Write-Host "MSIX version: $msixVer"
+          # --build-windows false：不重新编译，复用上面已增强的 Release 目录（默认会重编译，覆盖 libmpv/ffmpeg）。
+          dart run msix:create --build-windows false --version $msixVer --output-path "$PWD" --output-name "0Player-Store-v$base"
+          Get-ChildItem *.msix
+
+      - name: Upload MSIX artifact (供上传 Partner Center)
+        uses: actions/upload-artifact@v4
+        with:
+          name: msix-store
+          path: 0Player-Store-*.msix
+          retention-days: 30
+
       - name: Package Windows Build
         shell: pwsh
         run: |

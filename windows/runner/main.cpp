@@ -45,7 +45,7 @@ BOOL CALLBACK EnumProc(HWND hwnd, LPARAM lparam) {
   if (std::wstring(cls) != L"FLUTTER_RUNNER_WIN32_WINDOW") return TRUE;
   wchar_t title[256] = {0};
   ::GetWindowTextW(hwnd, title, 256);
-  if (std::wstring(title) != L"Linplayer") return TRUE;
+  if (std::wstring(title) != L"0Player") return TRUE;
   DWORD pid = 0;
   ::GetWindowThreadProcessId(hwnd, &pid);
   if (pid == 0 || pid == ctx->self_pid) return TRUE;
@@ -120,7 +120,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"Linplayer", origin, size)) {
+  if (!window.Create(L"0Player", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
