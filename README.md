@@ -1,5 +1,16 @@
 # LinPlayer
 
+<p align="center">
+  <a href="https://github.com/zzzwannasleep/LinPlayer/stargazers"><img src="https://img.shields.io/github/stars/zzzwannasleep/LinPlayer?style=flat&logo=github&label=Stars" alt="Stars"></a>
+  <a href="https://github.com/zzzwannasleep/LinPlayer/releases"><img src="https://img.shields.io/github/v/release/zzzwannasleep/LinPlayer?label=stable&color=blue" alt="Stable"></a>
+  <a href="https://github.com/zzzwannasleep/LinPlayer/releases"><img src="https://img.shields.io/github/v/release/zzzwannasleep/LinPlayer?include_prereleases&label=pre-release&color=orange" alt="Pre-release"></a>
+  <a href="https://github.com/zzzwannasleep/LinPlayer/releases"><img src="https://img.shields.io/github/downloads/zzzwannasleep/LinPlayer/total?label=downloads&color=green&logo=github" alt="Downloads"></a>
+  <a href="https://github.com/zzzwannasleep/LinPlayer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/zzzwannasleep/LinPlayer" alt="License"></a>
+  <img src="https://img.shields.io/badge/Flutter-3.24+-02569B?logo=flutter" alt="Flutter">
+  <a href="https://github.com/zzzwannasleep/LinPlayer/actions"><img src="https://img.shields.io/github/actions/workflow/status/zzzwannasleep/LinPlayer/build.yml?branch=main&label=build&logo=github" alt="Build"></a>
+  <a href="https://t.me/MikudesuChannels"><img src="https://img.shields.io/badge/Telegram-MikudesuChannels-26A5E4?logo=telegram&logoColor=white" alt="Telegram"></a>
+</p>
+
 **LinPlayer** 是一个跨平台的 Emby 第三方客户端，覆盖 **移动端（Android / iOS）**、**桌面端（Windows / Linux / macOS）** 与 **电视端（Android TV / tvOS）**，以 Flutter 作为唯一长期代码线演进。
 
 > 每个平台使用各自的原生 UI 语言（Material / fluent_ui / macos_ui / TV 自适应），但共享同一套核心逻辑。
@@ -124,3 +135,19 @@ $env:LINPLAYER_SKIP_LIBMPV_UPGRADE = "1"; flutter build windows
 - [dio](https://github.com/cfug/dio) / [extended_image](https://github.com/fluttercandies/extended_image) / [archive](https://pub.dev/packages/archive) 等 pub.dev 生态包
 
 > 数据来源 TMDB 与弹弹play 的内容版权归各自所有；本项目仅作聚合展示，不存储或分发受版权保护的媒体。
+
+## Star History
+
+<a href="https://star-history.com/#zzzwannasleep/LinPlayer&Date">
+  <img src="https://api.star-history.com/svg?repos=zzzwannasleep/LinPlayer&type=Date" alt="Star History Chart" width="600">
+</a>
+
+## 项目活跃度
+
+![Alt](https://repobeats.axiom.co/api/embed/zzzwannasleep-LinPlayer.svg "Repobeats analytics image")
+
+<!-- Commit 热力图/贡献统计。首次使用需到 https://repobeats.axiom.co 用 GitHub 登录、粘贴仓库地址生成专属 embed 链接后替换上面这行。 -->
+
+## 加入频道
+
+Telegram 频道 [**@MikudesuChannels**](https://t.me/MikudesuChannels) —— 版本发布、更新预告与讨论。
