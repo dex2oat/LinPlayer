@@ -77,6 +77,52 @@ Future<Map<String, dynamic>?> declRequest(
   return null;
 }
 
+num? _toNum(dynamic v) {
+  if (v is num) return v;
+  if (v is String) return num.tryParse(v.trim());
+  return null;
+}
+
+/// 声明式指标取值（仍是"配置"，非公式解析器）：
+///  - 字符串 → 模板插值（如 `"{limit}"`）；
+///  - 对象   → 取一个数再做变换：
+///      取数：`var`(变量名) / `subtract:[a,b]` / `add:[a,b]` / `path`(对最后响应体点路径)
+///      变换：`divide` / `multiply` / `round`(小数位) / `prefix` / `suffix`
+///
+/// [vars] 含 cfg./media./serverUrl 及各 step 捕获的变量；[lastBody] 是最后一次请求的响应体。
+String resolveValue(dynamic spec, Map<String, dynamic> vars, dynamic lastBody) {
+  if (spec is String) return renderTemplate(spec, vars);
+  if (spec is! Map) return '';
+
+  num? picked;
+  if (spec.containsKey('var')) {
+    picked = _toNum(vars['${spec['var']}']);
+  } else if (spec['subtract'] is List && (spec['subtract'] as List).length == 2) {
+    final a = _toNum(vars['${spec['subtract'][0]}']);
+    final b = _toNum(vars['${spec['subtract'][1]}']);
+    if (a != null && b != null) picked = a - b;
+  } else if (spec['add'] is List && (spec['add'] as List).length == 2) {
+    final a = _toNum(vars['${spec['add'][0]}']);
+    final b = _toNum(vars['${spec['add'][1]}']);
+    if (a != null && b != null) picked = a + b;
+  } else if (spec.containsKey('path')) {
+    picked = _toNum(jsonPath(lastBody, '${spec['path']}'));
+  }
+  if (picked == null) return '—';
+
+  num value = picked;
+  final divide = spec['divide'];
+  if (divide is num && divide != 0) value = value / divide;
+  final multiply = spec['multiply'];
+  if (multiply is num) value = value * multiply;
+
+  final round = spec['round'];
+  var s = round is int ? value.toStringAsFixed(round) : '$value';
+  if (spec['prefix'] != null) s = '${spec['prefix']}$s';
+  if (spec['suffix'] != null) s = '$s${spec['suffix']}';
+  return s;
+}
+
 /// 便捷：拿当前 Emby 服务器 url（需 emby.read；无则空串）。data 的 `{serverUrl}`
 /// 与 addon 的 `?serverUrl=` 都用它。
 Future<String> currentServerUrl(PluginContextBridge bridge) async {

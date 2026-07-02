@@ -145,22 +145,41 @@ class DataPluginRuntime implements PluginRuntimeBase {
       }
     }
 
-    final req = hs['request'];
-    if (req is! Map) return {'metrics': <dynamic>[]};
-    final res = await declRequest(bridge, req, vars);
-    final body = res?['body'];
+    // 多步：依次请求，把 capture 的响应字段存进 vars 供后续 step / 指标使用；
+    // 或单步 request（旧式）。最后一次响应体供指标 path 取值。
+    dynamic lastBody;
+    final steps = hs['steps'];
+    if (steps is List) {
+      for (final step in steps) {
+        if (step is! Map || step['request'] is! Map) continue;
+        final res = await declRequest(bridge, step['request'] as Map, vars);
+        lastBody = res?['body'];
+        final cap = step['capture'];
+        if (cap is Map) {
+          cap.forEach((k, path) => vars['$k'] = jsonPath(lastBody, '$path'));
+        }
+      }
+    } else if (hs['request'] is Map) {
+      final res = await declRequest(bridge, hs['request'] as Map, vars);
+      lastBody = res?['body'];
+    } else {
+      return {'metrics': <dynamic>[]};
+    }
 
     final metrics = <Map<String, dynamic>>[];
     final defs = hs['metrics'];
     if (defs is List) {
       for (final d in defs) {
         if (d is! Map) continue;
-        final val = jsonPath(body, '${d['path']}');
-        final suffix = d['suffix'] == null ? '' : '${d['suffix']}';
-        metrics.add({
-          'label': '${d['label']}',
-          'value': val == null ? '—' : '$val$suffix',
-        });
+        final String val;
+        if (d.containsKey('value')) {
+          val = resolveValue(d['value'], vars, lastBody);
+        } else {
+          final v = jsonPath(lastBody, '${d['path']}');
+          final suffix = d['suffix'] == null ? '' : '${d['suffix']}';
+          val = v == null ? '—' : '$v$suffix';
+        }
+        metrics.add({'label': '${d['label']}', 'value': val});
       }
     }
     return {'metrics': metrics};
