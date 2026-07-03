@@ -113,6 +113,7 @@ class VideoPlayerService extends ChangeNotifier {
   // 播放上报
   String? _currentItemId;
   String? _mediaSourceId;
+  String? _playSessionId;
   Function(PlaybackProgressInfo)? _onProgressReport;
   Function(PlaybackStartInfo)? _onStartReport;
   Function(PlaybackStopInfo)? _onStopReport;
@@ -675,11 +676,13 @@ class VideoPlayerService extends ChangeNotifier {
     Duration? streamUrlTtl,  // L0 按服务器形态调档的签名链 TTL；null 用默认 5 分钟
     Map<String, String>? httpHeaders,  // 网盘/聚合源直链逐流 headers；Emby/本地为 null
     String? userAgentOverride,  // 覆盖默认 UA（夸克等要求特定 UA）
+    String? playSessionId,  // Emby 播放会话 id：关联 Start/Progress/Stopped 落地续播进度
   }) async {
     // 屏幕已销毁：不要再创建/初始化适配器，否则会留下后台空跑的孤儿播放器。
     if (_disposed) return;
     _currentItemId = itemId;
     _mediaSourceId = mediaSourceId ?? itemId;
+    _playSessionId = playSessionId;
     _onStartReport = onStart;
     _onProgressReport = onProgress;
     _onStopReport = onStop;
@@ -1251,6 +1254,7 @@ class VideoPlayerService extends ChangeNotifier {
     _onStartReport!(PlaybackStartInfo(
       itemId: _currentItemId!,
       mediaSourceId: _mediaSourceId ?? _currentItemId!,
+      playSessionId: _playSessionId,
     ));
   }
 
@@ -1262,6 +1266,7 @@ class VideoPlayerService extends ChangeNotifier {
       positionTicks: (position.inMilliseconds * 10000).round(),
       isPaused: !isPlaying,
       volumeLevel: volume,
+      playSessionId: _playSessionId,
     ));
   }
 
@@ -1271,6 +1276,7 @@ class VideoPlayerService extends ChangeNotifier {
       itemId: _currentItemId!,
       mediaSourceId: _mediaSourceId ?? _currentItemId!,
       positionTicks: (position.inMilliseconds * 10000).round(),
+      playSessionId: _playSessionId,
     ));
   }
 

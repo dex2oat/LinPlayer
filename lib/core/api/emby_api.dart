@@ -919,6 +919,7 @@ class EmbyPlaybackApi implements PlaybackApi {
       'AudioStreamIndex': info.audioStreamIndex,
       'SubtitleStreamIndex': info.subtitleStreamIndex,
       'PlayMethod': info.playMethod ?? 'DirectStream',
+      if (info.playSessionId != null) 'PlaySessionId': info.playSessionId,
     });
   }
 
@@ -931,6 +932,7 @@ class EmbyPlaybackApi implements PlaybackApi {
       'IsPaused': info.isPaused,
       'IsMuted': info.isMuted,
       'VolumeLevel': (info.volumeLevel * 100).round(),
+      if (info.playSessionId != null) 'PlaySessionId': info.playSessionId,
     });
   }
 
@@ -940,6 +942,7 @@ class EmbyPlaybackApi implements PlaybackApi {
       'ItemId': info.itemId,
       'MediaSourceId': info.mediaSourceId,
       'PositionTicks': info.positionTicks,
+      if (info.playSessionId != null) 'PlaySessionId': info.playSessionId,
     });
   }
 }

@@ -830,12 +830,17 @@ class PlaybackStartInfo {
   final String? subtitleStreamIndex;
   final String? playMethod;
 
+  /// 本次播放会话 id：Emby 用它把 Start→Progress→Stopped 关联成同一会话并持久化
+  /// 续播进度。缺它时部分 Emby 不落地进度（看一半退出续播位置不更新）。
+  final String? playSessionId;
+
   PlaybackStartInfo({
     required this.itemId,
     required this.mediaSourceId,
     this.audioStreamIndex,
     this.subtitleStreamIndex,
     this.playMethod,
+    this.playSessionId,
   });
 }
 
@@ -846,6 +851,7 @@ class PlaybackProgressInfo {
   final bool isPaused;
   final bool isMuted;
   final double volumeLevel;
+  final String? playSessionId;
 
   PlaybackProgressInfo({
     required this.itemId,
@@ -854,6 +860,7 @@ class PlaybackProgressInfo {
     this.isPaused = false,
     this.isMuted = false,
     this.volumeLevel = 1.0,
+    this.playSessionId,
   });
 }
 
@@ -861,11 +868,13 @@ class PlaybackStopInfo {
   final String itemId;
   final String mediaSourceId;
   final int positionTicks;
+  final String? playSessionId;
 
   PlaybackStopInfo({
     required this.itemId,
     required this.mediaSourceId,
     required this.positionTicks,
+    this.playSessionId,
   });
 }
 

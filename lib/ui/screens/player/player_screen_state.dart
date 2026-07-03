@@ -456,6 +456,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       videoUrl: effectiveVideoUrl,
       itemId: widget.itemId,
       mediaSourceId: mediaSource?.id,
+      playSessionId: selection.primaryRequest.playSessionId,
       fallbackVideoUrl: effectiveFallbackUrl,
       startPosition: startPosition,
       coreType: coreType,

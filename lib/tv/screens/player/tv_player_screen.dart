@@ -376,6 +376,7 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
         fallbackVideoUrl: proxiedUrl != null ? onlineUrl : null,
         itemId: _itemId,
         mediaSourceId: selection.mediaSource?.id,
+        playSessionId: selection.primaryRequest.playSessionId,
         coreType: coreType,
         startPosition: startPosition,
         dolbyVisionFix: dolbyVisionFix,
