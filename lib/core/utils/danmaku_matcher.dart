@@ -83,23 +83,42 @@ class DanmakuMatcher {
     return all;
   }
 
+  /// 弹弹Play 官方推荐两条匹配路径都跑（doc.dandanplay.com 客户端调用流程）：
+  /// ① 文件识别 `/match`（按真实文件名/时长）②名字搜索 `/search/episodes`。
+  /// 两路**并行**跑再合并去重，命中率高于只搜名字。
   static Future<List<DanmakuMatchCandidate>> _matchOne(
     DanmakuSource source,
     String title,
     int? epNum,
     MediaItem item,
   ) async {
+    final results = await Future.wait([
+      _searchCandidates(source, title, epNum),
+      _matchByFileCandidates(source, title, item),
+    ]);
+    // 同源同一集去重，保留高分。
+    final byEp = <String, DanmakuMatchCandidate>{};
+    for (final c in results.expand((e) => e)) {
+      final key = '${c.sourceId}|${c.episodeId}';
+      final prev = byEp[key];
+      if (prev == null || c.score > prev.score) byEp[key] = c;
+    }
+    return byEp.values.toList();
+  }
+
+  /// ②名字搜索：searchEpisodes(anime, episode) 服务端按集号收窄，无果退纯剧名。
+  static Future<List<DanmakuMatchCandidate>> _searchCandidates(
+    DanmakuSource source,
+    String title,
+    int? epNum,
+  ) async {
     final out = <DanmakuMatchCandidate>[];
     try {
-      // 1) searchEpisodes(anime, episode) —— 服务端按集号收窄。
-      var result = await source.searchEpisodes(
-        anime: title,
-        episode: epNum?.toString(),
-      );
+      var result =
+          await source.searchEpisodes(anime: title, episode: epNum?.toString());
       if (result.animes.isEmpty && epNum != null) {
         result = await source.searchEpisodes(anime: title);
       }
-
       for (final anime in result.animes) {
         final titleScore = _titleScore(title, anime.animeTitle);
         final episodes = anime.episodes ?? const [];
@@ -116,29 +135,52 @@ class DanmakuMatcher {
           score: titleScore + (_episodeMatches(ep, epNum) ? 0.3 : 0.0),
         ));
       }
-
-      // 2) 回退：文件名 match（电影或上面无果时）。
-      if (out.isEmpty) {
-        final matchResult = await source.match(
-          fileName: item.name,
-          videoDuration: resolveDurationSeconds(item),
-        );
-        for (final m in matchResult.matches) {
-          out.add(DanmakuMatchCandidate(
-            sourceId: source.config.id,
-            sourceName: source.config.name,
-            animeId: m.animeId,
-            animeTitle: m.animeTitle,
-            episodeId: m.episodeId,
-            episodeTitle: m.episodeTitle,
-            score: _titleScore(title, m.animeTitle) + 0.2,
-          ));
-        }
-      }
-    } catch (_) {
-      // 单源失败忽略。
-    }
+    } catch (_) {}
     return out;
+  }
+
+  /// ①文件识别：用 Emby 的真实文件名（item.path 的 basename，退回条目名）+ 时长
+  /// 调 `/match`。isMatched（唯一命中）可信度高，给更高基分。
+  static Future<List<DanmakuMatchCandidate>> _matchByFileCandidates(
+    DanmakuSource source,
+    String title,
+    MediaItem item,
+  ) async {
+    final out = <DanmakuMatchCandidate>[];
+    try {
+      final matchResult = await source.match(
+        fileName: _resolveFileName(item),
+        videoDuration: resolveDurationSeconds(item),
+      );
+      final confident = matchResult.isMatched && matchResult.matches.length == 1;
+      for (final m in matchResult.matches) {
+        out.add(DanmakuMatchCandidate(
+          sourceId: source.config.id,
+          sourceName: source.config.name,
+          animeId: m.animeId,
+          animeTitle: m.animeTitle,
+          episodeId: m.episodeId,
+          episodeTitle: m.episodeTitle,
+          // 文件识别唯一命中最可信（弹弹Play 官方以文件识别为主路径）：给到高于
+          // 名字搜索满分(标题1.0+集号0.3=1.3)的分，确保排最前；否则按标题相似度+小加成。
+          score: confident ? 1.5 : _titleScore(title, m.animeTitle) + 0.2,
+        ));
+      }
+    } catch (_) {}
+    return out;
+  }
+
+  /// 真实文件名：优先 item.path 的 basename（Emby 存的是发布文件名，文件识别最准），
+  /// 无 path 退回条目名。
+  static String _resolveFileName(MediaItem item) {
+    final p = item.path;
+    if (p != null && p.isNotEmpty) {
+      final norm = p.replaceAll('\\', '/');
+      final i = norm.lastIndexOf('/');
+      final base = i >= 0 ? norm.substring(i + 1) : norm;
+      if (base.isNotEmpty) return base;
+    }
+    return item.name;
   }
 
   static DanmakuEpisode? _pickEpisode(List<DanmakuEpisode> episodes, int? epNum) {
