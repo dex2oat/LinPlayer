@@ -50,11 +50,12 @@ class SettingsScreen extends ConsumerWidget {
             subtitle: 'AI / 百度 / 腾讯翻译，Whisper 本地转写',
             onTap: () => _showTranslationSettings(context),
           ),
+          // 移动端只保留 CF 优选加速；通用代理(HTTP/SOCKS)仅 TV/PC 需要，移动端不再展示。
           _SettingsCard(
-            icon: Icons.vpn_key,
-            title: '代理设置',
-            subtitle: 'HTTP(S) / SOCKS 自定义代理',
-            onTap: () => _showNetworkSettings(context),
+            icon: Icons.bolt,
+            title: 'CF 优选加速',
+            subtitle: '实测最快 Cloudflare 边缘 IP 并本地反代提速',
+            onTap: () => _showCfProxy(context),
           ),
           _SettingsCard(
             icon: Icons.sync_alt,
@@ -123,8 +124,8 @@ class SettingsScreen extends ConsumerWidget {
   void _showDanmakuSettings(BuildContext context) =>
       _openSubPage(context, const DanmakuSettingsScreen());
 
-  void _showNetworkSettings(BuildContext context) =>
-      _openSubPage(context, const NetworkSettingsScreen());
+  void _showCfProxy(BuildContext context) =>
+      _openSubPage(context, const CfProxyPanelPage());
 
   void _showResumeSync(BuildContext context) =>
       _openSubPage(context, const ResumeSyncScreen());

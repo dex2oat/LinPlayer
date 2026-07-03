@@ -25,6 +25,10 @@ class _CfProxyPanelPageState extends ConsumerState<CfProxyPanelPage> {
   @override
   void initState() {
     super.initState();
+    // 移动/桌面端 main() 不会预初始化控制器（仅 TV 会），若未经 cf-proxy 插件启用流程
+    // 注入过 container，speedTestAndApply 里 _server() 取不到服务器 → 抛「找不到服务器」。
+    // 打开面板即幂等初始化，确保测速能读到服务器列表。
+    _ctrl.ensureInit(ProviderScope.containerOf(context, listen: false));
     _globalUrlCtrl = TextEditingController(text: _ctrl.globalTestUrl);
     _ctrl.addListener(_onCtrl);
   }

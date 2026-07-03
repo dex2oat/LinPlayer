@@ -25,9 +25,25 @@ class IconSelectScreen extends ConsumerStatefulWidget {
 }
 
 class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
-  static const String _defaultLibraryName = '默认网络图标库';
-  static const String _defaultLibraryUrl =
-      'https://juhe.greentea520.xyz/share/gfa1r7.json';
+  // 默认图标源（多源合并去重）。首个为聚合 JSON，其余为 gist 镜像。
+  static const List<({String name, String url})> _defaultSources = [
+    (name: '综合图标库', url: 'https://zizhu.291277.xyz/icons-all.json'),
+    (
+      name: '图标源 2',
+      url:
+          'https://v6.gh-proxy.org/https://gist.github.com/zzzwannasleep/fe6e84f43fcd64672ec71302f48a01ea'
+    ),
+    (
+      name: '图标源 3',
+      url:
+          'https://v6.gh-proxy.org/https://gist.github.com/zzzwannasleep/a52322ad8cf1dcf7462dd4a33816e0f4'
+    ),
+    (
+      name: '图标源 4',
+      url:
+          'https://v6.gh-proxy.org/https://gist.github.com/zzzwannasleep/1da6e9d12cd9285980c6aba05855dede'
+    ),
+  ];
   static const double _desktopBreakpoint = 960;
 
   final TextEditingController _searchController = TextEditingController();
@@ -36,12 +52,11 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
   bool _isLoading = true;
   String? _loadError;
   String _searchQuery = '';
-  String? _selectedLibraryId;
 
   @override
   void initState() {
     super.initState();
-    _loadDefaultLibrary();
+    _reloadAll();
   }
 
   @override
@@ -53,33 +68,26 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
   bool get _isDesktopLayout =>
       MediaQuery.sizeOf(context).width >= _desktopBreakpoint;
 
-  NetworkIconLibrary? get _selectedLibrary {
-    final targetId = _selectedLibraryId;
-    if (targetId == null) {
-      return _libraries.isEmpty ? null : _libraries.first;
-    }
-
-    for (final library in _libraries) {
-      if (library.id == targetId) {
-        return library;
+  /// 合并所有已加载源的图标（按 url 去重）——弱化「源」概念，突出图标本身。
+  List<IconItem> get _allIcons {
+    final seen = <String>{};
+    final merged = <IconItem>[];
+    for (final lib in _libraries) {
+      for (final icon in lib.icons) {
+        if (seen.add(icon.url)) merged.add(icon);
       }
     }
-
-    return _libraries.isEmpty ? null : _libraries.first;
+    return merged;
   }
 
   List<IconItem> get _filteredIcons {
-    final library = _selectedLibrary;
-    if (library == null) {
-      return const [];
-    }
-
+    final all = _allIcons;
     final query = _searchQuery.trim().toLowerCase();
     if (query.isEmpty) {
-      return library.icons;
+      return all;
     }
 
-    return library.icons.where((icon) {
+    return all.where((icon) {
       final sourceName = icon.sourceName?.toLowerCase() ?? '';
       return icon.name.toLowerCase().contains(query) ||
           sourceName.contains(query);
@@ -185,65 +193,67 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
       );
     }
 
-    if (_loadError != null && _libraries.isEmpty) {
+    if (_loadError != null && _allIcons.isEmpty) {
       return _NetworkEmptyState(
         message: _loadError!,
         buttonText: '重新加载',
-        onPressed: _loadDefaultLibrary,
+        onPressed: _reloadAll,
       );
     }
 
-    final library = _selectedLibrary;
     final icons = _filteredIcons;
 
     return Column(
       children: [
-        _NetworkLibraryHeader(
-          library: library,
-          libraries: _libraries,
-          isDesktopLayout: _isDesktopLayout,
-          onChanged: _selectLibrary,
-          onAddSource: _showAddSourceDialog,
-        ),
-        const SizedBox(height: 16),
-        TextField(
-          controller: _searchController,
-          onChanged: (value) {
-            setState(() {
-              _searchQuery = value;
-            });
-          },
-          decoration: InputDecoration(
-            hintText: '搜索图标',
-            prefixIcon: const Icon(Icons.search_rounded),
-            suffixIcon: _searchQuery.isEmpty
-                ? null
-                : IconButton(
-                    icon: const Icon(Icons.clear_rounded),
-                    onPressed: _clearSearch,
+        // 工具条（次要）：搜索占主，图标源/刷新收成小图标按钮——重点是图标本身。
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _searchController,
+                onChanged: (value) {
+                  setState(() {
+                    _searchQuery = value;
+                  });
+                },
+                decoration: InputDecoration(
+                  hintText: '搜索图标',
+                  isDense: true,
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: _searchQuery.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.clear_rounded),
+                          onPressed: _clearSearch,
+                        ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
                   ),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(16),
+                ),
+              ),
             ),
-          ),
+            IconButton(
+              tooltip: '添加图标源',
+              icon: const Icon(Icons.add_link_rounded),
+              onPressed: _showAddSourceDialog,
+            ),
+            IconButton(
+              tooltip: '刷新图标源',
+              icon: const Icon(Icons.refresh_rounded),
+              onPressed: _reloadAll,
+            ),
+          ],
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         Expanded(
-          child: library == null
+          child: icons.isEmpty
               ? _NetworkEmptyState(
-                  message: '还没有可用图标库',
-                  buttonText: '添加源',
-                  onPressed: _showAddSourceDialog,
+                  message: _searchQuery.isEmpty ? '暂无可用图标' : '没有找到匹配的图标',
+                  buttonText: _searchQuery.isEmpty ? '重新加载' : '清空搜索',
+                  onPressed:
+                      _searchQuery.isEmpty ? _reloadAll : _clearSearch,
                 )
-              : icons.isEmpty
-                  ? _NetworkEmptyState(
-                      message: _searchQuery.isEmpty ? '当前图标库没有可用图标' : '没有找到匹配的图标',
-                      buttonText: _searchQuery.isEmpty ? '重新加载' : '清空搜索',
-                      onPressed: _searchQuery.isEmpty
-                          ? () => _reloadLibrary(library)
-                          : _clearSearch,
-                    )
-                  : LayoutBuilder(
+              : LayoutBuilder(
                       builder: (context, constraints) {
                         final crossAxisCount =
                             _gridColumnCount(constraints.maxWidth);
@@ -275,7 +285,13 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
     );
   }
 
-  Future<void> _loadDefaultLibrary() async {
+  /// 并发拉取所有图标源（当前 [_libraries] 的地址，首次为默认 4 源），合并去重后展示。
+  /// 单个源失败不影响其它源；全部失败才报错。
+  Future<void> _reloadAll() async {
+    final sources = _libraries.isEmpty
+        ? _defaultSources.toList()
+        : [for (final l in _libraries) (name: l.name, url: l.url)];
+
     if (mounted) {
       setState(() {
         _isLoading = true;
@@ -283,35 +299,30 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
       });
     }
 
-    try {
-      final library = await _fetchLibrary(
-        name: _defaultLibraryName,
-        url: _defaultLibraryUrl,
-        id: _defaultLibraryUrl,
-      );
-
-      if (!mounted) {
-        return;
+    final results = await Future.wait(sources.map((s) async {
+      try {
+        return await _fetchLibrary(name: s.name, url: s.url, id: s.url);
+      } catch (_) {
+        return null;
       }
+    }));
 
-      setState(() {
-        _libraries
-          ..clear()
-          ..add(library);
-        _selectedLibraryId = library.id;
-        _isLoading = false;
-      });
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _libraries.clear();
-        _isLoading = false;
-        _loadError = '图标库加载失败';
-      });
+    if (!mounted) {
+      return;
     }
+
+    final loaded = results
+        .whereType<NetworkIconLibrary>()
+        .where((l) => l.icons.isNotEmpty)
+        .toList();
+
+    setState(() {
+      _libraries
+        ..clear()
+        ..addAll(loaded);
+      _isLoading = false;
+      _loadError = loaded.isEmpty ? '图标库加载失败' : null;
+    });
   }
 
   Future<NetworkIconLibrary> _fetchLibrary({
@@ -334,35 +345,6 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
       url: url,
       icons: icons,
     );
-  }
-
-  Future<void> _reloadLibrary(NetworkIconLibrary library) async {
-    try {
-      final updated = await _fetchLibrary(
-        name: library.name,
-        url: library.url,
-        id: library.id,
-      );
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        final index = _libraries.indexWhere((item) => item.id == library.id);
-        if (index != -1) {
-          _libraries[index] = updated;
-        }
-      });
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('图标库加载失败')),
-      );
-    }
   }
 
   Future<void> _showAddSourceDialog() async {
@@ -445,7 +427,6 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
                               } else {
                                 _libraries[existingIndex] = library;
                               }
-                              _selectedLibraryId = library.id;
                             });
 
                             if (dialogContext.mounted) {
@@ -593,14 +574,6 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
 
   void _selectIcon(IconItem icon) {
     _updateServerIcon(icon.url);
-  }
-
-  void _selectLibrary(String? libraryId) {
-    setState(() {
-      _selectedLibraryId = libraryId;
-      _searchQuery = '';
-      _searchController.clear();
-    });
   }
 
   void _clearSearch() {
@@ -759,120 +732,6 @@ class _CurrentIconPreview extends StatelessWidget {
               size: 36,
               color: theme.colorScheme.outline,
             ),
-    );
-  }
-}
-
-class _NetworkLibraryHeader extends StatelessWidget {
-  final NetworkIconLibrary? library;
-  final List<NetworkIconLibrary> libraries;
-  final bool isDesktopLayout;
-  final ValueChanged<String?> onChanged;
-  final VoidCallback onAddSource;
-
-  const _NetworkLibraryHeader({
-    required this.library,
-    required this.libraries,
-    required this.isDesktopLayout,
-    required this.onChanged,
-    required this.onAddSource,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: theme.dividerColor.withValues(alpha: 0.24),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (isDesktopLayout)
-            Row(
-              children: [
-                Expanded(child: _buildLibraryInfo(context)),
-                const SizedBox(width: 12),
-                SizedBox(
-                  width: 220,
-                  child: _buildLibraryDropdown(),
-                ),
-                const SizedBox(width: 12),
-                OutlinedButton.icon(
-                  onPressed: onAddSource,
-                  icon: const Icon(Icons.add_rounded),
-                  label: const Text('添加源'),
-                ),
-              ],
-            )
-          else ...[
-            _buildLibraryInfo(context),
-            const SizedBox(height: 12),
-            _buildLibraryDropdown(),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: onAddSource,
-                icon: const Icon(Icons.add_rounded),
-                label: const Text('添加源'),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLibraryInfo(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          library?.name ?? '网络图标库',
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          library?.url ?? '暂无源地址',
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLibraryDropdown() {
-    return DropdownButtonFormField<String>(
-      initialValue: library?.id,
-      items: libraries
-          .map(
-            (item) => DropdownMenuItem<String>(
-              value: item.id,
-              child: Text(
-                item.name,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          )
-          .toList(),
-      onChanged: onChanged,
-      decoration: const InputDecoration(
-        labelText: '当前源',
-      ),
     );
   }
 }

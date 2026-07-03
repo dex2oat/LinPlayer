@@ -1025,48 +1025,57 @@ class _CarouselItem extends ConsumerWidget {
             ),
           ),
 
-          // 底部信息
+          // 底部信息（整体居中）：艺术字 → 标题 → 评分，视觉重心统一。
+          // 艺术字(logo)作视觉主体居中，标题文字紧贴其下、落在评分之上。
           Positioned(
             bottom: 40,
             left: 16,
             right: 16,
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.center,
               mainAxisSize: MainAxisSize.min,
               children: [
-                _buildLogoOrTitle(item, api, fg, shadowColor),
+                _buildLogo(item, api),
+                _buildTitleText(
+                  item.name,
+                  fg,
+                  shadowColor,
+                  hasLogo: _carouselLogoUrl(api, item)?.isNotEmpty == true,
+                ),
                 const SizedBox(height: 8),
-                Row(
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 8,
+                  runSpacing: 4,
                   children: [
-                    if (item.communityRating != null) ...[
-                      const Icon(Icons.star, size: 18, color: Colors.amber),
-                      const SizedBox(width: 4),
-                      Text(
-                        item.communityRating!.toStringAsFixed(1),
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: fg,
-                          shadows: [
-                            Shadow(blurRadius: 4, color: shadowColor)
-                          ],
-                        ),
+                    if (item.communityRating != null)
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.star, size: 16, color: Colors.amber),
+                          const SizedBox(width: 4),
+                          Text(
+                            item.communityRating!.toStringAsFixed(1),
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: fg,
+                              shadows: [Shadow(blurRadius: 4, color: shadowColor)],
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 12),
-                    ],
-                    ...?item.genres?.take(5).map((genre) => Padding(
-                          padding: const EdgeInsets.only(right: 6),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: fg.withValues(alpha: 0.18),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              genre,
-                              style: TextStyle(fontSize: 12, color: fg),
-                            ),
+                    ...?item.genres?.take(4).map((genre) => Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: fg.withValues(alpha: 0.18),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            genre,
+                            style: TextStyle(fontSize: 11, color: fg),
                           ),
                         )),
                   ],
@@ -1079,32 +1088,36 @@ class _CarouselItem extends ConsumerWidget {
     );
   }
 
-  /// 优先使用 Logo 艺术字图片，无 Logo 时回退到文字标题
-  Widget _buildLogoOrTitle(
-      MediaItem item, ApiClientFactory api, Color fg, Color shadowColor) {
+  /// 艺术字（Logo）图片，居中显示；无 Logo 或加载失败时占位为空（标题文字仍在其下显示）。
+  Widget _buildLogo(MediaItem item, ApiClientFactory api) {
     final logoUrl = _carouselLogoUrl(api, item);
-
-    if (logoUrl != null && logoUrl.isNotEmpty) {
-      return Image.network(
+    if (logoUrl == null || logoUrl.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Image.network(
         logoUrl,
-        height: 48,
+        height: 54,
         fit: BoxFit.contain,
-        alignment: Alignment.centerLeft,
-        errorBuilder: (_, __, ___) => _buildTitleText(item.name, fg, shadowColor),
+        alignment: Alignment.center,
+        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
         frameBuilder: (_, child, frame, wasSynchronouslyLoaded) {
           if (wasSynchronouslyLoaded || frame != null) return child;
-          return _buildTitleText(item.name, fg, shadowColor);
+          return const SizedBox.shrink();
         },
-      );
-    }
-    return _buildTitleText(item.name, fg, shadowColor);
+      ),
+    );
   }
 
-  Widget _buildTitleText(String title, Color fg, Color shadowColor) {
+  /// 标题文字（居中）：有艺术字时作次级信息缩小，无艺术字时作主标题放大。
+  Widget _buildTitleText(String title, Color fg, Color shadowColor,
+      {required bool hasLogo}) {
     return Text(
       title,
+      textAlign: TextAlign.center,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
       style: TextStyle(
-        fontSize: 28,
+        fontSize: hasLogo ? 18 : 26,
         fontWeight: FontWeight.w800,
         color: fg,
         shadows: [

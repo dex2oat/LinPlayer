@@ -26,7 +26,7 @@ class DanmakuSettingsScreen extends ConsumerWidget {
                 ref.read(danmakuEnabledProvider.notifier).state = value,
           ),
           ListTile(
-            title: const Text('透明度'),
+            title: _sliderLabel('透明度', '${(opacity * 100).round()}%'),
             subtitle: Slider(
               value: opacity,
               onChanged: (value) =>
@@ -34,7 +34,7 @@ class DanmakuSettingsScreen extends ConsumerWidget {
             ),
           ),
           ListTile(
-            title: const Text('字号'),
+            title: _sliderLabel('字号', fontSize.toStringAsFixed(2)),
             subtitle: Slider(
               value: fontSize,
               onChanged: (value) =>
@@ -42,7 +42,7 @@ class DanmakuSettingsScreen extends ConsumerWidget {
             ),
           ),
           ListTile(
-            title: const Text('速度'),
+            title: _sliderLabel('速度', speed.toStringAsFixed(2)),
             subtitle: Slider(
               value: speed,
               onChanged: (value) =>
@@ -50,7 +50,7 @@ class DanmakuSettingsScreen extends ConsumerWidget {
             ),
           ),
           ListTile(
-            title: const Text('密度'),
+            title: _sliderLabel('密度', density.toStringAsFixed(2)),
             subtitle: Slider(
               value: density,
               onChanged: (value) =>
@@ -105,20 +105,20 @@ class DanmakuSettingsScreen extends ConsumerWidget {
               onTap: () => _importCustomFont(context, ref, isApp: false),
             );
           }),
-          ListTile(
-            title: const Text('弹幕延迟'),
-            subtitle: Builder(builder: (context) {
-              final delay = ref.watch(danmakuDelayProvider);
-              return Slider(
+          Builder(builder: (context) {
+            final delay = ref.watch(danmakuDelayProvider);
+            return ListTile(
+              title: _sliderLabel('弹幕延迟', '${delay.toStringAsFixed(1)}s'),
+              subtitle: Slider(
                 value: delay,
                 min: -5.0,
                 max: 5.0,
                 label: '${delay.toStringAsFixed(1)}s',
                 onChanged: (value) =>
                     ref.read(danmakuDelayProvider.notifier).state = value,
-              );
-            }),
-          ),
+              ),
+            );
+          }),
           ListTile(
             title: const Text('屏蔽词管理'),
             subtitle: Text('共 ${blockwords.length} 个屏蔽词'),
@@ -132,20 +132,20 @@ class DanmakuSettingsScreen extends ConsumerWidget {
             onChanged: (v) => ref.read(danmakuDedupProvider.notifier).state = v,
           ),
           if (ref.watch(danmakuDedupProvider))
-            ListTile(
-              title: const Text('去重时间窗口'),
-              subtitle: Builder(builder: (context) {
-                final window = ref.watch(danmakuDedupWindowProvider);
-                return Slider(
+            Builder(builder: (context) {
+              final window = ref.watch(danmakuDedupWindowProvider);
+              return ListTile(
+                title: _sliderLabel('去重时间窗口', '${window.toStringAsFixed(0)}秒'),
+                subtitle: Slider(
                   value: window,
                   min: 1.0,
                   max: 30.0,
                   label: '${window.toStringAsFixed(0)}秒',
                   onChanged: (v) =>
                       ref.read(danmakuDedupWindowProvider.notifier).state = v,
-                );
-              }),
-            ),
+                ),
+              );
+            }),
           const Divider(),
           ListTile(
             title: const Text('自定义弹幕源'),
@@ -155,6 +155,24 @@ class DanmakuSettingsScreen extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+
+  /// 滑动条标题：左侧名称 + 右侧当前数值，方便边滑边看具体值。
+  Widget _sliderLabel(String label, String value) {
+    return Row(
+      children: [
+        Text(label),
+        const Spacer(),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF5B8DEF),
+          ),
+        ),
+      ],
     );
   }
 
