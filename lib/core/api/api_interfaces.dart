@@ -430,6 +430,9 @@ class Episode {
   final UserData? userData;
   final String? overview;
   final List<String>? remoteTrailers;
+  // 视频质量（选集列表在时长旁展示）：分辨率标签 + 总码率(bps)，取自首个 MediaSource。
+  final String? videoResolution;
+  final int? videoBitRate;
 
   Episode({
     required this.id,
@@ -449,7 +452,16 @@ class Episode {
     this.userData,
     this.overview,
     this.remoteTrailers,
+    this.videoResolution,
+    this.videoBitRate,
   });
+
+  /// 码率友好文案（Mbps），无数据返回 null。
+  String? get formattedBitRate {
+    final b = videoBitRate;
+    if (b == null || b <= 0) return null;
+    return '${(b / 1000000).toStringAsFixed(1)} Mbps';
+  }
 
   String? get formattedRuntime {
     if (runTimeTicks == null) return null;

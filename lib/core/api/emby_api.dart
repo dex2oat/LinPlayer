@@ -754,7 +754,7 @@ class EmbyMediaApi implements MediaApi {
     final params = <String, dynamic>{
       'UserId': uid,
       'Fields':
-          'Overview,RunTimeTicks,ImageTags,ParentThumbItemId,ParentThumbImageTag,ParentPrimaryImageItemId,ParentPrimaryImageTag,SeriesThumbImageTag,SeriesPrimaryImageTag,CanDownload,SupportsSync',
+          'Overview,RunTimeTicks,ImageTags,ParentThumbItemId,ParentThumbImageTag,ParentPrimaryImageItemId,ParentPrimaryImageTag,SeriesThumbImageTag,SeriesPrimaryImageTag,CanDownload,SupportsSync,MediaSources',
     };
     if (seasonId != null) params['SeasonId'] = seasonId;
     final resp =
@@ -1323,6 +1323,17 @@ Season _parseSeason(Map<String, dynamic> d, String seriesId) {
 
 Episode _parseEpisode(Map<String, dynamic> d) {
   final ud = d['UserData'] as Map<String, dynamic>?;
+  // 首个 MediaSource：取视频流分辨率 + 源总码率（缺失回退视频流码率），供选集列表展示。
+  String? videoResolution;
+  int? videoBitRate;
+  final sources = d['MediaSources'] as List<dynamic>?;
+  if (sources != null && sources.isNotEmpty) {
+    final source = _parseMediaSource(sources.first as Map<String, dynamic>);
+    videoResolution = source.primaryVideoStream?.resolution;
+    if (videoResolution != null && videoResolution.isEmpty) videoResolution = null;
+    videoBitRate = (sources.first as Map<String, dynamic>)['Bitrate'] as int? ??
+        source.primaryVideoStream?.bitRate;
+  }
   return Episode(
     id: d['Id']?.toString() ?? '',
     name: d['Name'] ?? '',
@@ -1349,6 +1360,8 @@ Episode _parseEpisode(Map<String, dynamic> d) {
           )
         : null,
     overview: d['Overview']?.toString(),
+    videoResolution: videoResolution,
+    videoBitRate: videoBitRate,
   );
 }
 

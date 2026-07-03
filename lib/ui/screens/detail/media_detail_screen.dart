@@ -651,20 +651,20 @@ class _SeasonsSection extends ConsumerWidget {
       data: (seasons) {
         if (seasons.isEmpty) return const SizedBox.shrink();
         
-        // 紧凑胶囊条：左对齐贴边、无留白、可横滑。取代原先一排 196px 大海报卡
-        //（季少时右侧大片空白、整块偏笨重）。
+        // 季封面卡：贴边左对齐、卡宽=海报真实宽度（不再用 196 硬框裁出两侧留白），
+        // 季度数字叠在封面底部居中。
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const SectionHeader(title: '季度选择'),
             SizedBox(
-              height: 40,
+              height: 168,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 itemCount: seasons.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 8),
-                itemBuilder: (_, i) => _SeasonChip(
+                separatorBuilder: (_, __) => const SizedBox(width: 10),
+                itemBuilder: (_, i) => _SeasonCoverCard(
                   season: seasons[i],
                   onTap: () => onSeasonTap(seasons[i]),
                 ),
@@ -679,31 +679,76 @@ class _SeasonsSection extends ConsumerWidget {
   }
 }
 
-/// 季度胶囊：贴边、紧凑、可横滑。点击进入对应季详情页。
-class _SeasonChip extends StatelessWidget {
+/// 季封面卡：卡宽=海报真实宽度（高固定 168、2:3 比例），季度名叠在底部居中。
+/// 点击进入对应季详情页。
+class _SeasonCoverCard extends ConsumerWidget {
   final Season season;
   final VoidCallback onTap;
 
-  const _SeasonChip({required this.season, required this.onTap});
+  const _SeasonCoverCard({required this.season, required this.onTap});
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Material(
-      color: theme.colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(20),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Center(
-            child: Text(
-              season.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            ),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final api = ref.read(apiClientProvider);
+    final imageUrls = resolveSeasonImageUrls(api, season, maxWidth: 320);
+    final label = season.name.trim().isNotEmpty
+        ? season.name
+        : 'S${season.indexNumber ?? ''}';
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: AspectRatio(
+        aspectRatio: 2 / 3,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (imageUrls.isNotEmpty)
+                MediaImage(
+                  imageUrl: imageUrls.first,
+                  imageUrls: imageUrls.length > 1 ? imageUrls.sublist(1) : null,
+                  width: 112,
+                  height: 168,
+                  fit: BoxFit.cover,
+                )
+              else
+                Container(
+                  color: const Color(0xFF5B8DEF).withValues(alpha: 0.12),
+                  child: const Center(
+                    child: Icon(Icons.movie_outlined,
+                        color: Color(0xFF5B8DEF), size: 28),
+                  ),
+                ),
+              // 底部渐变 + 季度名居中
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  padding: const EdgeInsets.only(top: 20, bottom: 6),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Colors.transparent, Colors.black87],
+                    ),
+                  ),
+                  child: Text(
+                    label,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

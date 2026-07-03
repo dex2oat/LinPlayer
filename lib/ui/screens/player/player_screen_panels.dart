@@ -1248,7 +1248,13 @@ class _EpisodeSelectorContentState
                 ],
               ),
               subtitle: Text(
-                episode.formattedRuntime ?? '',
+                [
+                  episode.formattedRuntime,
+                  episode.videoResolution,
+                  episode.formattedBitRate,
+                ].whereType<String>().where((s) => s.isNotEmpty).join(' · '),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(fontSize: 12, color: colors.textSecondary),
               ),
               trailing: isCurrent
@@ -1262,6 +1268,120 @@ class _EpisodeSelectorContentState
       },
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (_, __) => const Center(child: Text('加载失败')),
+    );
+  }
+}
+
+/// 媒体信息面板：只显示常见视频/音频参数（分辨率、编码、帧率、码率…），
+/// 一次性从内核读取（getPlaybackStats），不轮询。
+class _PlaybackStatsView extends StatelessWidget {
+  final VideoPlayerService service;
+  const _PlaybackStatsView({required this.service});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = PlayerPanelColors.resolve(context);
+
+    Widget row(String label, String value) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 88,
+                child: Text(label,
+                    style:
+                        TextStyle(color: colors.textSecondary, fontSize: 14)),
+              ),
+              Expanded(
+                child: Text(value,
+                    style: TextStyle(
+                        color: colors.text,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+        );
+
+    return FutureBuilder<Map<String, String>>(
+      future: service.getPlaybackStats(),
+      builder: (context, snap) {
+        if (snap.connectionState != ConnectionState.done) {
+          return const Padding(
+            padding: EdgeInsets.all(28),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final s = snap.data ?? const {};
+        if (s.isEmpty) {
+          return const _PanelEmpty(
+              icon: Icons.info_outline, label: '当前内核不支持读取媒体参数');
+        }
+
+        String? pick(List<String> keys) {
+          for (final k in keys) {
+            final v = s[k];
+            if (v != null && v.isNotEmpty && v != 'null') return v;
+          }
+          return null;
+        }
+
+        String bitrate(String? v) {
+          final n = int.tryParse(v ?? '');
+          if (n == null || n <= 0) return '—';
+          return n >= 1000000
+              ? '${(n / 1000000).toStringAsFixed(1)} Mbps'
+              : '${(n / 1000).toStringAsFixed(0)} kbps';
+        }
+
+        String fps(String? v) {
+          final n = double.tryParse(v ?? '');
+          return n == null ? (v ?? '—') : '${n.toStringAsFixed(2)} fps';
+        }
+
+        String sampleRate(String? v) {
+          final n = int.tryParse(v ?? '');
+          return n == null ? (v ?? '—') : '${(n / 1000).toStringAsFixed(1)} kHz';
+        }
+
+        final width = pick(['width']);
+        final height = pick(['height']);
+        final vCodec = pick(['current-tracks/video/codec', 'video-codec']);
+        final vBitrate =
+            pick(['video-bitrate', 'current-tracks/video/default-bitrate']);
+        final pixfmt = pick(['video-params/pixelformat']);
+        final hwdec = pick(['hwdec-current']);
+        final aCodec = pick(['current-tracks/audio/codec', 'audio-codec']);
+        final channels = pick(['audio-params/channel-count']);
+        final aRate = pick(['audio-params/sample-rate']);
+        final aBitrate =
+            pick(['audio-bitrate', 'current-tracks/audio/default-bitrate']);
+
+        final children = <Widget>[
+          const PanelSectionTitle('视频'),
+          if (width != null && height != null)
+            row('分辨率', '$width × $height'),
+          if (vCodec != null) row('编码', vCodec.toUpperCase()),
+          if (pick(['fps', 'container-fps']) != null)
+            row('帧率', fps(pick(['fps', 'container-fps']))),
+          if (vBitrate != null) row('码率', bitrate(vBitrate)),
+          if (pixfmt != null) row('像素格式', pixfmt),
+          if (hwdec != null)
+            row('解码', hwdec == 'no' ? '软件解码' : '硬件解码 ($hwdec)'),
+          const PanelSectionTitle('音频'),
+          if (aCodec != null) row('编码', aCodec.toUpperCase()),
+          if (channels != null) row('声道', channels),
+          if (aRate != null) row('采样率', sampleRate(aRate)),
+          if (aBitrate != null) row('码率', bitrate(aBitrate)),
+        ];
+
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: children,
+        );
+      },
     );
   }
 }

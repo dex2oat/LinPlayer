@@ -1987,6 +1987,34 @@ class MpvPlayerAdapter implements PlayerAdapter {
       'Anime4K_AutoDownscalePre_x4.glsl',
       'Anime4K_Upscale_CNN_x2_M.glsl',
     ],
+    // A+A / B+B / A+C：官方 Anime4K 双通道加强档，用现有 shader 近似
+    // （缺 Soft/Denoise 变体，以 Restore VL/M 代替），Restore→Upscale 走两轮。
+    'modeAA': [
+      'Anime4K_Clamp_Highlights.glsl',
+      'Anime4K_Restore_CNN_VL.glsl',
+      'Anime4K_Upscale_CNN_x2_VL.glsl',
+      'Anime4K_Restore_CNN_M.glsl',
+      'Anime4K_AutoDownscalePre_x2.glsl',
+      'Anime4K_AutoDownscalePre_x4.glsl',
+      'Anime4K_Upscale_CNN_x2_M.glsl',
+    ],
+    'modeBB': [
+      'Anime4K_Clamp_Highlights.glsl',
+      'Anime4K_Restore_CNN_M.glsl',
+      'Anime4K_Upscale_CNN_x2_VL.glsl',
+      'Anime4K_AutoDownscalePre_x2.glsl',
+      'Anime4K_Restore_CNN_M.glsl',
+      'Anime4K_AutoDownscalePre_x4.glsl',
+      'Anime4K_Upscale_CNN_x2_M.glsl',
+    ],
+    'modeAC': [
+      'Anime4K_Clamp_Highlights.glsl',
+      'Anime4K_Upscale_CNN_x2_VL.glsl',
+      'Anime4K_AutoDownscalePre_x2.glsl',
+      'Anime4K_AutoDownscalePre_x4.glsl',
+      'Anime4K_Restore_CNN_M.glsl',
+      'Anime4K_Upscale_CNN_x2_M.glsl',
+    ],
   };
 
   @override
