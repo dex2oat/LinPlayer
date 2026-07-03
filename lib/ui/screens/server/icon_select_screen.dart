@@ -25,23 +25,23 @@ class IconSelectScreen extends ConsumerStatefulWidget {
 }
 
 class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
-  // 默认图标源（多源合并去重）。首个为聚合 JSON，其余为 gist 镜像。
+  // 默认图标源（四源分开显示，不合并）。gist 用 /raw 原始 JSON，套 gh-proxy 前缀免墙。
   static const List<({String name, String url})> _defaultSources = [
     (name: '综合图标库', url: 'https://zizhu.291277.xyz/icons-all.json'),
     (
       name: '图标源 2',
       url:
-          'https://v6.gh-proxy.org/https://gist.github.com/zzzwannasleep/fe6e84f43fcd64672ec71302f48a01ea'
+          'https://v6.gh-proxy.org/https://gist.github.com/zzzwannasleep/fe6e84f43fcd64672ec71302f48a01ea/raw/4629cb6a10abf954c2ccb2f1b20b9149ba6f1bd9/icons.json'
     ),
     (
       name: '图标源 3',
       url:
-          'https://v6.gh-proxy.org/https://gist.github.com/zzzwannasleep/a52322ad8cf1dcf7462dd4a33816e0f4'
+          'https://v6.gh-proxy.org/https://gist.github.com/zzzwannasleep/a52322ad8cf1dcf7462dd4a33816e0f4/raw/ab4b2e1a8390c0f1d4f5171e9f2b24fba832a32e/icons.json'
     ),
     (
       name: '图标源 4',
       url:
-          'https://v6.gh-proxy.org/https://gist.github.com/zzzwannasleep/1da6e9d12cd9285980c6aba05855dede'
+          'https://v6.gh-proxy.org/https://gist.github.com/zzzwannasleep/1da6e9d12cd9285980c6aba05855dede/raw/bc278c72ac514eba4f9fab48a54975feeeb7d386/icons.json'
     ),
   ];
   static const double _desktopBreakpoint = 960;
@@ -50,8 +50,8 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
 
   final List<NetworkIconLibrary> _libraries = [];
   bool _isLoading = true;
-  String? _loadError;
   String _searchQuery = '';
+  String? _selectedLibraryId;
 
   @override
   void initState() {
@@ -68,26 +68,21 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
   bool get _isDesktopLayout =>
       MediaQuery.sizeOf(context).width >= _desktopBreakpoint;
 
-  /// 合并所有已加载源的图标（按 url 去重）——弱化「源」概念，突出图标本身。
-  List<IconItem> get _allIcons {
-    final seen = <String>{};
-    final merged = <IconItem>[];
+  /// 当前选中的源（四源分开，不合并——方便逐源排查哪个源有问题）。
+  NetworkIconLibrary? get _selectedLibrary {
+    if (_libraries.isEmpty) return null;
     for (final lib in _libraries) {
-      for (final icon in lib.icons) {
-        if (seen.add(icon.url)) merged.add(icon);
-      }
+      if (lib.id == _selectedLibraryId) return lib;
     }
-    return merged;
+    return _libraries.first;
   }
 
   List<IconItem> get _filteredIcons {
-    final all = _allIcons;
+    final lib = _selectedLibrary;
+    if (lib == null) return const [];
     final query = _searchQuery.trim().toLowerCase();
-    if (query.isEmpty) {
-      return all;
-    }
-
-    return all.where((icon) {
+    if (query.isEmpty) return lib.icons;
+    return lib.icons.where((icon) {
       final sourceName = icon.sourceName?.toLowerCase() ?? '';
       return icon.name.toLowerCase().contains(query) ||
           sourceName.contains(query);
@@ -193,19 +188,35 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
       );
     }
 
-    if (_loadError != null && _allIcons.isEmpty) {
-      return _NetworkEmptyState(
-        message: _loadError!,
-        buttonText: '重新加载',
-        onPressed: _reloadAll,
-      );
-    }
-
     final icons = _filteredIcons;
+    final selectedId = _selectedLibrary?.id;
 
     return Column(
       children: [
-        // 工具条（次要）：搜索占主，图标源/刷新收成小图标按钮——重点是图标本身。
+        // 源选择条：四源分开，各带图标数（失败/0 一目了然，方便定位问题源）。
+        SizedBox(
+          height: 36,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: _libraries.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (_, i) {
+              final lib = _libraries[i];
+              return _SourceChip(
+                label: lib.name,
+                count: lib.failed ? null : lib.icons.length,
+                selected: lib.id == selectedId,
+                onTap: () => setState(() {
+                  _selectedLibraryId = lib.id;
+                  _searchQuery = '';
+                  _searchController.clear();
+                }),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 10),
+        // 工具条：搜索占主，添加源/刷新为小图标。
         Row(
           children: [
             Expanded(
@@ -248,7 +259,11 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
         Expanded(
           child: icons.isEmpty
               ? _NetworkEmptyState(
-                  message: _searchQuery.isEmpty ? '暂无可用图标' : '没有找到匹配的图标',
+                  message: _searchQuery.isNotEmpty
+                      ? '没有找到匹配的图标'
+                      : (_selectedLibrary?.failed ?? true)
+                          ? '该源加载失败'
+                          : '该源没有可用图标',
                   buttonText: _searchQuery.isEmpty ? '重新加载' : '清空搜索',
                   onPressed:
                       _searchQuery.isEmpty ? _reloadAll : _clearSearch,
@@ -285,25 +300,24 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
     );
   }
 
-  /// 并发拉取所有图标源（当前 [_libraries] 的地址，首次为默认 4 源），合并去重后展示。
-  /// 单个源失败不影响其它源；全部失败才报错。
+  /// 并发拉取所有图标源（当前 [_libraries] 的地址，首次为默认 4 源），**四源分开保留**。
+  /// 单个源失败/为空也保留占位（标记 failed），方便在源选择条上直接看出是哪个源出问题。
   Future<void> _reloadAll() async {
     final sources = _libraries.isEmpty
         ? _defaultSources.toList()
         : [for (final l in _libraries) (name: l.name, url: l.url)];
 
     if (mounted) {
-      setState(() {
-        _isLoading = true;
-        _loadError = null;
-      });
+      setState(() => _isLoading = true);
     }
 
     final results = await Future.wait(sources.map((s) async {
       try {
         return await _fetchLibrary(name: s.name, url: s.url, id: s.url);
       } catch (_) {
-        return null;
+        // 失败也保留占位，用户能在源条上看到「图标源 X · 失败」。
+        return NetworkIconLibrary(
+            id: s.url, name: s.name, url: s.url, icons: const [], failed: true);
       }
     }));
 
@@ -311,17 +325,15 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
       return;
     }
 
-    final loaded = results
-        .whereType<NetworkIconLibrary>()
-        .where((l) => l.icons.isNotEmpty)
-        .toList();
-
     setState(() {
       _libraries
         ..clear()
-        ..addAll(loaded);
+        ..addAll(results);
+      // 选中项失效时回退到第一个源。
+      if (!_libraries.any((l) => l.id == _selectedLibraryId)) {
+        _selectedLibraryId = _libraries.isEmpty ? null : _libraries.first.id;
+      }
       _isLoading = false;
-      _loadError = loaded.isEmpty ? '图标库加载失败' : null;
     });
   }
 
@@ -427,6 +439,7 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
                               } else {
                                 _libraries[existingIndex] = library;
                               }
+                              _selectedLibraryId = library.id;
                             });
 
                             if (dialogContext.mounted) {
@@ -681,12 +694,14 @@ class NetworkIconLibrary {
   final String name;
   final String url;
   final List<IconItem> icons;
+  final bool failed; // 拉取失败的占位源（源选择条上标「失败」）。
 
   const NetworkIconLibrary({
     required this.id,
     required this.name,
     required this.url,
     required this.icons,
+    this.failed = false,
   });
 }
 
@@ -732,6 +747,66 @@ class _CurrentIconPreview extends StatelessWidget {
               size: 36,
               color: theme.colorScheme.outline,
             ),
+    );
+  }
+}
+
+/// 源选择胶囊：名称 + 图标数（失败标「失败」），选中高亮。
+class _SourceChip extends StatelessWidget {
+  final String label;
+  final int? count; // null = 加载失败
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _SourceChip({
+    required this.label,
+    required this.count,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final tail = count == null ? '失败' : '$count';
+    final failed = count == null;
+    return Material(
+      color: selected
+          ? theme.colorScheme.primary.withValues(alpha: 0.14)
+          : theme.colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: selected
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.onSurface,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                tail,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: failed
+                      ? theme.colorScheme.error
+                      : theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -821,17 +896,18 @@ class _NetworkIconCard extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHigh,
+                    // 固定浅底：许多图标是深色/透明 logo，放深色底上会「全黑看不见」。
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: MediaImage(
                     imageUrl: icon.url,
                     fit: BoxFit.contain,
                     useDefaultUserAgent: true,
-                    errorWidget: Center(
+                    errorWidget: const Center(
                       child: Icon(
                         Icons.broken_image_outlined,
-                        color: theme.colorScheme.outline,
+                        color: Colors.black26,
                       ),
                     ),
                   ),
