@@ -438,12 +438,25 @@ jobs:
           set -e
           MK=$(find ~/.pub-cache/hosted -type f -path '*media_kit_libs_ios_video*/ios/Makefile' | head -n1)
           if [ -z "$MK" ]; then echo "❌ 未找到 media_kit ios Makefile"; exit 1; fi
-          echo "Patching $MK"
-          sed -i '' 's/ios-universal-video-default/ios-universal-video-full/g' "$MK"
-          sed -i '' '/shasum -a 256 -c/d' "$MK"   # flavor 变了 sha 必不同；同仓库同版本，去校验
-          grep -nE 'video-(default|full)|shasum' "$MK" || true
-          MKDIR=$(dirname "$MK")
-          rm -rf "$MKDIR/.cache" "$MKDIR"/Frameworks/*.xcframework
+          MKDIR=$(dirname "$MK"); VER=v0.6.0
+          URL="https://github.com/media-kit/libmpv-darwin-build/releases/download/$VER/libmpv-xcframeworks_${VER}_ios-universal-video-full.tar.gz"
+          echo "Downloading full libmpv: $URL"
+          curl -fL "$URL" -o /tmp/mpv-full-ios.tgz
+          # ① 直接用 full 覆盖已解出的 Mpv.xcframework —— 不依赖 make 是否重跑
+          #（pub 缓存常把 default 框架整个还原，make 未必重新下载）。
+          rm -rf "$MKDIR"/Frameworks/*.xcframework
+          mkdir -p "$MKDIR/Frameworks"
+          tar -xzf /tmp/mpv-full-ios.tgz --strip-components 1 -C "$MKDIR/Frameworks"
+          # ② Makefile 指向 full + 去 sha，并预置 .cache 为 full，防 make 重跑时又下回 default
+          sed -i '' 's/ios-universal-video-default/ios-universal-video-full/g; /shasum -a 256 -c/d' "$MK"
+          mkdir -p "$MKDIR/.cache/xcframeworks"
+          cp /tmp/mpv-full-ios.tgz "$MKDIR/.cache/xcframeworks/libmpv-xcframeworks-${VER}-ios-universal.tar.gz"
+          ( cd "$MKDIR/.cache/xcframeworks" && ln -sf "libmpv-xcframeworks-${VER}-ios-universal.tar.gz" "libmpv-xcframeworks-ios-universal.tar.gz" )
+          touch "$MKDIR"/Frameworks/*.xcframework
+          # ③ 就地确认预置的 framework 已含 pgssub
+          B=$(find "$MKDIR/Frameworks/Mpv.xcframework" -type f -name Mpv | head -n1)
+          echo "预置 framework 二进制: $(ls -la "$B")"
+          strings -a "$B" | grep -q pgssub && echo "✅ 预置 full libmpv 含 pgssub" || { echo "❌ 预置 framework 仍无 pgssub"; exit 1; }
 
       - name: Build iOS Release (unsigned)
         env:
@@ -908,12 +921,21 @@ jobs:
           set -e
           MK=$(find ~/.pub-cache/hosted -type f -path '*media_kit_libs_macos_video*/macos/Makefile' | head -n1)
           if [ -z "$MK" ]; then echo "❌ 未找到 media_kit macos Makefile"; exit 1; fi
-          echo "Patching $MK"
-          sed -i '' 's/macos-universal-video-default/macos-universal-video-full/g' "$MK"
-          sed -i '' '/shasum -a 256 -c/d' "$MK"
-          grep -nE 'video-(default|full)|shasum' "$MK" || true
-          MKDIR=$(dirname "$MK")
-          rm -rf "$MKDIR/.cache" "$MKDIR"/Frameworks/*.xcframework
+          MKDIR=$(dirname "$MK"); VER=v0.6.0
+          URL="https://github.com/media-kit/libmpv-darwin-build/releases/download/$VER/libmpv-xcframeworks_${VER}_macos-universal-video-full.tar.gz"
+          echo "Downloading full libmpv: $URL"
+          curl -fL "$URL" -o /tmp/mpv-full-macos.tgz
+          rm -rf "$MKDIR"/Frameworks/*.xcframework
+          mkdir -p "$MKDIR/Frameworks"
+          tar -xzf /tmp/mpv-full-macos.tgz --strip-components 1 -C "$MKDIR/Frameworks"
+          sed -i '' 's/macos-universal-video-default/macos-universal-video-full/g; /shasum -a 256 -c/d' "$MK"
+          mkdir -p "$MKDIR/.cache/xcframeworks"
+          cp /tmp/mpv-full-macos.tgz "$MKDIR/.cache/xcframeworks/libmpv-xcframeworks-${VER}-macos-universal.tar.gz"
+          ( cd "$MKDIR/.cache/xcframeworks" && ln -sf "libmpv-xcframeworks-${VER}-macos-universal.tar.gz" "libmpv-xcframeworks-macos-universal.tar.gz" )
+          touch "$MKDIR"/Frameworks/*.xcframework
+          B=$(find "$MKDIR/Frameworks/Mpv.xcframework" -type f -name Mpv | head -n1)
+          echo "预置 framework 二进制: $(ls -la "$B")"
+          strings -a "$B" | grep -q pgssub && echo "✅ 预置 full libmpv 含 pgssub" || { echo "❌ 预置 framework 仍无 pgssub"; exit 1; }
 
       - name: Build macOS Release
         env:
