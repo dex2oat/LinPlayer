@@ -453,10 +453,11 @@ jobs:
           cp /tmp/mpv-full-ios.tgz "$MKDIR/.cache/xcframeworks/libmpv-xcframeworks-${VER}-ios-universal.tar.gz"
           ( cd "$MKDIR/.cache/xcframeworks" && ln -sf "libmpv-xcframeworks-${VER}-ios-universal.tar.gz" "libmpv-xcframeworks-ios-universal.tar.gz" )
           touch "$MKDIR"/Frameworks/*.xcframework
-          # ③ 就地确认预置的 framework 已含 pgssub
-          B=$(find "$MKDIR/Frameworks/Mpv.xcframework" -type f -name Mpv | head -n1)
-          echo "预置 framework 二进制: $(ls -la "$B")"
-          strings -a "$B" | grep -q pgssub && echo "✅ 预置 full libmpv 含 pgssub" || { echo "❌ 预置 framework 仍无 pgssub"; exit 1; }
+          # ③ 就地确认:pgssub 解码器在 Avcodec.xcframework(libmpv 动态链接 ffmpeg),
+          #    不在 Mpv 二进制里。用 grep -a 直接扫二进制(strings 在此不可靠)。
+          B=$(find "$MKDIR/Frameworks/Avcodec.xcframework" -type f -name Avcodec | head -n1)
+          echo "预置 Avcodec 二进制: $(ls -la "$B")"
+          grep -aq pgssub "$B" && echo "✅ 预置 full Avcodec 含 pgssub" || { echo "❌ 预置 Avcodec 仍无 pgssub"; exit 1; }
 
       - name: Build iOS Release (unsigned)
         env:
@@ -482,13 +483,14 @@ jobs:
         run: |
           set -e
           APP=$(find build/ios/iphoneos -maxdepth 1 -type d -name "*.app" | head -n1)
-          BIN="$APP/Frameworks/Mpv.framework/Mpv"
-          if [ ! -f "$BIN" ]; then echo "❌ 未找到 Mpv 二进制: $BIN"; ls -R "$APP/Frameworks" 2>/dev/null | head; exit 1; fi
-          echo "Mpv binary: $(ls -la "$BIN")"
-          if strings -a "$BIN" | grep -q "pgssub"; then
-            echo "✅ iOS libmpv 含 pgssub(PGS/SUP)解码器"
+          # pgssub 在 Avcodec.framework(libmpv 动态链接的 ffmpeg),不在 Mpv 里。
+          BIN=$(find "$APP" -type f -path '*Avcodec.framework*' -name Avcodec | head -n1)
+          if [ -z "$BIN" ]; then echo "❌ 未找到 Avcodec framework"; find "$APP" -name "*.framework" -maxdepth 3 2>/dev/null; exit 1; fi
+          echo "Avcodec binary: $(ls -la "$BIN")"
+          if grep -aq "pgssub" "$BIN"; then
+            echo "✅ iOS libmpv(Avcodec) 含 pgssub(PGS/SUP)解码器"
           else
-            echo "❌ iOS libmpv 仍缺 pgssub —— full flavor swap 未生效"; exit 1
+            echo "❌ iOS Avcodec 仍缺 pgssub —— full flavor swap 未生效"; exit 1
           fi
 
       - name: Package iOS IPA (unsigned)
@@ -961,13 +963,14 @@ jobs:
         run: |
           set -e
           APP=$(find build/macos/Build/Products/Release -maxdepth 1 -type d -name "*.app" | head -n1)
-          BIN="$APP/Contents/Frameworks/Mpv.framework/Mpv"
-          if [ ! -f "$BIN" ]; then echo "❌ 未找到 Mpv 二进制: $BIN"; ls -R "$APP/Contents/Frameworks" 2>/dev/null | head; exit 1; fi
-          echo "Mpv binary: $(ls -la "$BIN")"
-          if strings -a "$BIN" | grep -q "pgssub"; then
-            echo "✅ macOS libmpv 含 pgssub(PGS/SUP)解码器"
+          # pgssub 在 Avcodec.framework(libmpv 动态链接的 ffmpeg),不在 Mpv 里。
+          BIN=$(find "$APP/Contents/Frameworks" -type f -path '*Avcodec.framework*' -name Avcodec | head -n1)
+          if [ -z "$BIN" ]; then echo "❌ 未找到 Avcodec framework"; find "$APP/Contents/Frameworks" -name "*.framework" -maxdepth 2 2>/dev/null; exit 1; fi
+          echo "Avcodec binary: $(ls -la "$BIN")"
+          if grep -aq "pgssub" "$BIN"; then
+            echo "✅ macOS libmpv(Avcodec) 含 pgssub(PGS/SUP)解码器"
           else
-            echo "❌ macOS libmpv 仍缺 pgssub —— full flavor swap 未生效"; exit 1
+            echo "❌ macOS Avcodec 仍缺 pgssub —— full flavor swap 未生效"; exit 1
           fi
 
       - name: Bundle ffmpeg (内置，避免运行时无校验下载，M6)
