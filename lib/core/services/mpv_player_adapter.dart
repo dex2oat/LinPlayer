@@ -686,8 +686,12 @@ class MpvPlayerAdapter implements PlayerAdapter {
             // 关键：只开 reconnect_on_network_error，不开 reconnect_on_http_error——
             // 网盘 302 签名过期返回的 4xx/5xx 必须冒出来交给 L2 重解析重签，
             // 若让 ffmpeg 死磕过期链，错误永不上抛，L2 反而触发不了。
+            // multiple_requests=1：让 libavformat 用 HTTP keep-alive 在同一条
+            // TCP+TLS 连接上发后续 Range/seek 请求，而非每次关连接重开——seek 与
+            // reconnect 都少一次握手，跨境流明显更跟手。与 302 重签逻辑正交
+            // （那是 http_error 层，不受连接复用影响）。
             await np.setProperty('stream-lavf-o',
-                'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=30');
+                'multiple_requests=1,reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=30');
             await np.setProperty('stream-buffer-size', '33554432');
             await np.setProperty('interpolation', 'no');
             await np.setProperty('prefetch-playlist', 'no');

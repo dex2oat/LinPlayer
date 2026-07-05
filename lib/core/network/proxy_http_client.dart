@@ -125,7 +125,14 @@ HttpClient createProxiedHttpClient() {
     ..badCertificateCallback = _allowBadCertificate
     // 统一默认 UA：部分 CDN（含 Emby 图片）会拒绝空/Dart 默认 UA 导致封面空白。
     // Dio 请求自带显式 User-Agent 头，会覆盖此默认值，互不冲突。
-    ..userAgent = kAppUserAgent;
+    ..userAgent = kAppUserAgent
+    // 连接保温：dart:io 默认 15s 就关闭空闲连接，媒体浏览的请求常间隔 >15s
+    // （滑动、点详情、加载封面），每次都要重做 TCP+TLS 握手（远程服务器 ~2 RTT）。
+    // 拉长到 60s 让 API/图片/预取代理复用热连接，直接砍掉握手延迟。偶发的
+    // 「服务端先关连接」竞态由各路径的重试层（Emby _withRetry / 图片 RetryHelper /
+    // 预取 _fetchChunk）兜底，不会冒泡成错误。
+    // 不设 maxConnectionsPerHost：dart:io 默认无上限，保留最大并发。
+    ..idleTimeout = const Duration(seconds: 60);
   _applyProxy(client, ProxyRuntime.instance.current, _socksResolution);
   return client;
 }

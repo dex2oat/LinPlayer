@@ -585,8 +585,9 @@ class MpvPlayerPlugin(
             // L1 预防层：网络掉线时 libavformat 透明重连(连当前 URL)，瞬断在缓冲区内消化。
             // 只开 reconnect_on_network_error，不开 http_error——网盘 302 过期的 4xx/5xx 要
             // 上抛交给 Dart 层 L2 重解析重签，不能让 ffmpeg 死磕过期链把错误吞掉。
+            // multiple_requests=1：HTTP keep-alive，后续 Range/seek 复用同一连接不重握手。
             MPVLib.setOptionString("stream-lavf-o",
-                "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=30")
+                "multiple_requests=1,reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=30")
             android.util.Log.i(TAG, "mpv disk cache: dir=$videoCacheDir fwd=$diskCacheForwardBytes back=$diskCacheBackBytes")
         } else {
             // 本地文件：无需大缓冲，沿用小额内存缓冲。
