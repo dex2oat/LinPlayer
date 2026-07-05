@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_interfaces.dart';
@@ -8,6 +9,9 @@ import 'app_preferences.dart';
 
 String get defaultPlayerCoreKey {
   if (isDesktopPlatform) return 'mpv';
+  // iOS(Flutter) 无原生播放插件，只有 media_kit(mpv) FFI 可用；nativeMpv/exoPlayer
+  // 都是 Android 专属平台通道，iOS 上无实现会导致播放器初始化失败。
+  if (defaultTargetPlatform == TargetPlatform.iOS) return 'mpv';
   // Android 默认使用原生 MPV（通过 libplayer.so + 平台通道）
   return 'nativeMpv';
 }
@@ -17,6 +21,8 @@ String normalizePlayerCore(String? value) {
   // ExoPlayer / 原生 MPV 都是移动端（平台通道）专属，桌面无此实现。
   // 因此桌面统一归一到 mpv，避免历史/误存的值导致播放器初始化失败。
   if (isDesktopPlatform) return 'mpv';
+  // iOS 同理：仅 media_kit 可用，历史/误存的 exoPlayer/nativeMpv 统一归一到 mpv。
+  if (defaultTargetPlatform == TargetPlatform.iOS) return 'mpv';
   switch (value) {
     case 'mpv':
     case 'media_kit':
