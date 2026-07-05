@@ -163,18 +163,38 @@ class EmbyApiClient implements ApiClientFactory {
     return inner is HandshakeException || inner is SocketException;
   }
 
-  Future<Response<T>> _retryTransient<T>(
-      Future<Response<T>> Function() send) async {
+  /// 幂等请求（GET/DELETE）可安全重试的网关瞬时错误：
+  /// - 502/503/504：网关收到请求但上游（Emby/反代）临时不可用或超时，
+  ///   上游多半未真正处理业务，重试常在 1~2 次内恢复。这正是「前端连不上
+  ///   服务器」的高发原因——一次 504 就判定失联太脆弱。
+  /// - receiveTimeout：请求已发出但响应迟迟不回，对幂等读取重试无副作用。
+  ///
+  /// **只对幂等方法启用**：POST（播放上报/标记已看等）在 504 时无法确定
+  /// 上游是否已处理，重试可能重复副作用，故 POST 只走 [_isTransientConnError]。
+  static bool _isRetryableGatewayError(Object e) {
+    if (e is! DioException) return false;
+    final code = e.response?.statusCode;
+    if (code == 502 || code == 503 || code == 504) return true;
+    return e.type == DioExceptionType.receiveTimeout;
+  }
+
+  /// 瞬时错误自动重试。[retryGateway] 为 true 时（仅幂等 GET/DELETE）
+  /// 额外重试 502/503/504/receiveTimeout。供实例请求与服务器探测复用。
+  static Future<Response<T>> _withRetry<T>(
+      Future<Response<T>> Function() send,
+      {bool retryGateway = false}) async {
     var attempt = 0;
     while (true) {
       attempt++;
       try {
         return await send();
       } catch (e) {
-        if (attempt >= _kTransientMaxAttempts || !_isTransientConnError(e)) {
+        final retryable = _isTransientConnError(e) ||
+            (retryGateway && _isRetryableGatewayError(e));
+        if (attempt >= _kTransientMaxAttempts || !retryable) {
           rethrow;
         }
-        // 线性退避：300ms / 600ms，避开瞬时网络抖动与服务端瞬时拒连。
+        // 线性退避：300ms / 600ms，避开瞬时网络抖动与网关瞬时抽风。
         await Future<void>.delayed(Duration(milliseconds: 300 * attempt));
       }
     }
@@ -183,17 +203,19 @@ class EmbyApiClient implements ApiClientFactory {
   /// 包装 Dio.get，自动去掉路径开头的 /，确保 baseUrl 子路径不被丢弃
   Future<Response<T>> get<T>(String path,
       {Map<String, dynamic>? queryParameters, Options? options}) {
-    return _retryTransient(() => _dio.get<T>(
-          path.startsWith('/') ? path.substring(1) : path,
-          queryParameters: queryParameters,
-          options: options,
-        ));
+    return _withRetry(
+        () => _dio.get<T>(
+              path.startsWith('/') ? path.substring(1) : path,
+              queryParameters: queryParameters,
+              options: options,
+            ),
+        retryGateway: true);
   }
 
   /// 包装 Dio.post，自动去掉路径开头的 /，确保 baseUrl 子路径不被丢弃
   Future<Response<T>> post<T>(String path,
       {dynamic data, Map<String, dynamic>? queryParameters, Options? options}) {
-    return _retryTransient(() => _dio.post<T>(
+    return _withRetry(() => _dio.post<T>(
           path.startsWith('/') ? path.substring(1) : path,
           data: data,
           queryParameters: queryParameters,
@@ -204,12 +226,14 @@ class EmbyApiClient implements ApiClientFactory {
   /// 包装 Dio.delete，自动去掉路径开头的 /，确保 baseUrl 子路径不被丢弃
   Future<Response<T>> delete<T>(String path,
       {dynamic data, Map<String, dynamic>? queryParameters, Options? options}) {
-    return _retryTransient(() => _dio.delete<T>(
-          path.startsWith('/') ? path.substring(1) : path,
-          data: data,
-          queryParameters: queryParameters,
-          options: options,
-        ));
+    return _withRetry(
+        () => _dio.delete<T>(
+              path.startsWith('/') ? path.substring(1) : path,
+              data: data,
+              queryParameters: queryParameters,
+              options: options,
+            ),
+        retryGateway: true);
   }
 }
 
@@ -344,6 +368,9 @@ class EmbyServerApi implements ServerApi {
     final normalizedBaseUrl = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
     final dio = Dio(BaseOptions(
       baseUrl: normalizedBaseUrl,
+      // 探测服务器也要有超时上限，否则死服务器/网关会把「连接中」挂到 OS 超时。
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 20),
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
@@ -362,7 +389,10 @@ class EmbyServerApi implements ServerApi {
     debugPrint('[EmbyAPI] getPublicInfo: baseUrl=$normalizedBaseUrl');
 
     try {
-      final resp = await dio.get('System/Info/Public');
+      // 幂等探测：网关瞬时 502/503/504 自动重试，避免一次抽风就判定「连不上」。
+      final resp = await EmbyApiClient._withRetry(
+          () => dio.get('System/Info/Public'),
+          retryGateway: true);
       debugPrint('[EmbyAPI] getPublicInfo success: ${resp.statusCode}');
       return _parseServerInfo(resp.data as Map<String, dynamic>);
     } on DioException catch (e) {
@@ -401,7 +431,8 @@ class EmbyServerApi implements ServerApi {
         },
       ));
       applyProxyToDio(dio);
-      await dio.get('System/Info/Public');
+      await EmbyApiClient._withRetry(() => dio.get('System/Info/Public'),
+          retryGateway: true);
       return true;
     } catch (_) {
       return false;
