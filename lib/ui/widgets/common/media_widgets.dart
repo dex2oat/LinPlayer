@@ -212,6 +212,14 @@ class _FallbackNetworkImageState extends State<_FallbackNetworkImage> {
   static const int _maxRetryRounds = 2;
   static const Duration _retryDelay = Duration(milliseconds: 900);
 
+  /// 会话级「取不到」负缓存：某个服务器图标/中立 CDN 资源这次彻底拉失败了，
+  /// 本次运行内就不再反复重连——remount 时直接出兜底图，不再闪一遍占位+重试。
+  /// 连不上一次基本就一直连不上，没必要每次切页都重来。只对 useDefaultUserAgent
+  /// 资源（服务器图标等按需加载的图，非首页海报）生效，避免冷启动误伤海报重试。
+  static final Set<String> _deadUrls = <String>{};
+
+  bool get _negativeCache => widget.useDefaultUserAgent;
+
   /// 解码目标的最大边长上限。即使容器/屏幕很大，也把单张图片解码尺寸
   /// 钳制在此范围内，避免单张全分辨率位图（背景图可达 4K）吃满内存缓存。
   /// 1280 长边 ≈ 1280×720×4 ≈ 3.7MB，足够桌面/TV 清晰显示。
@@ -263,6 +271,10 @@ class _FallbackNetworkImageState extends State<_FallbackNetworkImage> {
 
   @override
   Widget build(BuildContext context) {
+    // 已知拉不到的图：直接出兜底，不再发起网络请求、不闪占位。
+    if (_negativeCache && widget.imageUrls.every(_deadUrls.contains)) {
+      return widget.errorBuilder();
+    }
     final dpr = MediaQuery.maybeOf(context)?.devicePixelRatio ?? 1.0;
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -321,6 +333,7 @@ class _FallbackNetworkImageState extends State<_FallbackNetworkImage> {
             }
             return widget.placeholderBuilder();
           case LoadState.completed:
+            if (_negativeCache) _deadUrls.remove(widget.imageUrls[_currentIndex]);
             _reportAspect(state.extendedImageInfo);
             return state.completedWidget;
           case LoadState.failed:
@@ -329,6 +342,8 @@ class _FallbackNetworkImageState extends State<_FallbackNetworkImage> {
                   ? state.completedWidget
                   : widget.placeholderBuilder();
             }
+            // 重试全用尽仍失败：本次运行记为「取不到」，之后 remount 直接出兜底。
+            if (_negativeCache) _deadUrls.addAll(widget.imageUrls);
             return widget.errorBuilder();
         }
       },

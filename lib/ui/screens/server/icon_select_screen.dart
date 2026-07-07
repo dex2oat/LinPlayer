@@ -31,17 +31,17 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
     (
       name: '图标源 2',
       url:
-          'https://v6.gh-proxy.org/https://gist.github.com/zzzwannasleep/fe6e84f43fcd64672ec71302f48a01ea/raw/4629cb6a10abf954c2ccb2f1b20b9149ba6f1bd9/icons.json'
+          'https://v4.gh-proxy.org/https://gist.github.com/zzzwannasleep/fe6e84f43fcd64672ec71302f48a01ea/raw/4629cb6a10abf954c2ccb2f1b20b9149ba6f1bd9/icons.json'
     ),
     (
       name: '图标源 3',
       url:
-          'https://v6.gh-proxy.org/https://gist.github.com/zzzwannasleep/a52322ad8cf1dcf7462dd4a33816e0f4/raw/ab4b2e1a8390c0f1d4f5171e9f2b24fba832a32e/icons.json'
+          'https://v4.gh-proxy.org/https://gist.github.com/zzzwannasleep/a52322ad8cf1dcf7462dd4a33816e0f4/raw/ab4b2e1a8390c0f1d4f5171e9f2b24fba832a32e/icons.json'
     ),
     (
       name: '图标源 4',
       url:
-          'https://v6.gh-proxy.org/https://gist.github.com/zzzwannasleep/1da6e9d12cd9285980c6aba05855dede/raw/bc278c72ac514eba4f9fab48a54975feeeb7d386/icons.json'
+          'https://v4.gh-proxy.org/https://gist.github.com/zzzwannasleep/1da6e9d12cd9285980c6aba05855dede/raw/bc278c72ac514eba4f9fab48a54975feeeb7d386/icons.json'
     ),
   ];
   static const double _desktopBreakpoint = 960;
@@ -340,6 +340,7 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
   /// 去掉 gh-proxy 反代前缀，拿到直连 gist 地址（反代挂了时退回直连）。
   static String _stripGhProxy(String url) {
     const prefixes = [
+      'https://v4.gh-proxy.org/',
       'https://v6.gh-proxy.org/',
       'https://gh-proxy.org/',
       'https://ghproxy.org/',
