@@ -5,6 +5,7 @@ import '../../../core/api/ranking/ranking_models.dart';
 import '../../../core/providers/ranking_providers.dart';
 import '../../theme/tv_design_tokens.dart';
 import '../../theme/tv_metrics.dart';
+import '../../../ui/widgets/common/ranking_entry_panel.dart';
 import '../../widgets/tv_focusable.dart';
 import '../../widgets/tv_poster_card.dart';
 
@@ -105,6 +106,7 @@ class _RankingRail extends ConsumerWidget {
                 padding: EdgeInsets.only(right: m.posterSpacing),
                 child: TvFocusable(
                   autofocus: autofocusFirst && i == 0,
+                  onSelect: () => showRankingEntryDialog(context, e),
                   child: _RankPoster(
                     entry: e,
                     width: width,

@@ -2,12 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/api/ranking/ranking_models.dart';
-import '../../../core/providers/media_providers.dart';
 import '../../../core/providers/ranking_providers.dart';
 import '../../../core/theme/app_motion.dart';
 import '../../../core/widgets/app_shimmer.dart';
-import '../../utils/media_helpers.dart';
 import '../../widgets/common/media_widgets.dart';
+import '../../widgets/common/ranking_entry_panel.dart';
 
 /// 移动端排行榜页（Material 风格）：顶部一级分组 + 子类胶囊，下方名次列表。
 /// 前三名金/银/铜大号名次，下拉刷新，点按看详情。
@@ -227,7 +226,7 @@ class _RankRow extends StatelessWidget {
     final theme = Theme.of(context);
     return InkWell(
       borderRadius: BorderRadius.circular(12),
-      onTap: () => _showEntrySheet(context, entry),
+      onTap: () => showRankingEntrySheet(context, entry),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
         child: Row(
@@ -401,147 +400,3 @@ Color? rankAccentColor(int rank) => switch (rank) {
       3 => const Color(0xFFCD7F32),
       _ => null,
     };
-
-/// 点按榜单条目：在所有已登录服务器里搜同名资源，按服务器分组展示集数/画质，
-/// 点某台即切到该服务器并打开对应结果。
-void _showEntrySheet(BuildContext context, RankingEntry entry) {
-  showModalBottomSheet<void>(
-    context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
-    builder: (context) => _EntrySheet(entry: entry),
-  );
-}
-
-class _EntrySheet extends ConsumerWidget {
-  const _EntrySheet({required this.entry});
-
-  final RankingEntry entry;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final async = ref.watch(rankingCrossServerMatchProvider(entry.title));
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(entry.title, style: theme.textTheme.titleMedium),
-          const SizedBox(height: 4),
-          Text(
-            '在已登录服务器中查找',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-          ),
-          const SizedBox(height: 12),
-          async.when(
-            loading: () => const Padding(
-              padding: EdgeInsets.symmetric(vertical: 28),
-              child: Center(child: CircularProgressIndicator()),
-            ),
-            error: (e, _) => Padding(
-              padding: const EdgeInsets.symmetric(vertical: 28),
-              child: Center(
-                child: Text('搜索失败，请稍后重试',
-                    style: theme.textTheme.bodyMedium),
-              ),
-            ),
-            data: (matches) {
-              if (matches.isEmpty) {
-                return const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 28),
-                  child: Center(child: Text('未在任何服务器找到')),
-                );
-              }
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (final m in matches) _ServerMatchRow(match: m),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ServerMatchRow extends ConsumerWidget {
-  const _ServerMatchRow({required this.match});
-
-  final ServerMatchInfo match;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final api = apiClientForItem(ref, match.item);
-    final urls = resolveMediaItemImageUrls(api, match.item, maxWidth: 180);
-    final epLabel =
-        match.episodeCount != null ? '共 ${match.episodeCount} 集' : '集数 —';
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
-      onTap: () {
-        Navigator.of(context).pop();
-        openMediaItem(ref, context, match.item);
-      },
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: MediaImage(
-                imageUrl: urls.isNotEmpty ? urls.first : null,
-                imageUrls: urls.length > 1 ? urls.sublist(1) : null,
-                width: 48,
-                height: 68,
-                fit: BoxFit.cover,
-                cacheWidth: 140,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    match.serverName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 8),
-                  _tag(theme, epLabel, null),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Icon(Icons.chevron_right_rounded,
-                color: theme.colorScheme.onSurfaceVariant),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-Widget _tag(ThemeData theme, String text, Color? color) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: (color ?? theme.colorScheme.surfaceContainerHighest)
-            .withValues(alpha: color == null ? 0.6 : 0.18),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        text,
-        style: theme.textTheme.labelMedium?.copyWith(
-          color: color ?? theme.colorScheme.onSurfaceVariant,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );

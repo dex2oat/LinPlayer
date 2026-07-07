@@ -5,6 +5,7 @@ import '../../../core/api/ranking/ranking_models.dart';
 import '../../../core/providers/ranking_providers.dart';
 import '../../../core/widgets/app_shimmer.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
+import '../../../ui/widgets/common/ranking_entry_panel.dart';
 
 /// 桌面端排行榜（左侧分类导轨 + 右侧海报网格 + hover 抬升）。风格独立于移动/TV。
 class DesktopRankingsScreen extends ConsumerStatefulWidget {
@@ -236,7 +237,9 @@ class _PosterCardState extends State<_PosterCard> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: AnimatedContainer(
+      child: GestureDetector(
+        onTap: () => showRankingEntryDialog(context, e),
+        child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         curve: Curves.fastOutSlowIn,
         transform: _hovered
@@ -339,6 +342,7 @@ class _PosterCardState extends State<_PosterCard> {
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               ),
           ],
+        ),
         ),
       ),
     );
