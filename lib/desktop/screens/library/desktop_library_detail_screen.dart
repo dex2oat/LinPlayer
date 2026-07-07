@@ -22,8 +22,25 @@ class DesktopLibraryDetailScreen extends ConsumerStatefulWidget {
 
 class _DesktopLibraryDetailScreenState
     extends ConsumerState<DesktopLibraryDetailScreen> {
-  LibraryFilterValue _filter = const LibraryFilterValue();
+  late LibraryFilterValue _filter;
   final ScrollController _scrollController = DesktopSmoothScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    // 排序从持久化偏好恢复；其它筛选保持每次进页面重置。
+    final sort = ref.read(librarySortProvider);
+    _filter = LibraryFilterValue(
+      sortBy: sort.sortBy,
+      sortDescending: sort.descending,
+    );
+  }
+
+  void _onFilterChanged(LibraryFilterValue v) {
+    setState(() => _filter = v);
+    ref.read(librarySortProvider.notifier).state =
+        LibrarySortPref(sortBy: v.sortBy, descending: v.sortDescending);
+  }
 
   @override
   void dispose() {
@@ -95,7 +112,7 @@ class _DesktopLibraryDetailScreenState
                 facets: facets,
                 value: _filter,
                 currentYear: DateTime.now().year,
-                onChanged: (v) => setState(() => _filter = v),
+                onChanged: _onFilterChanged,
               ),
               // 加载/失败不再静默隐藏，明确显示状态便于排查"看不到筛选"的归因。
               loading: () => const Padding(

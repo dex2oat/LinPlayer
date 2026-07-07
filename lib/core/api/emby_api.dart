@@ -1197,6 +1197,7 @@ MediaItem _parseMediaItem(Map<String, dynamic> d) {
             played: ud['Played'] as bool?,
             isFavorite: ud['IsFavorite'] as bool?,
             playCount: (ud['PlayCount'] as num?)?.toDouble(),
+            unplayedItemCount: (ud['UnplayedItemCount'] as num?)?.toInt(),
           )
         : null,
     seriesName: d['SeriesName']?.toString(),

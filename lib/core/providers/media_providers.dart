@@ -171,6 +171,36 @@ final personsProvider = FutureProvider.autoDispose.family<List<Person>, String>(
 /// 媒体库详情Providers
 /// ==========================================
 
+/// 媒体库详情页的排序偏好（跨页面/退出播放器返回后保持）。
+/// 只持久化排序字段本身；类型/标签/年份等筛选仍是每次进页面重置的临时态。
+class LibrarySortPref {
+  const LibrarySortPref({this.sortBy = 'SortName', this.descending = false});
+
+  final String sortBy;
+  final bool descending;
+}
+
+/// 排序偏好落盘（SharedPreferences），三端媒体库详情共用。
+final librarySortProvider =
+    StateNotifierProvider<PreferenceNotifier<LibrarySortPref>, LibrarySortPref>(
+        (ref) {
+  return PreferenceNotifier<LibrarySortPref>(
+    defaultValue: const LibrarySortPref(),
+    readValue: (prefs) {
+      final by = prefs.getString('linplayer_library_sort_by');
+      if (by == null) return null;
+      return LibrarySortPref(
+        sortBy: by,
+        descending: prefs.getBool('linplayer_library_sort_desc') ?? false,
+      );
+    },
+    writeValue: (prefs, value) async {
+      await prefs.setString('linplayer_library_sort_by', value.sortBy);
+      await prefs.setBool('linplayer_library_sort_desc', value.descending);
+    },
+  );
+});
+
 /// 媒体库内容
 final libraryItemsProvider = FutureProvider.autoDispose.family<
     List<MediaItem>,

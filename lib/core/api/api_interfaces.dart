@@ -395,11 +395,16 @@ class UserData {
   final bool? isFavorite;
   final double? playCount;
 
+  /// 剧集/季未看集数（Emby UserData.UnplayedItemCount）。看完一集后服务端会 -1，
+  /// 卡片右上角角标用它显示"还剩几集没看"（像 Emby）。全看完为 0。
+  final int? unplayedItemCount;
+
   UserData({
     this.playbackPositionTicks,
     this.played,
     this.isFavorite,
     this.playCount,
+    this.unplayedItemCount,
   });
 }
 

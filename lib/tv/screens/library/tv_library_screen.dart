@@ -35,12 +35,18 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
   int _densityIndex = 1;
   String? _libraryId;
   // 筛选 + 排序（服务端过滤；排序字段/升降序也并入 _filter）
-  LibraryFilterValue _filter = const LibraryFilterValue();
+  late LibraryFilterValue _filter;
 
   @override
   void initState() {
     super.initState();
     _libraryId = widget.initialLibraryId;
+    // 排序从持久化偏好恢复；其它筛选保持每次进页面重置。
+    final sort = ref.read(librarySortProvider);
+    _filter = LibraryFilterValue(
+      sortBy: sort.sortBy,
+      sortDescending: sort.descending,
+    );
   }
 
   @override
@@ -125,7 +131,12 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
       children: [
         for (final opt in _sortOptions)
           TvFocusable(
-            onSelect: () => setState(() => _filter = _filter.toggledSort(opt.key)),
+            onSelect: () {
+              final v = _filter.toggledSort(opt.key);
+              setState(() => _filter = v);
+              ref.read(librarySortProvider.notifier).state =
+                  LibrarySortPref(sortBy: v.sortBy, descending: v.sortDescending);
+            },
             child: _chip(
               m,
               icon: _filter.sortBy == opt.key

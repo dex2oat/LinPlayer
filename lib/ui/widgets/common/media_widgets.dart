@@ -519,7 +519,10 @@ class MediaPoster extends ConsumerWidget {
     }
 
     final isSeries = item.type == 'Series' || item.type == 'Season';
-    final episodeCount = item.recursiveItemCount ?? item.childCount;
+    // 角标显示"未看集数"（像 Emby）：优先用服务端 UnplayedItemCount，看完一集即 -1；
+    // 服务端没返回时退回总集数。全看完为 0 → 不显示数字（改由已看勾选标记体现）。
+    final episodeCount =
+        item.userData?.unplayedItemCount ?? item.recursiveItemCount ?? item.childCount;
 
     return InkWell(
       onTap: onTap,

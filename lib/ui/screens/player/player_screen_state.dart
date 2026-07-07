@@ -506,6 +506,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         );
         await _maybeScrobbleWatched(
             info, item, api, watchedThreshold, syncController);
+        // 看完一集后刷新媒体库网格，让封面右上角"未看集数"角标随之 -1。
+        if (mounted) ref.invalidate(libraryItemsProvider);
       },
     );
 

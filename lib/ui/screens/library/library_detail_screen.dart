@@ -20,7 +20,25 @@ class LibraryDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _LibraryDetailScreenState extends ConsumerState<LibraryDetailScreen> {
-  LibraryFilterValue _filter = const LibraryFilterValue();
+  late LibraryFilterValue _filter;
+
+  @override
+  void initState() {
+    super.initState();
+    // 排序从持久化偏好恢复；其它筛选（类型/标签/年份）保持每次进页面重置。
+    final sort = ref.read(librarySortProvider);
+    _filter = LibraryFilterValue(
+      sortBy: sort.sortBy,
+      sortDescending: sort.descending,
+    );
+  }
+
+  void _onFilterChanged(LibraryFilterValue v) {
+    setState(() => _filter = v);
+    // 排序变化落盘，退出播放器返回后仍生效。
+    ref.read(librarySortProvider.notifier).state =
+        LibrarySortPref(sortBy: v.sortBy, descending: v.sortDescending);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -51,7 +69,7 @@ class _LibraryDetailScreenState extends ConsumerState<LibraryDetailScreen> {
               value: _filter,
               currentYear: DateTime.now().year,
               compact: true, // 移动端：类型/标签走搜索弹窗，避免筛选面板占满屏幕
-              onChanged: (v) => setState(() => _filter = v),
+              onChanged: _onFilterChanged,
             ),
             orElse: () => const SizedBox.shrink(),
           ),
