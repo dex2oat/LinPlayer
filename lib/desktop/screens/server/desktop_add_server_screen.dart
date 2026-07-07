@@ -294,7 +294,11 @@ class _DesktopAddServerScreenState extends ConsumerState<DesktopAddServerScreen>
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           name: name,
           baseUrl: fullUrl,
-          iconUrl: ServerBatchAdder.buildIconUrl(fullUrl),
+          iconUrl: ServerBatchAdder.buildIconUrl(
+            fullUrl,
+            userId: authResult.userId,
+            primaryImageTag: authResult.user.primaryImageTag,
+          ),
           lines: [ServerLine(
             id: 'default',
             name: '默认线路',

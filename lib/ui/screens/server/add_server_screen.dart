@@ -332,7 +332,11 @@ class _AddServerScreenState extends ConsumerState<AddServerScreen> with SingleTi
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           name: serverInfo.serverName,
           baseUrl: fullUrl,
-          iconUrl: ServerBatchAdder.buildIconUrl(fullUrl),
+          iconUrl: ServerBatchAdder.buildIconUrl(
+            fullUrl,
+            userId: authResult.userId,
+            primaryImageTag: authResult.user.primaryImageTag,
+          ),
           lines: [ServerLine(
             id: 'default',
             name: '默认线路',

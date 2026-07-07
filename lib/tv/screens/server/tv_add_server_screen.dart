@@ -68,7 +68,11 @@ class _TvAddServerScreenState extends ConsumerState<TvAddServerScreen> {
         id: DateTime.now().millisecondsSinceEpoch.toString(),
         name: info.serverName,
         baseUrl: url,
-        iconUrl: ServerBatchAdder.buildIconUrl(url),
+        iconUrl: ServerBatchAdder.buildIconUrl(
+          url,
+          userId: auth.userId,
+          primaryImageTag: auth.user.primaryImageTag,
+        ),
         username: username,
         authToken: auth.accessToken,
         userId: auth.userId,

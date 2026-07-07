@@ -62,7 +62,11 @@ class ServerBatchAdder {
           id: const Uuid().v4(),
           name: name,
           baseUrl: url,
-          iconUrl: buildIconUrl(url),
+          iconUrl: buildIconUrl(
+            url,
+            userId: auth.userId,
+            primaryImageTag: auth.user.primaryImageTag,
+          ),
           lines: lines,
           activeLineIndex: i,
           username: username,
@@ -78,12 +82,24 @@ class ServerBatchAdder {
     throw Exception('所有线路均登录失败：$lastErr');
   }
 
-  /// Emby 触摸图标地址。Emby 会返回服务器自定义品牌图标，未自定义则是官方默认 Emby 图标；
-  /// 取不到(404/超时)时由 UI 的 errorBuilder 回退到内置图标。
-  static String buildIconUrl(String baseUrl) {
+  /// 服务器图标地址。优先用登录用户的头像——很多 Emby 服把品牌 logo 直接设成
+  /// 用户头像，且用户头像在 Emby 是公开资源(登录选人界面免登录就显示)，无需 api_key。
+  /// 该用户没头像时退回 `/web/touchicon.png`(web 客户端的触摸图标)。
+  /// 两者都取不到时(如关了 /web 的纯 API 服)，由 UI 的 errorWidget 回退到内置 Emby 图标。
+  static String buildIconUrl(
+    String baseUrl, {
+    String? userId,
+    String? primaryImageTag,
+  }) {
     var b = baseUrl.trim();
     while (b.endsWith('/')) {
       b = b.substring(0, b.length - 1);
+    }
+    if (userId != null &&
+        userId.isNotEmpty &&
+        primaryImageTag != null &&
+        primaryImageTag.isNotEmpty) {
+      return '$b/Users/$userId/Images/Primary?tag=$primaryImageTag';
     }
     return '$b/web/touchicon.png';
   }
