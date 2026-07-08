@@ -41,6 +41,13 @@ class _DesktopMediaCardState extends ConsumerState<DesktopMediaCard> {
     final api = apiClientForItem(ref, widget.item);
     final imageUrls =
         resolveMediaItemImageUrls(api, widget.item, maxWidth: 400);
+    // 剧集卡左下角"未看集数"角标（与移动端右上角同源：优先 UnplayedItemCount，
+    // 服务端没返回退回总集数；全看完为 0 → 不显示）。
+    final unplayedCount = widget.item.userData?.unplayedItemCount ??
+        widget.item.recursiveItemCount ??
+        widget.item.childCount;
+    final isSeries =
+        widget.item.type == 'Series' || widget.item.type == 'Season';
     final theme = Theme.of(context);
     final aspectRatio =
         widget.height != null ? widget.width / widget.height! : 2 / 3;
@@ -162,6 +169,18 @@ class _DesktopMediaCardState extends ConsumerState<DesktopMediaCard> {
                                 ],
                               ),
                             ),
+                          ),
+                        if (isSeries &&
+                            unplayedCount != null &&
+                            unplayedCount > 0)
+                          Positioned(
+                            // 进度条占了底部整行，续播卡上抬 8px 避免压住。
+                            bottom: (widget.showProgress &&
+                                    widget.item.progress != null)
+                                ? 16
+                                : 8,
+                            left: 8,
+                            child: CountBadge(count: unplayedCount),
                           ),
                       ],
                     ),

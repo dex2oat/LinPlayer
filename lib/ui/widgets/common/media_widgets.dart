@@ -572,7 +572,7 @@ class MediaPoster extends ConsumerWidget {
                         Positioned(
                           top: 8,
                           right: item.isWatched ? 32 : 8,
-                          child: _CountBadge(count: episodeCount),
+                          child: CountBadge(count: episodeCount),
                         ),
                     ],
                   ),
@@ -601,7 +601,7 @@ class MediaPoster extends ConsumerWidget {
                       Positioned(
                         top: 8,
                         right: item.isWatched ? 32 : 8,
-                        child: _CountBadge(count: episodeCount),
+                        child: CountBadge(count: episodeCount),
                       ),
                   ],
                 ),
@@ -647,8 +647,8 @@ class MediaPoster extends ConsumerWidget {
   }
 }
 
-class _CountBadge extends StatelessWidget {
-  const _CountBadge({required this.count});
+class CountBadge extends StatelessWidget {
+  const CountBadge({super.key, required this.count});
 
   final int count;
 

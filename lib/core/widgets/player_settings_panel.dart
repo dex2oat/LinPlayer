@@ -90,17 +90,21 @@ class PlayerPanelColors {
 /// 打开一个右侧设置面板。
 ///
 /// [title] 标题；[children] 面板内容（建议用本文件的 Panel* 组件构建）。
-/// [width] 期望宽度，最终会被屏幕 1/3 裁剪；不传则用 [PlayerPanelTokens.defaultWidth]。
+/// [width] 期望宽度，最终会被屏幕宽度裁剪；不传则用 [PlayerPanelTokens.defaultWidth]。
+/// [maxWidthFraction] 宽度上限占屏比，不传默认 [PlayerPanelTokens.maxWidthFraction]（1/3）；
+///   集数弹窗等需要更宽空间（封面+参数）的面板可放宽到 1/2。
 /// [titleTrailing] 标题栏右侧（关闭按钮左边）的可选操作区。
 Future<T?> showPlayerSettingsPanel<T>({
   required BuildContext context,
   required String title,
   required List<Widget> children,
   double? width,
+  double? maxWidthFraction,
   Widget? titleTrailing,
 }) {
   final mediaQuery = MediaQuery.of(context);
-  final double maxWidth = mediaQuery.size.width * PlayerPanelTokens.maxWidthFraction;
+  final double maxWidth = mediaQuery.size.width *
+      (maxWidthFraction ?? PlayerPanelTokens.maxWidthFraction);
   final double panelWidth =
       math.min(width ?? PlayerPanelTokens.defaultWidth, maxWidth);
   final double maxHeight =

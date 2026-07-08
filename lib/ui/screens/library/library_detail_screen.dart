@@ -21,6 +21,7 @@ class LibraryDetailScreen extends ConsumerStatefulWidget {
 
 class _LibraryDetailScreenState extends ConsumerState<LibraryDetailScreen> {
   late LibraryFilterValue _filter;
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
@@ -31,6 +32,12 @@ class _LibraryDetailScreenState extends ConsumerState<LibraryDetailScreen> {
       sortBy: sort.sortBy,
       sortDescending: sort.descending,
     );
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   void _onFilterChanged(LibraryFilterValue v) {
@@ -60,51 +67,77 @@ class _LibraryDetailScreenState extends ConsumerState<LibraryDetailScreen> {
       appBar: AppBar(
         title: const Text('媒体库'),
       ),
-      body: Column(
-        children: [
-          // 筛选面板（类型/标签/工作室/时间/评分，服务端过滤）
+      body: CustomScrollView(
+        controller: _scrollController,
+        slivers: [
+          // 筛选面板：随网格下滑往上渐隐并滚出（与桌面端一致——面板不再固定占顶）。
           filtersAsync.maybeWhen(
-            data: (facets) => LibraryFilterBar(
-              facets: facets,
-              value: _filter,
-              currentYear: DateTime.now().year,
-              compact: true, // 移动端：类型/标签走搜索弹窗，避免筛选面板占满屏幕
-              onChanged: _onFilterChanged,
+            data: (facets) => SliverToBoxAdapter(
+              child: AnimatedBuilder(
+                animation: _scrollController,
+                builder: (context, child) {
+                  final offset = _scrollController.hasClients
+                      ? _scrollController.offset
+                      : 0.0;
+                  // ponytail: 前 90px 线性渐隐；面板本身也随滚动上移滑出，二者叠加=往上逐渐消失。
+                  final opacity = (1 - offset / 90).clamp(0.0, 1.0);
+                  return Opacity(opacity: opacity, child: child);
+                },
+                child: LibraryFilterBar(
+                  facets: facets,
+                  value: _filter,
+                  currentYear: DateTime.now().year,
+                  compact: true, // 移动端：类型/标签走搜索弹窗，避免筛选面板占满屏幕
+                  onChanged: _onFilterChanged,
+                ),
+              ),
             ),
-            orElse: () => const SizedBox.shrink(),
+            orElse: () => const SliverToBoxAdapter(child: SizedBox.shrink()),
           ),
 
           // 内容网格
-          Expanded(
-            child: itemsAsync.when(
-              data: (items) {
-                if (items.isEmpty) {
-                  return const Center(child: Text('暂无内容'));
-                }
-                
-                return GridView.builder(
-                  padding: const EdgeInsets.all(16),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          itemsAsync.when(
+            data: (items) {
+              if (items.isEmpty) {
+                return const SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Center(child: Text('暂无内容')),
+                );
+              }
+
+              return SliverPadding(
+                padding: const EdgeInsets.all(16),
+                sliver: SliverGrid(
+                  gridDelegate:
+                      const SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 3,
                     childAspectRatio: 0.55,
                     crossAxisSpacing: 12,
                     mainAxisSpacing: 12,
                   ),
-                  itemCount: items.length,
-                  itemBuilder: (context, index) {
-                    final item = items[index];
-                  return MediaPoster(
-                      item: item,
-                      width: double.infinity,
-                      height: double.infinity,
-                      onTap: () => context.push(mediaRouteForItem(item)),
-                      heroTag: 'library_${item.id}',
-                    ).appEntrance(index: index);
-                  },
-                );
-              },
-              loading: () => const AppLoadingIndicator(),
-              error: (error, _) => Center(child: Text('加载失败: $error')),
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) {
+                      final item = items[index];
+                      return MediaPoster(
+                        item: item,
+                        width: double.infinity,
+                        height: double.infinity,
+                        onTap: () => context.push(mediaRouteForItem(item)),
+                        heroTag: 'library_${item.id}',
+                      ).appEntrance(index: index);
+                    },
+                    childCount: items.length,
+                  ),
+                ),
+              );
+            },
+            loading: () => const SliverFillRemaining(
+              hasScrollBody: false,
+              child: AppLoadingIndicator(),
+            ),
+            error: (error, _) => SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(child: Text('加载失败: $error')),
             ),
           ),
         ],

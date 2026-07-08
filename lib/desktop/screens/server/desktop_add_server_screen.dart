@@ -218,6 +218,18 @@ class _DesktopAddServerScreenState extends ConsumerState<DesktopAddServerScreen>
     );
   }
   
+  /// 添加服务器成功后回到首页。
+  ///
+  /// 不能只 `context.go('/')`：源选择器 / Emby 表单是 `context.push` 压在壳之上的顶级页，
+  /// `go` 不会清掉这些命令式压栈页，回到壳时仍停在进入添加流程前所在的「服务器」分支
+  /// → 首页看着变成服务器页、要重启才恢复。先把壳之上所有压栈页弹掉回到壳，再切回首页分支。
+  void _returnToHomeAfterAdd() {
+    final router = GoRouter.of(context);
+    Navigator.of(context, rootNavigator: true)
+        .popUntil((route) => route.isFirst);
+    router.go('/');
+  }
+
   void _openBatchParse() {
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => Scaffold(
@@ -229,7 +241,7 @@ class _DesktopAddServerScreenState extends ConsumerState<DesktopAddServerScreen>
               onAdded: (setCurrent) {
                 if (!mounted) return;
                 if (setCurrent) {
-                  context.go('/');
+                  _returnToHomeAfterAdd();
                 } else {
                   Navigator.of(context).pop();
                 }
@@ -316,7 +328,7 @@ class _DesktopAddServerScreenState extends ConsumerState<DesktopAddServerScreen>
         ref.read(authStateProvider.notifier).state = AuthState.authenticated;
         
         if (!mounted) return;
-        context.go('/');
+        _returnToHomeAfterAdd();
       } else {
         final name = _nameController.text.trim().isNotEmpty
             ? _nameController.text.trim()

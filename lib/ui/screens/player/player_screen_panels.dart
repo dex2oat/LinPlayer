@@ -330,6 +330,23 @@ class _DanmakuSettingsContent extends ConsumerWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // 「搜索弹幕」入口直接放进弹幕面板：之前只藏在「更多选项」里，用户在弹幕面板找不到。
+        PanelActionTile(
+          icon: Icons.search_rounded,
+          label: '搜索弹幕',
+          filled: true,
+          onTap: () {
+            final nav = Navigator.of(context);
+            final item = ref.read(currentPlayingItemProvider);
+            nav.pop();
+            showPlayerSettingsPanel(
+              context: nav.context,
+              title: '搜索弹幕',
+              children: [DanmakuSearchContent(item: item)],
+            );
+          },
+        ),
+        const PanelDivider(),
         PanelSwitchRow(
           label: '显示弹幕',
           value: danmakuEnabled,
@@ -1079,7 +1096,7 @@ class _EpisodeSelectorContentState
     final colors = PlayerPanelColors.resolve(context);
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Column(
         children: [
           // 头部控制栏
@@ -1208,11 +1225,15 @@ class _EpisodeSelectorContentState
             );
 
             return ListTile(
+              // 两边只留一点点内边距，把宽度让给封面和参数。
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              horizontalTitleGap: 10,
               leading: ClipRRect(
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(8),
                 child: Container(
-                  width: 80,
-                  height: 48,
+                  width: 112,
+                  height: 64,
                   color: colors.controlTrack,
                   child: imageUrls.isNotEmpty
                       ? MediaImage(
@@ -1220,8 +1241,8 @@ class _EpisodeSelectorContentState
                           imageUrls: imageUrls.length > 1
                               ? imageUrls.sublist(1)
                               : null,
-                          width: 80,
-                          height: 48,
+                          width: 112,
+                          height: 64,
                           fit: BoxFit.cover,
                         )
                       : const Center(child: Icon(Icons.play_arrow, size: 20)),
@@ -1247,15 +1268,16 @@ class _EpisodeSelectorContentState
                   ),
                 ],
               ),
+              // 参数尽量显示全：放两行、字号略缩到 11.5，位置不够才省略。
               subtitle: Text(
                 [
                   episode.formattedRuntime,
                   episode.videoResolution,
                   episode.formattedBitRate,
                 ].whereType<String>().where((s) => s.isNotEmpty).join(' · '),
-                maxLines: 1,
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 12, color: colors.textSecondary),
+                style: TextStyle(fontSize: 11.5, color: colors.textSecondary),
               ),
               trailing: isCurrent
                   ? Icon(Icons.play_circle, color: colors.accent)

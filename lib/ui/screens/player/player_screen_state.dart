@@ -2714,12 +2714,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   void _showRightPanel(
       {required String title,
       required List<Widget> children,
-      double? width}) {
+      double? width,
+      double? maxWidthFraction}) {
     // 统一走共享的右侧设置面板（透明遮罩 + 局部毛玻璃 + 宽度≤1/3 + 深浅自适应）。
     showPlayerSettingsPanel(
       context: context,
       title: title,
       width: width,
+      maxWidthFraction: maxWidthFraction,
       children: children,
     );
   }
@@ -2851,6 +2853,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
     _showRightPanel(
       title: '选集',
+      // 集数弹窗比普通设置面板宽：手机横屏下 1/3 只有 ~280px，封面小、参数挤。
+      // 放宽到 1/2（普通面板仍走默认 1/3），封面和参数才有空间。
+      width: 460,
+      maxWidthFraction: 0.5,
       children: [
         SizedBox(
           height: MediaQuery.of(context).size.height * 0.7,
