@@ -29,8 +29,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
   // 兜底续播前等 demuxer 就绪（duration 落定）。网络 4K 冷启动可能数秒，
   // 给足耐心，避免“还没加载完就判失败”从头播放；start 选项命中后会立即返回。
   static const _demuxerReadyTimeout = Duration(seconds: 15);
-  // 本次 app 运行是否已探过 Windows ANGLE 渲染是否可用（好机器只探一次,免每次起播多等）。
-  static bool _eglProbeDoneThisSession = false;
 
   Player? _player;
   VideoController? _videoController;
@@ -67,12 +65,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
   bool _currentSubIsAss = false;
   bool _usingExternalSubtitle = false;
   bool _pgsDecoderAvailable = true;
-  // Windows ANGLE 渲染兜底：libmpv 渲染 API 的 EGL 上下文建 surface 失败 → 画面
-  // 渲染不出、播放卡死。检测到即持久化,后续 VideoController 关硬件加速走软件纹理。
-  bool _useSoftwareRendering = false;
-  bool _eglSurfaceFailed = false;
-  bool _swRenderRetried = false;
-  bool _swRenderPersisted = false;
   String _lastSubtitleCueText = '';
   bool _isSeekBuffering = false;
   Timer? _seekBufferingFallbackTimer;
@@ -573,12 +565,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
           ? Map<String, String>.from(httpHeaders)
           : null;
       _userAgentOverride = userAgentOverride;
-      // 每次 open 重探 EGL 失败；软件渲染决定持久化,启动即读(已判定过的机器直接软渲染)。
-      _eglSurfaceFailed = false;
-      if (Platform.isWindows) {
-        _useSoftwareRendering =
-            await CacheService.getWindowsSoftwareRendering();
-      }
 
       await _configManager.initialize();
       await _configManager.writeConfig(
@@ -608,12 +594,9 @@ class MpvPlayerAdapter implements PlayerAdapter {
       // 黑屏(音频不受影响)，老 macOS(12.x/Intel)尤甚。改用软件纹理 TextureSW
       // (CVPixelBuffer 拷贝，不用 GL 上下文)彻底免疫该泄漏；解码仍是硬解
       // (videotoolbox-copy)，只是最终一帧上传走 CPU，代价可接受。其余平台不变。
-      // Windows：ANGLE 渲染建 EGL surface 失败的机器同样走软件纹理（持久化后启动即用）。
-      final softwareRendering =
-          Platform.isMacOS || (Platform.isWindows && _useSoftwareRendering);
       _videoController = VideoController(
         _player!,
-        configuration: softwareRendering
+        configuration: Platform.isMacOS
             ? const VideoControllerConfiguration(
                 enableHardwareAcceleration: false)
             : const VideoControllerConfiguration(),
@@ -716,49 +699,19 @@ class MpvPlayerAdapter implements PlayerAdapter {
             // 关键：只开 reconnect_on_network_error，不开 reconnect_on_http_error——
             // 网盘 302 签名过期返回的 4xx/5xx 必须冒出来交给 L2 重解析重签，
             // 若让 ffmpeg 死磕过期链，错误永不上抛，L2 反而触发不了。
-            // multiple_requests=1：让 libavformat 用 HTTP keep-alive 在同一条
-            // TCP+TLS 连接上发后续 Range/seek 请求，而非每次关连接重开——seek 与
-            // reconnect 都少一次握手，跨境流明显更跟手。与 302 重签逻辑正交
-            // （那是 http_error 层，不受连接复用影响）。
+            // ⚠️ 不要加 multiple_requests=1：本意是 HTTP keep-alive 复用连接省握手，
+            // 但对部分 Emby/服务器,libavformat 复用连接发 Range/seek 时会灾难性变慢——
+            // 实测 ffprobe 打开同一 MKV：默认 1.6s，加 multiple_requests=1 → 3m35s(×130)。
+            // 表现为 mpv 读 MKV 尾部 Cues 索引卡死十几秒→无画无声"加载不出来"。
+            // reconnect 系列实测 1.9s 无副作用,保留(治跨境断流)。
             await np.setProperty('stream-lavf-o',
-                'multiple_requests=1,reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=30');
+                'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=30');
             await np.setProperty('stream-buffer-size', '33554432');
             await np.setProperty('interpolation', 'no');
             await np.setProperty('prefetch-playlist', 'no');
             await np.setProperty('vd-lavc-threads', '0');
             await np.setProperty('ad-lavc-threads', '0');
           }
-        }
-      }
-
-      // Windows ANGLE 兜底：渲染上下文建 EGL surface 失败会在建控制器后很快冒出
-      // (日志约百毫秒内)。在「开流之前」就地判定,失败即切软件渲染重开一次——避免
-      // 用坏掉的硬件渲染开流后卡死 15s/黑屏。auto-copy 已挡住崩溃,这里从容重开。
-      if (Platform.isWindows && !_useSoftwareRendering && !_swRenderRetried) {
-        // 只在「本次 app 运行还没探过」时等一下让 EGL 失败冒出来；探过是好机器
-        // (没失败)就不再为每次起播多等,健康机零额外延迟。
-        if (!_eglSurfaceFailed && !_eglProbeDoneThisSession) {
-          await Future.delayed(const Duration(milliseconds: 500));
-        }
-        _eglProbeDoneThisSession = true;
-        if (_eglSurfaceFailed) {
-          _swRenderRetried = true;
-          _useSoftwareRendering = true;
-          await CacheService.setWindowsSoftwareRendering(true);
-          _logger.w('MpvAdapter',
-              'ANGLE 渲染建 EGL surface 失败,改用软件渲染重开视频(仅本机一次性切换)');
-          return initialize(
-            videoUrl: videoUrl,
-            startPosition: startPosition,
-            dolbyVisionFix: dolbyVisionFix,
-            useLibass: useLibass,
-            hardwareDecoding: hardwareDecoding,
-            preferredSubtitleLanguage: preferredSubtitleLanguage,
-            surfaceViewId: surfaceViewId,
-            useGpuNext: useGpuNext,
-            httpHeaders: httpHeaders,
-            userAgentOverride: userAgentOverride,
-          );
         }
       }
 
@@ -849,19 +802,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
     _subscriptions.add(_player!.stream.log.listen((log) {
       final level = log.level.toLowerCase();
       final msg = 'mpv[${log.prefix}] ${log.text}'.trimRight();
-      // Windows：libmpv 渲染 API 的 ANGLE(EGL) 上下文建 surface 失败 → 画面渲染不出、
-      // 播放卡死。捕获即持久化(即便本次 init 卡住/黑屏,下次启动直接软件渲染自愈),
-      // 并让 initialize 在开流前就地切软件渲染重开。
-      if (Platform.isWindows &&
-          !_useSoftwareRendering &&
-          (log.text.contains('Failed to create EGL surface') ||
-              log.prefix.contains('dxva2-egl'))) {
-        _eglSurfaceFailed = true;
-        if (!_swRenderPersisted) {
-          _swRenderPersisted = true;
-          unawaited(CacheService.setWindowsSoftwareRendering(true));
-        }
-      }
       if (level == 'error' || level == 'fatal') {
         _logger.e('MpvNative', msg);
       } else {

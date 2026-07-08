@@ -17,7 +17,6 @@ class CacheService {
   static const _imageCacheExpiryDaysKey = 'linplayer_image_cache_expiry_days';
   static const _videoCacheMaxSizeMBKey = 'linplayer_video_cache_max_size_mb';
   static const _pgsBlendModeKey = 'linplayer_pgs_blend_mode';
-  static const _winSoftwareRenderingKey = 'linplayer_win_software_rendering';
 
   /// 图片磁盘缓存硬上限：6GB。
   static const int imageCacheMaxBytes = 6 * 1024 * 1024 * 1024;
@@ -117,22 +116,6 @@ class CacheService {
     final prefs = await SharedPreferences.getInstance();
     final v = prefs.getString(_pgsBlendModeKey);
     return (v == 'yes' || v == 'video') ? v! : 'no';
-  }
-
-  /// Windows 软件渲染兜底（持久化）。
-  ///
-  /// 某些 GPU/驱动下 media_kit 提供给 libmpv 渲染 API 的 ANGLE(EGL) 上下文建不出
-  /// surface（日志 `libmpv_render/dxva2-egl Failed to create EGL surface`），画面
-  /// 渲染不出、播放整体卡死（无画无声）。检测到即置位,后续 VideoController 关硬件
-  /// 加速走软件纹理（不经 ANGLE），画面恢复；代价是每帧上传走 CPU，可接受。仅 Windows。
-  static Future<bool> getWindowsSoftwareRendering() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_winSoftwareRenderingKey) ?? false;
-  }
-
-  static Future<void> setWindowsSoftwareRendering(bool enabled) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_winSoftwareRenderingKey, enabled);
   }
 
   /// mpv 解复用缓冲（前向/后向）的 RAM 安全预算，单位字节。
