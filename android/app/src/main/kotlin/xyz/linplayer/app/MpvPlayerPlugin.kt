@@ -727,11 +727,16 @@ class MpvPlayerPlugin(
         fun getTracksInfo(): List<Map<String, Any>> = currentTracks
 
         fun selectSubtitleTrack(trackId: String) {
-            MPVLib.command(arrayOf("set_property", "sid", trackId))
+            // sid 走属性接口设置（与下面 selectAudioTrack 的 aid 完全一致）。
+            // 原写法 command("set_property", "sid", …) 是**无效命令**——mpv 命令接口里没有
+            // "set_property"（那是 libmpv C API 函数名，非命令名）→ mpv 报
+            // "Command 'set_property' not found" → sid 从未真正设上 → 选了字幕轨也不渲染。
+            // 这是移动端内封字幕不显示的第二层根因（第一层是轨道投递竞态，见提交 26484fd）。
+            MPVLib.setPropertyString("sid", trackId)
         }
 
         fun deselectSubtitleTrack() {
-            MPVLib.command(arrayOf("set_property", "sid", "no"))
+            MPVLib.setPropertyString("sid", "no")
         }
 
         fun selectAudioTrack(trackId: String) {

@@ -415,6 +415,12 @@ class DanmakuPainter extends CustomPainter {
     if (elapsed < 0) return -trackItem.width;
 
     if (type == 4 || type == 5) {
+      // 固定弹幕（顶部/底部）只显示 _topBottomDuration 秒；过期返回屏外坐标，让
+      // paint 里的裁剪（x > size.width）把它剔除。**必须与 _assignLane 腾出轨道的时机
+      // 对齐**：否则画面寿命(_visibleWindow=30s) > 占用寿命(_topBottomDuration=5s)，
+      // 5 秒后旧弹幕仍在画、轨道却被判空 → 新固定弹幕拿到同轨同居中坐标 → 精确重叠
+      // （这就是「置顶弹幕互相覆盖不顺延」的根因）。对齐后固定弹幕在存活期内按轨道逐条顺延。
+      if (elapsed > _topBottomDuration) return size.width + trackItem.width;
       return (size.width - trackItem.width) / 2;
     }
 
