@@ -139,7 +139,11 @@ $env:LINPLAYER_SKIP_LIBMPV_UPGRADE = "1"; flutter build windows
 ## Star History
 
 <a href="https://star-history.com/#zzzwannasleep/LinPlayer&Date">
-  <img src="https://api.star-history.com/svg?repos=zzzwannasleep/LinPlayer&type=Date" alt="Star History Chart" width="600">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=zzzwannasleep/linplayer&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=zzzwannasleep/linplayer&type=Date" />
+    <img src="https://api.star-history.com/svg?repos=zzzwannasleep/linplayer&type=Date" alt="Star History Chart" width="600" />
+  </picture>
 </a>
 
 ## 项目活跃度
