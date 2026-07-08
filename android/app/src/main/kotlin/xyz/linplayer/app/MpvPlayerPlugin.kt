@@ -31,6 +31,10 @@ class MpvPlayerPlugin(
 
     companion object {
         private const val TAG = "MpvPlayerPlugin"
+        // fontconfig 设置结果（system 字体源是否存在/CJK 是否在），随 FILE_LOADED 的
+        // sub-diag 一并转发进 App 日志，便于远程判定"字幕不显示"是否卡在字体源。
+        @JvmStatic
+        var lastFontStatus: String = "(未初始化)"
         private const val METHOD_CHANNEL = "com.linplayer/mpv"
     }
 
@@ -255,11 +259,15 @@ class MpvPlayerPlugin(
      * 字体目录从未生效。Android 默认无 fontconfig 配置 → fontconfig 找不到任何字体 →
      * 文本字幕整段不渲染（位图 PGS 不依赖字体，另说）。
      *
-     * 这里在 MPVLib.create() **之前**（fontconfig 初始化即读环境变量）生成一份指向
-     * /system/fonts 的 fonts.conf 并用 FONTCONFIG_FILE 指过去，让 fontconfig 扫到
-     * NotoSansCJK/Roboto/DroidSansFallback 等系统字体；泛族(sans-serif/serif/monospace)
-     * 与末位兜底都解析到实际存在的中日字体，覆盖 SRT(无样式默认 sans-serif) 与
-     * ASS(引用具体字体名，缺失时回退)。
+     * 这里在 MPVLib.create() **之前**（fontconfig 初始化即读环境变量）生成一份**只加
+     * /system/fonts 目录 + 泛族解析**的 fonts.conf，并用 FONTCONFIG_FILE 指过去，让
+     * fontconfig 直接用系统自带字体（NotoSansCJK/Roboto 等），**不打包、不拷贝字体**。
+     *
+     * **绝不覆盖具名字体**：只给无样式 SRT/纯文本的泛族(sans-serif/serif/monospace)一个
+     * 真实字体解析；不写 Arial→X 之类的具名覆盖、不写末位强制 append。内封子集化特效 ASS
+     * 的字体是作为**容器附件**由 libass(embeddedfonts=yes)直接加载的，fontconfig 不参与，
+     * 故此配置不会把特效字幕"干到别的字体去"。fontconfig 对真正缺失的具名字体本就会返回
+     * 最接近的可用字体（其默认行为），无需我们强制。
      */
     private fun setupFontconfig(context: android.content.Context) {
         try {
@@ -273,14 +281,10 @@ class MpvPlayerPlugin(
 <fontconfig>
   <dir>/system/fonts</dir>
   <dir>/product/fonts</dir>
-  <dir>/system/font</dir>
-  <dir>/data/fonts</dir>
   <cachedir>${cacheDir.absolutePath}</cachedir>
-  <alias><family>sans-serif</family><prefer><family>Noto Sans CJK SC</family><family>Noto Sans</family><family>Roboto</family><family>Droid Sans Fallback</family></prefer></alias>
-  <alias><family>serif</family><prefer><family>Noto Serif CJK SC</family><family>Noto Serif</family><family>Droid Sans Fallback</family></prefer></alias>
+  <alias><family>sans-serif</family><prefer><family>Noto Sans CJK SC</family><family>Roboto</family><family>Noto Sans</family><family>Droid Sans Fallback</family></prefer></alias>
+  <alias><family>serif</family><prefer><family>Noto Serif CJK SC</family><family>Noto Serif</family></prefer></alias>
   <alias><family>monospace</family><prefer><family>Droid Sans Mono</family><family>Roboto Mono</family></prefer></alias>
-  <alias><family>Arial</family><prefer><family>Roboto</family><family>Noto Sans CJK SC</family></prefer></alias>
-  <match target="pattern"><edit name="family" mode="append_last" binding="strong"><string>Noto Sans CJK SC</string><string>Droid Sans Fallback</string><string>Roboto</string></edit></match>
 </fontconfig>
 """
             confFile.writeText(conf)
@@ -288,8 +292,22 @@ class MpvPlayerPlugin(
             // 无需 HOME，避免影响其它读 HOME 的原生库）。
             android.system.Os.setenv("FONTCONFIG_FILE", confFile.absolutePath, true)
             android.system.Os.setenv("FONTCONFIG_PATH", fcDir.absolutePath, true)
-            android.util.Log.i(TAG, "fontconfig ready: ${confFile.absolutePath}")
+            // 采集诊断（转发进 App 日志，见 FILE_LOADED 的 sub-diag）：确认系统字体源是否真的
+            // 存在、有多少字体文件——若 /system/fonts 为空或不可读，才是 fontconfig 无字体的真因。
+            val sysDir = File("/system/fonts")
+            val fontFiles = sysDir.listFiles { f ->
+                f.name.endsWith(".ttf", true) || f.name.endsWith(".ttc", true) ||
+                    f.name.endsWith(".otf", true)
+            }
+            val hasCjk = fontFiles?.any {
+                it.name.contains("CJK", true) || it.name.contains("NotoSansSC", true) ||
+                    it.name.contains("DroidSansFallback", true)
+            } ?: false
+            lastFontStatus = "fontconfig conf=${confFile.exists()} " +
+                "/system/fonts=${sysDir.exists()}(${fontFiles?.size ?: 0}个,CJK=$hasCjk)"
+            android.util.Log.i(TAG, "fontconfig ready: $lastFontStatus")
         } catch (e: Exception) {
+            lastFontStatus = "fontconfig setup FAILED: ${e.message}"
             android.util.Log.e(TAG, "setupFontconfig failed", e)
         }
     }
@@ -618,6 +636,9 @@ class MpvPlayerPlugin(
         MPVLib.setOptionString("blend-subtitles", "no")
         MPVLib.setOptionString("sub-auto", "all")
         MPVLib.setOptionString("sub-ass", "yes")
+        // 显式保住内封子集化特效 ASS 的**附件字体**：libass 直接用容器里嵌的字体，
+        // 不经 fontconfig、不被系统字体替换 → 特效字幕按作者字体渲染，不会"被干到别的字体"。
+        MPVLib.setOptionString("embeddedfonts", "yes")
         MPVLib.setOptionString("sub-codepage", "utf-8")
         // 关键：Android 上 libass 没有 fontconfig，必须显式给字体目录，否则内封/外挂的
         // 文本字幕(SRT/ASS)因找不到任何字体而整段不渲染——表现为"选了字幕也不显示"。
@@ -661,7 +682,11 @@ class MpvPlayerPlugin(
 
         // Misc
         MPVLib.setOptionString("save-position-on-quit", "no")
-        MPVLib.setOptionString("msg-level", "all=v")
+        // 日志级别：原 all=v(全模块 verbose) 让 mpv 起播爆发 ~200 条日志冲爆客户端消息队列
+        // (`log message buffer overflow: 194 messages skipped`)，把 libass/fontconfig 的真实
+        // 报错一并丢掉 → 远程无法定位"选了字幕轨仍不显示"。转发回调本就只放行 warn+，故降到
+        // all=warn：App 日志一条不少、且不再溢出，libass 字体类报错(warn/error)得以浮出。
+        MPVLib.setOptionString("msg-level", "all=warn")
     }
 
     private fun getPlayer(playerId: String): MpvPlayerInstance? = players[playerId]
@@ -1015,7 +1040,7 @@ class MpvPlayerPlugin(
                             "level" to MPVLib.MpvLogLevel.WARN,
                             "prefix" to "sub-diag",
                             "text" to "sid=$currentSid sub-visibility=$subVisibility " +
-                                "共${subTracks.size}条字幕轨 [$subSummary]"
+                                "共${subTracks.size}条字幕轨 [$subSummary] | ${MpvPlayerPlugin.lastFontStatus}"
                         )
                     )
 
