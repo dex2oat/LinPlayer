@@ -17,7 +17,6 @@ class CacheService {
   static const _imageCacheExpiryDaysKey = 'linplayer_image_cache_expiry_days';
   static const _videoCacheMaxSizeMBKey = 'linplayer_video_cache_max_size_mb';
   static const _pgsBlendModeKey = 'linplayer_pgs_blend_mode';
-  static const _winSoftwareRenderingKey = 'linplayer_win_software_rendering';
 
   /// 图片磁盘缓存硬上限：6GB。
   static const int imageCacheMaxBytes = 6 * 1024 * 1024 * 1024;
@@ -117,22 +116,6 @@ class CacheService {
     final prefs = await SharedPreferences.getInstance();
     final v = prefs.getString(_pgsBlendModeKey);
     return (v == 'yes' || v == 'video') ? v! : 'no';
-  }
-
-  /// Windows 软件渲染兜底开关（持久化）。
-  ///
-  /// 某些 GPU/驱动下 media_kit 的硬件渲染路径（ANGLE/dxva2-egl）建 EGL surface
-  /// 失败 → 视频/字幕/OSD 全都渲染不出（无画面、内封字幕选了不显示）。检测到该
-  /// 失败即置位,后续 VideoController 关硬件加速走软件纹理（同 macOS 兜底），
-  /// 画面/字幕恢复；代价是最终一帧上传走 CPU，可接受。仅 Windows 生效。
-  static Future<bool> getWindowsSoftwareRendering() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_winSoftwareRenderingKey) ?? false;
-  }
-
-  static Future<void> setWindowsSoftwareRendering(bool enabled) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_winSoftwareRenderingKey, enabled);
   }
 
   /// mpv 解复用缓冲（前向/后向）的 RAM 安全预算，单位字节。

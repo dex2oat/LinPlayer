@@ -65,11 +65,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
   bool _currentSubIsAss = false;
   bool _usingExternalSubtitle = false;
   bool _pgsDecoderAvailable = true;
-  // Windows dxva2-egl 渲染兜底：某些 GPU/驱动下 media_kit 硬件渲染(ANGLE)建 EGL
-  // surface 失败 → 视频/字幕/OSD 全渲染不出。检测到即持久化,后续走软件渲染。
-  bool _useSoftwareRendering = false;
-  bool _eglSurfaceFailed = false;
-  bool _swRenderRetried = false;
   String _lastSubtitleCueText = '';
   bool _isSeekBuffering = false;
   Timer? _seekBufferingFallbackTimer;
@@ -570,12 +565,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
           ? Map<String, String>.from(httpHeaders)
           : null;
       _userAgentOverride = userAgentOverride;
-      // 每次 open 重新探测 EGL 失败；软件渲染决定持久化,启动即读。
-      _eglSurfaceFailed = false;
-      if (Platform.isWindows) {
-        _useSoftwareRendering =
-            await CacheService.getWindowsSoftwareRendering();
-      }
 
       await _configManager.initialize();
       await _configManager.writeConfig(
@@ -605,13 +594,9 @@ class MpvPlayerAdapter implements PlayerAdapter {
       // 黑屏(音频不受影响)，老 macOS(12.x/Intel)尤甚。改用软件纹理 TextureSW
       // (CVPixelBuffer 拷贝，不用 GL 上下文)彻底免疫该泄漏；解码仍是硬解
       // (videotoolbox-copy)，只是最终一帧上传走 CPU，代价可接受。其余平台不变。
-      // macOS 恒走软件纹理（GL 上下文泄漏黑屏兜底）；Windows 仅在检测到
-      // dxva2-egl EGL surface 失败后走软件渲染（见下方自动重开逻辑）。
-      final softwareRendering =
-          Platform.isMacOS || (Platform.isWindows && _useSoftwareRendering);
       _videoController = VideoController(
         _player!,
-        configuration: softwareRendering
+        configuration: Platform.isMacOS
             ? const VideoControllerConfiguration(
                 enableHardwareAcceleration: false)
             : const VideoControllerConfiguration(),
@@ -639,14 +624,22 @@ class MpvPlayerAdapter implements PlayerAdapter {
           _subtitleBlendMode = await CacheService.getPgsBlendMode();
           await np.setProperty('blend-subtitles', _subtitleBlendMode);
           await np.setProperty('sub-visibility', 'yes');
-          // macOS 有声无画修复：media_kit 走 libmpv 渲染 API，硬解直通
-          // (videotoolbox)产出的 CVPixelBuffer 映射不进纹理，表现为音频正常、
-          // 画面全黑(硬解 HEVC/10bit 时才触发，故"时好时坏")。改用 copy-back
-          // 变体：仍走 GPU 硬解，但把帧拷回内存再上传，画面稳定；其余平台仍用
-          // auto-safe(直通零拷贝更省)。
+          // 硬解直通(zero-copy interop)在两个桌面平台会击穿:
+          // - macOS: videotoolbox 直通产出的 CVPixelBuffer 映射不进纹理 → 有声无画;
+          // - Windows: hwdec=auto-safe 选 dxva2,mpv 走 `dxva2-egl` 交互把解码帧
+          //   共享进 ANGLE 的 EGL surface,某些 GPU/驱动下建 EGL surface 失败
+          //   (日志 `libmpv_render/dxva2-egl Failed to create EGL surface`),
+          //   首帧渲染时踩空 → 黑屏/缓冲中原生闪退。
+          // 两者统一用 copy-back 变体:仍 GPU 硬解,但把帧拷回内存再由 media_kit
+          // 正常上传纹理(不建 interop surface),画面稳定、不崩;代价是每帧一次
+          // GPU→内存拷贝,可接受。Linux 直通零拷贝正常,仍用 auto-safe 省一次拷贝。
           final hwdecValue = !hardwareDecoding
               ? 'no'
-              : (Platform.isMacOS ? 'videotoolbox-copy' : 'auto-safe');
+              : (Platform.isMacOS
+                  ? 'videotoolbox-copy'
+                  : Platform.isWindows
+                      ? 'auto-copy'
+                      : 'auto-safe');
           await np.setProperty('hwdec', hwdecValue);
           // 安全加固 · CVE-2026-8461 (PixelSmash)：libavcodec 的 magicyuv 解码器
           // 存在堆越界写（攻击者构造的 slice_height 多写一行 chroma 越界），恶意
@@ -722,33 +715,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
       }
 
       await _openVideoSource(videoUrl, startPosition: startPosition);
-
-      // Windows dxva2-egl 兜底：硬件渲染建 EGL surface 失败 → 画面/字幕全黑。
-      // 检测到即持久化并用软件渲染重开一次（一台机器只需触发一次,之后启动直读）。
-      if (Platform.isWindows && !_useSoftwareRendering && !_swRenderRetried) {
-        // 渲染上下文暴露 EGL 失败约在建控制器后 ~200ms,给点时间再判定。
-        if (!_eglSurfaceFailed) {
-          await Future.delayed(const Duration(milliseconds: 300));
-        }
-        if (_eglSurfaceFailed) {
-          _swRenderRetried = true;
-          await CacheService.setWindowsSoftwareRendering(true);
-          _logger.w('MpvAdapter',
-              'dxva2-egl EGL surface 创建失败,自动切换软件渲染并重开视频');
-          return initialize(
-            videoUrl: videoUrl,
-            startPosition: startPosition,
-            dolbyVisionFix: dolbyVisionFix,
-            useLibass: useLibass,
-            hardwareDecoding: hardwareDecoding,
-            preferredSubtitleLanguage: preferredSubtitleLanguage,
-            surfaceViewId: surfaceViewId,
-            useGpuNext: useGpuNext,
-            httpHeaders: httpHeaders,
-            userAgentOverride: userAgentOverride,
-          );
-        }
-      }
 
       _isInitialized = true;
       _callbacks?.onDurationChanged?.call();
@@ -835,13 +801,6 @@ class MpvPlayerAdapter implements PlayerAdapter {
     _subscriptions.add(_player!.stream.log.listen((log) {
       final level = log.level.toLowerCase();
       final msg = 'mpv[${log.prefix}] ${log.text}'.trimRight();
-      // Windows 硬件渲染建 EGL surface 失败 → 视频/字幕全渲染不出。捕获信号,
-      // initialize 收尾时据此自动切软件渲染重开一次。
-      if (Platform.isWindows &&
-          (log.text.contains('Failed to create EGL surface') ||
-              log.prefix.contains('dxva2-egl'))) {
-        _eglSurfaceFailed = true;
-      }
       if (level == 'error' || level == 'fatal') {
         _logger.e('MpvNative', msg);
       } else {
