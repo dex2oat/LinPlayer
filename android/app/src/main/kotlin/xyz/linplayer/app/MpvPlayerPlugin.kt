@@ -364,7 +364,12 @@ class MpvPlayerPlugin(
             MPVLib.observeProperty("idle-active", MPVLib.MpvFormat.FLAG)
             MPVLib.observeProperty("speed", MPVLib.MpvFormat.DOUBLE)
             MPVLib.observeProperty("volume", MPVLib.MpvFormat.DOUBLE)
-            MPVLib.observeProperty("track-list", MPVLib.MpvFormat.NODE)
+            // track-list 用 NONE 格式观察：mpv 每次轨道变化都会回调 eventProperty(name)，
+            // 由其触发 loadTracks() 重新解析并推送 tracksChanged。原来用 NODE 格式，但
+            // eventProperty 没有任何重载消费 NODE → 轨道变化从不二次上报，只在 FILE_LOADED
+            // 推一次（且可能在 Dart 订阅前丢失）。字幕轨常在 FILE_LOADED 后才完全就绪，
+            // NONE 观察保证 Dart 侧 _tracks 最终一定拿到完整内封字幕/音轨列表。
+            MPVLib.observeProperty("track-list", MPVLib.MpvFormat.NONE)
             MPVLib.observeProperty("video-params/w", MPVLib.MpvFormat.INT64)
             MPVLib.observeProperty("video-params/h", MPVLib.MpvFormat.INT64)
             MPVLib.observeProperty("hwdec-current", MPVLib.MpvFormat.STRING)
@@ -646,6 +651,15 @@ class MpvPlayerPlugin(
             eventChannel.setStreamHandler(object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
                     eventSink = events
+                    // 关键修复（内封字幕不显示）：轨道列表原本只在 FILE_LOADED 时经
+                    // emitEvent("tracksChanged") 推送一次。若该事件在 Dart 订阅本 EventChannel
+                    // 之前触发（局域网/快源 Emby 直连尤为常见，FILE_LOADED 抢在订阅前），这唯一
+                    // 一次事件被投递到 null sink 后永久丢失 → Dart 侧 _tracks 整场为空 → 字幕选轨
+                    // 退化成 sid=auto，内封字幕（SRT/ASS 文本 + PGS 图形）选不中/选错、表现为不显示。
+                    // 订阅建立时立即回放最近一次已解析的轨道，消除该竞态。
+                    if (currentTracks.isNotEmpty()) {
+                        events?.success(mapOf("type" to "tracksChanged", "value" to currentTracks))
+                    }
                 }
 
                 override fun onCancel(arguments: Any?) {
@@ -845,8 +859,11 @@ class MpvPlayerPlugin(
         // ---- EventObserver implementation ----
 
         override fun eventProperty(property: String) {
-            // NONE format — just a notification that the property changed
-            // We'll handle it when the typed value arrives
+            // NONE format — 属性变化通知（无值）。track-list 走这里：每次轨道增删/就绪
+            // 都重新解析并推送 tracksChanged，保证 Dart 侧 _tracks 最终拿到完整内封字幕/音轨列表。
+            when (property) {
+                "track-list" -> loadTracks()
+            }
         }
 
         override fun eventProperty(property: String, value: Long) {
@@ -998,6 +1015,10 @@ class MpvPlayerPlugin(
                         "id" to id.toString(),
                         "type" to resolvedType,
                         "language" to lang,
+                        // title 与 label 都带上：内封字幕智能选轨的匹配器读的是 t["title"]
+                        // （见 player_subtitle_loader.matchMpvSubtitleTrack），原来只塞了 "label"
+                        // → 多条同语言内封轨（简/繁/简日/特效）按标题消歧全部失效 → 选错或选不中。
+                        "title" to title,
                         "label" to title,
                         "codec" to codec,
                         "isAss" to isAss,
