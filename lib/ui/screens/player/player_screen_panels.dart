@@ -446,6 +446,8 @@ class _SubtitleSettingsContentState
     final subtitleBackground = ref.watch(subtitleBackgroundProvider);
     final selectedSubtitleIndex = ref.watch(subtitleTrackProvider);
     final selectedSecondaryIndex = ref.watch(secondarySubtitleTrackProvider);
+    final secondarySubtitlePosition =
+        ref.watch(secondarySubtitlePositionProvider);
     final selectedMediaSourceId = ref.watch(selectedMediaSourceProvider);
 
     if (subtitleAsync == null) {
@@ -544,6 +546,19 @@ class _SubtitleSettingsContentState
                         .read(secondarySubtitleTrackProvider.notifier)
                         .state = stream.index,
                   )),
+            // 次字幕位置（libmpv 0.41+ secondary-sub-pos）——仅选了次字幕时可调。
+            if (selectedSecondaryIndex != null)
+              PanelSliderRow(
+                label: '次字幕位置',
+                value: secondarySubtitlePosition.clamp(0.0, 1.0),
+                min: 0,
+                max: 1,
+                valueLabel:
+                    '${(secondarySubtitlePosition.clamp(0.0, 1.0) * 100).round()}%',
+                onChanged: (value) => ref
+                    .read(secondarySubtitlePositionProvider.notifier)
+                    .state = value,
+              ),
             const _Divider(),
             const _SectionTitle('字体'),
             _SettingsItem(

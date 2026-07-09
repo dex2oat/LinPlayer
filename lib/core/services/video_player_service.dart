@@ -1053,6 +1053,18 @@ class VideoPlayerService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 设置次字幕位置（libmpv 0.41+）
+  Future<void> setSecondarySubtitlePosition(double position) async {
+    await _adapter?.setSecondarySubtitlePosition(position);
+    notifyListeners();
+  }
+
+  /// 设置次字幕延迟（libmpv 0.41+）
+  Future<void> setSecondarySubtitleDelay(double seconds) async {
+    await _adapter?.setSecondarySubtitleDelay(seconds);
+    notifyListeners();
+  }
+
   /// 设置字幕黑色背景
   Future<void> setSubtitleBackground(bool enabled) async {
     await _adapter?.setSubtitleBackground(enabled);

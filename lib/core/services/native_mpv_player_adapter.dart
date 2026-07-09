@@ -473,6 +473,28 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
   }
 
   @override
+  Future<void> setSecondarySubtitlePosition(double position) async {
+    if (_playerId == null || !_isInitialized) return;
+    // UI 0.0(底)~1.0(顶) → mpv secondary-sub-pos 0(顶)~100(底)，与主字幕同一反转。
+    final subPos = ((1.0 - position) * 100).round().clamp(0, 100);
+    await _channel.invokeMethod('setProperty', {
+      'playerId': _playerId,
+      'name': 'secondary-sub-pos',
+      'value': subPos.toString(),
+    });
+  }
+
+  @override
+  Future<void> setSecondarySubtitleDelay(double seconds) async {
+    if (_playerId == null || !_isInitialized) return;
+    await _channel.invokeMethod('setProperty', {
+      'playerId': _playerId,
+      'name': 'secondary-sub-delay',
+      'value': seconds.toString(),
+    });
+  }
+
+  @override
   Future<void> setSubtitleBackground(bool enabled) async {
     if (_playerId == null) return;
     await _channel.invokeMethod('setSubtitleBackground', {

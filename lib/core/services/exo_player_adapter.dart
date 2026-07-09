@@ -295,6 +295,16 @@ class ExoPlayerAdapter implements PlayerAdapter {
   }
 
   @override
+  Future<void> setSecondarySubtitlePosition(double position) async {
+    // ExoPlayer 不支持次字幕位置（仅 MPV 内核 libmpv 0.41+）。
+  }
+
+  @override
+  Future<void> setSecondarySubtitleDelay(double seconds) async {
+    // ExoPlayer 不支持次字幕延迟（仅 MPV 内核 libmpv 0.41+）。
+  }
+
+  @override
   Future<void> loadLibassSubtitle(String path) async {
     if (_playerId == null || !_isInitialized) return;
     final mimeType = _detectSubtitleMimeType(path);

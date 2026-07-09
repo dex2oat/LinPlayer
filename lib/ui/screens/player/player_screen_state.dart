@@ -201,6 +201,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       ref.listenManual(secondarySubtitleTrackProvider, (prev, next) {
         _onSecondarySubtitleTrackChanged(next);
       });
+      ref.listenManual(secondarySubtitlePositionProvider, (prev, next) {
+        if (prev != next) _playerService.setSecondarySubtitlePosition(next);
+      });
+      ref.listenManual(secondarySubtitleDelayProvider, (prev, next) {
+        if (prev != next) _playerService.setSecondarySubtitleDelay(next);
+      });
       ref.listenManual(currentPlayingItemProvider, (prev, next) {
         if (prev?.id != next?.id) {
           ref.read(loadedDanmakuProvider.notifier).state = [];
@@ -1376,6 +1382,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
         if (trackId != null && trackId.isNotEmpty) {
           await _playerService.selectSecondarySubtitleTrack(trackId);
+          await _applySecondarySubtitleSettings();
           logger.i('Player', '内封次字幕已设置: trackId=$trackId');
         } else {
           logger.w('Player', '未找到匹配的MPV字幕轨道');
@@ -1410,11 +1417,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
       if (subFile.existsSync() && await subFile.length() > 0) {
         await _playerService.loadSecondarySubtitle(subFile.path);
+        await _applySecondarySubtitleSettings();
         logger.i('Player', '次字幕加载成功: ${subFile.path}');
       }
     } catch (e) {
       logger.e('Player', '加载次字幕失败: $e');
     }
+  }
+
+  /// 次字幕启用后套用当前位置/延迟设置（让新视频沿用上次的次字幕位置，libmpv 0.41+）。
+  Future<void> _applySecondarySubtitleSettings() async {
+    await _playerService
+        .setSecondarySubtitlePosition(ref.read(secondarySubtitlePositionProvider));
+    await _playerService
+        .setSecondarySubtitleDelay(ref.read(secondarySubtitleDelayProvider));
   }
 
   void _onPlayerUpdate() {

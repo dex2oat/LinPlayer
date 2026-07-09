@@ -127,6 +127,12 @@ abstract class PlayerAdapter {
   /// 取消次字幕
   Future<void> deselectSecondarySubtitle() async {}
 
+  /// 次字幕位置（0.0=底部，1.0=顶部；libmpv 0.41+ secondary-sub-pos）
+  Future<void> setSecondarySubtitlePosition(double position) async {}
+
+  /// 次字幕延迟（秒；libmpv 0.41+ secondary-sub-delay）
+  Future<void> setSecondarySubtitleDelay(double seconds) async {}
+
   /// 获取当前可用轨道列表
   List<Map<String, dynamic>> getTracksInfo();
 

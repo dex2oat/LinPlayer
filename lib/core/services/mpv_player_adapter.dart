@@ -1868,6 +1868,26 @@ class MpvPlayerAdapter implements PlayerAdapter {
   }
 
   @override
+  Future<void> setSecondarySubtitlePosition(double position) async {
+    if (_player == null || !_isInitialized) return;
+    // UI 0.0(底)~1.0(顶) → mpv secondary-sub-pos 0(顶)~100(底)。仅整数。
+    final pos = ((1.0 - position) * 100).round().clamp(0, 100);
+    final np = _nativePlayer;
+    if (np != null) {
+      await np.setProperty('secondary-sub-pos', pos.toString());
+    }
+  }
+
+  @override
+  Future<void> setSecondarySubtitleDelay(double seconds) async {
+    if (_player == null || !_isInitialized) return;
+    final np = _nativePlayer;
+    if (np != null) {
+      await np.setProperty('secondary-sub-delay', seconds.toString());
+    }
+  }
+
+  @override
   Future<void> setSubtitleDelay(double seconds) async {
     _subtitleDelay = seconds;
     _logger.i('MpvAdapter', '设置字幕延迟: ${seconds}s');

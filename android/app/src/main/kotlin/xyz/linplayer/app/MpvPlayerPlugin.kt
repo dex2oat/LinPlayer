@@ -319,8 +319,38 @@ class MpvPlayerPlugin(
                 }
             }
 
+            // 版本无关第二条腿：给**带 fontconfig 的 libmpv(0.41+)**生成 fonts.conf 并用
+            // FONTCONFIG_FILE 指过去。0.36 无 fontconfig(上面目录 provider 生效)、0.41 有
+            // fontconfig(读这份 conf)——两套 .so 都能显示文本字幕，升级不回归。必须在
+            // MPVLib.create() 之前设 env(fontconfig 初始化即读环境变量)，本函数正是在其之前调用。
+            var fcStatus = "off"
+            try {
+                val fcDir = File(mpvDir, "fontconfig")
+                val fcCache = File(fcDir, "cache"); fcCache.mkdirs()
+                val confFile = File(fcDir, "fonts.conf")
+                confFile.writeText(
+                    """<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <dir>/system/fonts</dir>
+  <dir>/product/fonts</dir>
+  <dir>${fontsDir.absolutePath}</dir>
+  <cachedir>${fcCache.absolutePath}</cachedir>
+  <alias><family>sans-serif</family><prefer><family>Noto Sans CJK SC</family><family>Noto Sans</family><family>Roboto</family><family>Droid Sans Fallback</family></prefer></alias>
+  <alias><family>serif</family><prefer><family>Noto Serif CJK SC</family><family>Noto Serif</family></prefer></alias>
+  <alias><family>monospace</family><prefer><family>Droid Sans Mono</family><family>Roboto Mono</family></prefer></alias>
+</fontconfig>
+"""
+                )
+                android.system.Os.setenv("FONTCONFIG_FILE", confFile.absolutePath, true)
+                android.system.Os.setenv("FONTCONFIG_PATH", fcDir.absolutePath, true)
+                fcStatus = "conf=${confFile.exists()}"
+            } catch (e: Throwable) {
+                fcStatus = "fail:${e.message}"
+            }
+
             lastFontStatus = "libass-fonts dir=${fontsDir.absolutePath}(${linked}/${sysFiles.size}链) " +
-                "default=$defaultName sys=${sysDir.exists()}"
+                "default=$defaultName sys=${sysDir.exists()} fontconfig=$fcStatus"
             android.util.Log.i(TAG, "libass fonts ready: $lastFontStatus")
         } catch (e: Exception) {
             lastFontStatus = "libass-fonts setup FAILED: ${e.message}"
@@ -632,6 +662,11 @@ class MpvPlayerPlugin(
             MPVLib.setOptionString("framedrop", "vo")
             android.util.Log.i(TAG, "Software decode tuned: threads=$decodeThreads, skiploopfilter=nonref, fast=yes")
         }
+
+        // 安全加固 · CVE-2026-8461 (PixelSmash)：libavcodec 的 magicyuv 解码器存在可被恶意
+        // 视频触发的堆越界。升级到 0.41 后 libavcodec 仍含该解码器,软解路径可被触发。与桌面
+        // (mpv_player_adapter 已设 vd=-magicyuv)对齐,在 Android 侧一并拉黑该解码器。
+        MPVLib.setOptionString("vd", "-magicyuv")
 
         // Audio output - 强制立体声降混，解决 TrueHD 等多声道音频无声问题
         MPVLib.setOptionString("ao", "audiotrack,opensles")

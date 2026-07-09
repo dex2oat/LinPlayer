@@ -629,6 +629,10 @@ final subtitleDelayProvider = StateProvider<double>((ref) => 0.0);
 final audioDelayProvider = StateProvider<double>((ref) => 0.0);
 final subtitleSizeProvider = StateProvider<double>((ref) => 0.5);
 final subtitlePositionProvider = StateProvider<double>((ref) => 0.0);
+// 次字幕位置/延迟（libmpv 0.41+ 的 secondary-sub-pos / secondary-sub-delay）。
+// 位置 0.0=底部、1.0=顶部（与主字幕一致，UI 语义）；默认 1.0 让次字幕在顶部。
+final secondarySubtitlePositionProvider = StateProvider<double>((ref) => 1.0);
+final secondarySubtitleDelayProvider = StateProvider<double>((ref) => 0.0);
 
 final subtitleBackgroundProvider =
     StateNotifierProvider<PreferenceNotifier<bool>, bool>((ref) {
