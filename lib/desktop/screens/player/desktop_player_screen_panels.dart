@@ -104,43 +104,43 @@ class _EpisodeSelectorList extends ConsumerWidget {
         ref.watch(episodesProvider((seriesId: seriesId, seasonId: null)));
     final colors = PlayerPanelColors.resolve(context);
 
+    // 选集列表内嵌在面板的滚动 ListView 里:自身 shrinkWrap + 不滚动,
+    // 随内容展开、由外层面板统一滚动(避免双层嵌套滚动导致滑不动)。
     return episodesAsync.when(
-      data: (episodes) => DesktopSmoothScrollBuilder(
-        builder: (context, controller) => ListView.builder(
-          controller: controller,
-          itemCount: episodes.length,
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          itemBuilder: (context, index) {
-            final episode = episodes[index];
-            final isCurrent = episode.id == currentEpisodeId;
-            return PanelOptionTile(
-              label: '第 ${episode.indexNumber ?? index + 1} 集 · ${episode.name}',
-              selected: isCurrent,
-              trailing: isCurrent
-                  ? Icon(Icons.play_arrow_rounded, color: colors.accent)
-                  : null,
-              onTap: () {
-                if (!isCurrent) {
-                  context.replace(
-                    '/player/${episode.id}'
-                    '${currentMediaSourceId != null ? '?mediaSourceId=$currentMediaSourceId' : ''}',
-                  );
-                }
-                Navigator.pop(context);
-              },
-            );
-          },
-        ),
+      data: (episodes) => ListView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: episodes.length,
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        itemBuilder: (context, index) {
+          final episode = episodes[index];
+          final isCurrent = episode.id == currentEpisodeId;
+          return PanelOptionTile(
+            label: '第 ${episode.indexNumber ?? index + 1} 集 · ${episode.name}',
+            selected: isCurrent,
+            trailing: isCurrent
+                ? Icon(Icons.play_arrow_rounded, color: colors.accent)
+                : null,
+            onTap: () {
+              if (!isCurrent) {
+                context.replace(
+                  '/player/${episode.id}'
+                  '${currentMediaSourceId != null ? '?mediaSourceId=$currentMediaSourceId' : ''}',
+                );
+              }
+              Navigator.pop(context);
+            },
+          );
+        },
       ),
-      loading: () => Center(
-        child: CircularProgressIndicator(color: colors.accent),
+      loading: () => const Padding(
+        padding: EdgeInsets.all(24),
+        child: Center(child: CircularProgressIndicator()),
       ),
-      error: (error, _) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Text('加载失败: $error',
-              style: TextStyle(color: colors.textSecondary)),
-        ),
+      error: (error, _) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Text('加载失败: $error',
+            style: TextStyle(color: colors.textSecondary)),
       ),
     );
   }

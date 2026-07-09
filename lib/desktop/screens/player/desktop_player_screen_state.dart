@@ -2150,19 +2150,17 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
     final item = ref.read(currentPlayingItemProvider);
     if (item?.seriesId == null) return;
 
-    final maxHeight = MediaQuery.of(context).size.height * 0.7;
     showPlayerSettingsPanel(
       context: context,
       title: '选集',
       width: 420,
       children: [
-        SizedBox(
-          height: maxHeight,
-          child: _EpisodeSelectorList(
-            seriesId: item!.seriesId!,
-            currentEpisodeId: item.id,
-            currentMediaSourceId: ref.read(selectedMediaSourceProvider),
-          ),
+        // 不再套固定高度 SizedBox + 自带滚动条(那样双层嵌套滚动,面板里滑不动)。
+        // 直接让选集列表随内容展开,交给面板统一的滚轮/拖拽滚动。
+        _EpisodeSelectorList(
+          seriesId: item!.seriesId!,
+          currentEpisodeId: item.id,
+          currentMediaSourceId: ref.read(selectedMediaSourceProvider),
         ),
       ],
     );
@@ -2666,6 +2664,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
   // ========== 鼠标滚轮音量 ==========
 
   void _onMouseWheelScroll(PointerScrollEvent event) {
+    // 有面板/弹窗盖在播放页上时(播放页不再是当前路由),滚轮交给面板列表滚动,不改音量。
+    if (ModalRoute.of(context)?.isCurrent == false) return;
     final delta = event.scrollDelta.dy > 0 ? -0.05 : 0.05;
     _adjustVolume(delta);
   }
