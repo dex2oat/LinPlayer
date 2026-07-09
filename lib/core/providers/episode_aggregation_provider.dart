@@ -17,6 +17,7 @@ library;
 
 import 'dart:async';
 
+import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -39,47 +40,6 @@ const Duration _kAggregationStartDelay = Duration(milliseconds: 1800);
 /// 起跑后若预热(PreloadService)仍在拉 32MB 头部，再等它空闲（最多这么久）才发聚合请求，
 /// 让出关键起播带宽。超时则不再干等（避免预热异常时聚合永不出现）。
 const Duration _kMaxWarmWait = Duration(seconds: 6);
-
-/// 跨服并发上限：同时最多这么多台在飞。用户从详情页点「播放」后详情页仍挂在栈上、聚合
-/// 请求会与真正起播抢同一批服务器的连接/上行，故限流——但仍**按完成顺序逐台出**
-/// （[_boundedAsCompleted]），一台慢/掉线不阻塞其它台。
-const int _kServerConcurrency = 3;
-
-/// 有界并发地把 [tasks] 跑起来，按**完成顺序**吐结果（不等齐）：同时最多 [concurrency]
-/// 个在飞，空出一个槽就补下一个。既满足「哪台先返回先显示」，又不一次性打满移动端连接/
-/// 上行抢起播带宽。[tasks] 须自行吞掉异常（本流不产生 error 事件）。
-Stream<T> _boundedAsCompleted<T>(
-  List<Future<T> Function()> tasks,
-  int concurrency,
-) {
-  final controller = StreamController<T>();
-  var next = 0;
-  var active = 0;
-  var completed = 0;
-
-  void pump() {
-    while (active < concurrency && next < tasks.length) {
-      final task = tasks[next++];
-      active++;
-      task().then(controller.add).catchError((_) {}).whenComplete(() {
-        active--;
-        completed++;
-        if (completed == tasks.length) {
-          controller.close();
-        } else {
-          pump();
-        }
-      });
-    }
-  }
-
-  if (tasks.isEmpty) {
-    controller.close();
-  } else {
-    pump();
-  }
-  return controller.stream;
-}
 
 /// 被用户关闭「参与聚合」的服务器 id 集合（默认空 = 全部参与）。
 /// 存已关闭的一方：新加入的服务器不在集合里，即默认参与，符合「开=允许」。
@@ -177,9 +137,14 @@ final episodeAggregationProvider = StreamProvider.autoDispose
     return;
   }
 
-  // 让路给起播：先延后，再等预热空闲，之后才发聚合网络请求。离开详情页则中止。
+  // 让路给起播：先延后，再等预热空闲，之后才发聚合网络请求。离开详情页则中止 +
+  // **直接杀掉在飞的 HTTP 请求**（cancelToken.cancel），别让它继续占服务器/连接。
   var disposed = false;
-  ref.onDispose(() => disposed = true);
+  final cancelToken = CancelToken();
+  ref.onDispose(() {
+    disposed = true;
+    if (!cancelToken.isCancelled) cancelToken.cancel('aggregation-disposed');
+  });
   await Future<void>.delayed(_kAggregationStartDelay);
   if (disposed) return;
   var waited = Duration.zero;
@@ -213,7 +178,8 @@ final episodeAggregationProvider = StreamProvider.autoDispose
         : null;
     final ApiClientFactory client = homeClient ?? ref.read(apiClientProvider);
     try {
-      final series = await client.media.getItemDetails(item.seriesId!);
+      final series = await client.media
+          .getItemDetails(item.seriesId!, cancelToken: cancelToken);
       targetSeriesTmdb = extractProviderId(series.providerIds, 'tmdb');
     } catch (_) {
       // 取不到剧 TMDB 不致命，回退按剧名 + 季集号匹配。
@@ -237,12 +203,14 @@ final episodeAggregationProvider = StreamProvider.autoDispose
         year: year,
         targetSeriesTmdb: targetSeriesTmdb,
         targetProviderIds: targetProviderIds,
+        cancelToken: cancelToken,
       );
       if (matched == null) return const <AggregatedVersion>[];
       // 打来源标记：让封面/点击解析到正确的服务器（见 MediaItem.sourceServerId）。
       matched.sourceServerId = server.id;
       // 轻量枚举版本（不开流/不 ffprobe），避免在其它服务器上开启播放会话拖慢本机起播。
-      final sources = await client.media.getItemMediaSources(matched.id);
+      final sources = await client.media
+          .getItemMediaSources(matched.id, cancelToken: cancelToken);
       return sources
           .map((s) => AggregatedVersion(
                 server: server,
@@ -262,12 +230,12 @@ final episodeAggregationProvider = StreamProvider.autoDispose
     for (var i = 0; i < servers.length; i++) servers[i].id: i,
   };
 
-  // 有界并发、按完成顺序逐台出：哪台先匹配到就先 emit，一台慢/掉线不拖累其它台，
-  // 同时最多 [_kServerConcurrency] 台在飞以免抢起播带宽（versionsOf 内部已吞异常）。
+  // 全部服务器并发发起、按完成顺序逐台出：哪台先匹配到就先 emit，一台慢/掉线不拖累
+  // 其它台。仅查条目元数据（文本，非图片/音视频），并发本就吃不了多少带宽，不再限流；
+  // 真正省资源的是离开页面即 cancelToken 杀请求（见 onDispose）。
   final all = <AggregatedVersion>[];
   var emitted = false;
-  final tasks = servers.map((s) => () => versionsOf(s)).toList();
-  await for (final list in _boundedAsCompleted(tasks, _kServerConcurrency)) {
+  await for (final list in Stream.fromFutures(servers.map(versionsOf))) {
     if (disposed) return;
     if (list.isEmpty) continue;
     all.addAll(list);
@@ -315,6 +283,7 @@ Future<MediaItem?> _locateItem({
   required int? year,
   required String? targetSeriesTmdb,
   required Map<String, String> targetProviderIds,
+  CancelToken? cancelToken,
 }) async {
   if (isEpisode) {
     if (episode == null) return null;
@@ -325,6 +294,7 @@ Future<MediaItem?> _locateItem({
       final found = await client.media.findItemsByProviderIds(
         {'tmdb': targetSeriesTmdb},
         includeItemTypes: 'Series',
+        cancelToken: cancelToken,
       );
       if (found.isNotEmpty) series = found.first;
     }
@@ -332,7 +302,7 @@ Future<MediaItem?> _locateItem({
     // 2) 回退：按剧名搜索挑最匹配的剧。
     List<MediaItem> hits = const [];
     if (series == null) {
-      hits = await client.search.search(query);
+      hits = await client.search.search(query, cancelToken: cancelToken);
       for (final h in hits) {
         if (h.type != 'Series') continue;
         final ht = normalizeWatchHistoryText(h.name);
@@ -355,7 +325,8 @@ Future<MediaItem?> _locateItem({
     if (series != null) {
       String? seasonId;
       if (season != null) {
-        final seasons = await client.media.getSeasons(series.id);
+        final seasons =
+            await client.media.getSeasons(series.id, cancelToken: cancelToken);
         for (final s in seasons) {
           if (s.indexNumber == season) {
             seasonId = s.id;
@@ -365,10 +336,11 @@ Future<MediaItem?> _locateItem({
         // 只有一季时不强求季号匹配。
         if (seasonId == null && seasons.length == 1) seasonId = seasons.first.id;
       }
-      final eps = await client.media.getEpisodes(series.id, seasonId: seasonId);
+      final eps = await client.media
+          .getEpisodes(series.id, seasonId: seasonId, cancelToken: cancelToken);
       for (final e in eps) {
         if (e.indexNumber == episode) {
-          return client.media.getItemDetails(e.id);
+          return client.media.getItemDetails(e.id, cancelToken: cancelToken);
         }
       }
       return null;
@@ -389,11 +361,11 @@ Future<MediaItem?> _locateItem({
 
   // 电影：先按外部 id 精确反查，回退归一化标题（年份宽松）取第一条。
   if (targetProviderIds.isNotEmpty) {
-    final found = await client.media
-        .findItemsByProviderIds(targetProviderIds, includeItemTypes: 'Movie');
+    final found = await client.media.findItemsByProviderIds(targetProviderIds,
+        includeItemTypes: 'Movie', cancelToken: cancelToken);
     if (found.isNotEmpty) return found.first;
   }
-  final hits = await client.search.search(query);
+  final hits = await client.search.search(query, cancelToken: cancelToken);
   MediaItem? best;
   for (final h in hits) {
     if (h.type != 'Movie') continue;

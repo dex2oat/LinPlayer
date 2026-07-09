@@ -200,26 +200,34 @@ class EmbyApiClient implements ApiClientFactory {
     }
   }
 
-  /// 包装 Dio.get，自动去掉路径开头的 /，确保 baseUrl 子路径不被丢弃
+  /// 包装 Dio.get，自动去掉路径开头的 /，确保 baseUrl 子路径不被丢弃。
+  /// [cancelToken] 透传给 Dio：调用方（如聚合/搜索 provider）离开页面时可直接杀请求。
   Future<Response<T>> get<T>(String path,
-      {Map<String, dynamic>? queryParameters, Options? options}) {
+      {Map<String, dynamic>? queryParameters,
+      Options? options,
+      CancelToken? cancelToken}) {
     return _withRetry(
         () => _dio.get<T>(
               path.startsWith('/') ? path.substring(1) : path,
               queryParameters: queryParameters,
               options: options,
+              cancelToken: cancelToken,
             ),
         retryGateway: true);
   }
 
   /// 包装 Dio.post，自动去掉路径开头的 /，确保 baseUrl 子路径不被丢弃
   Future<Response<T>> post<T>(String path,
-      {dynamic data, Map<String, dynamic>? queryParameters, Options? options}) {
+      {dynamic data,
+      Map<String, dynamic>? queryParameters,
+      Options? options,
+      CancelToken? cancelToken}) {
     return _withRetry(() => _dio.post<T>(
           path.startsWith('/') ? path.substring(1) : path,
           data: data,
           queryParameters: queryParameters,
           options: options,
+          cancelToken: cancelToken,
         ));
   }
 
@@ -728,7 +736,8 @@ class EmbyMediaApi implements MediaApi {
       'BackdropImageTags,ParentBackdropItemId,ParentBackdropImageTags';
 
   @override
-  Future<MediaItem> getItemDetails(String itemId) async {
+  Future<MediaItem> getItemDetails(String itemId,
+      {CancelToken? cancelToken}) async {
     if (itemId.isEmpty) {
       throw Exception('无效的媒体ID');
     }
@@ -738,13 +747,14 @@ class EmbyMediaApi implements MediaApi {
     };
     if (uid != null) params['UserId'] = uid;
     try {
-      final resp = await _client.get('/Items/$itemId', queryParameters: params);
+      final resp = await _client.get('/Items/$itemId',
+          queryParameters: params, cancelToken: cancelToken);
       return _parseMediaItem(resp.data as Map<String, dynamic>);
     } on DioException catch (e) {
       if (e.response?.statusCode == 404 && uid != null) {
         try {
           final resp = await _client.get('/Users/$uid/Items/$itemId',
-              queryParameters: params);
+              queryParameters: params, cancelToken: cancelToken);
           return _parseMediaItem(resp.data as Map<String, dynamic>);
         } catch (_) {
           // fallback 失败，继续抛出原始错误
@@ -769,13 +779,16 @@ class EmbyMediaApi implements MediaApi {
   }
 
   @override
-  Future<List<Season>> getSeasons(String seriesId) async {
+  Future<List<Season>> getSeasons(String seriesId,
+      {CancelToken? cancelToken}) async {
     final uid = _requireUserId(_client);
-    final resp =
-        await _client.get('/Shows/$seriesId/Seasons', queryParameters: {
-      'UserId': uid,
-      'Fields': 'Overview,ImageTags,SeriesPrimaryImageTag,SeriesThumbImageTag',
-    });
+    final resp = await _client.get('/Shows/$seriesId/Seasons',
+        cancelToken: cancelToken,
+        queryParameters: {
+          'UserId': uid,
+          'Fields':
+              'Overview,ImageTags,SeriesPrimaryImageTag,SeriesThumbImageTag',
+        });
     final items = (resp.data as Map<String, dynamic>)['Items'] as List<dynamic>;
     return items
         .map((e) => _parseSeason(e as Map<String, dynamic>, seriesId))
@@ -783,7 +796,8 @@ class EmbyMediaApi implements MediaApi {
   }
 
   @override
-  Future<List<Episode>> getEpisodes(String seriesId, {String? seasonId}) async {
+  Future<List<Episode>> getEpisodes(String seriesId,
+      {String? seasonId, CancelToken? cancelToken}) async {
     final uid = _requireUserId(_client);
     final params = <String, dynamic>{
       'UserId': uid,
@@ -791,8 +805,8 @@ class EmbyMediaApi implements MediaApi {
           'Overview,RunTimeTicks,ImageTags,ParentThumbItemId,ParentThumbImageTag,ParentPrimaryImageItemId,ParentPrimaryImageTag,SeriesThumbImageTag,SeriesPrimaryImageTag,CanDownload,SupportsSync,MediaSources',
     };
     if (seasonId != null) params['SeasonId'] = seasonId;
-    final resp =
-        await _client.get('/Shows/$seriesId/Episodes', queryParameters: params);
+    final resp = await _client.get('/Shows/$seriesId/Episodes',
+        queryParameters: params, cancelToken: cancelToken);
     final items = (resp.data as Map<String, dynamic>)['Items'] as List<dynamic>;
     return items.map((e) => _parseEpisode(e as Map<String, dynamic>)).toList();
   }
@@ -816,6 +830,7 @@ class EmbyMediaApi implements MediaApi {
     Map<String, String> providerIds, {
     String? includeItemTypes,
     int limit = 10,
+    CancelToken? cancelToken,
   }) async {
     final anyEquals = providerIds.entries
         .where((e) => e.key.trim().isNotEmpty && e.value.trim().isNotEmpty)
@@ -833,7 +848,8 @@ class EmbyMediaApi implements MediaApi {
     if (includeItemTypes != null && includeItemTypes.isNotEmpty) {
       params['IncludeItemTypes'] = includeItemTypes;
     }
-    final resp = await _client.get('/Users/$uid/Items', queryParameters: params);
+    final resp = await _client.get('/Users/$uid/Items',
+        queryParameters: params, cancelToken: cancelToken);
     final items =
         (resp.data as Map<String, dynamic>)['Items'] as List<dynamic>? ??
             const <dynamic>[];
@@ -843,19 +859,21 @@ class EmbyMediaApi implements MediaApi {
   }
 
   @override
-  Future<List<MediaSource>> getItemMediaSources(String itemId) async {
+  Future<List<MediaSource>> getItemMediaSources(String itemId,
+      {CancelToken? cancelToken}) async {
     if (itemId.isEmpty) return const <MediaSource>[];
     final uid = _client._userId;
     final params = <String, dynamic>{'Fields': 'MediaSources,MediaStreams'};
     if (uid != null) params['UserId'] = uid;
     Map<String, dynamic> data;
     try {
-      final resp = await _client.get('/Items/$itemId', queryParameters: params);
+      final resp = await _client.get('/Items/$itemId',
+          queryParameters: params, cancelToken: cancelToken);
       data = resp.data as Map<String, dynamic>;
     } on DioException catch (e) {
       if (e.response?.statusCode == 404 && uid != null) {
         final resp = await _client.get('/Users/$uid/Items/$itemId',
-            queryParameters: params);
+            queryParameters: params, cancelToken: cancelToken);
         data = resp.data as Map<String, dynamic>;
       } else {
         rethrow;
@@ -890,15 +908,18 @@ class EmbySearchApi implements SearchApi {
   }
 
   @override
-  Future<List<MediaItem>> search(String query, {bool recursive = true}) async {
+  Future<List<MediaItem>> search(String query,
+      {bool recursive = true, CancelToken? cancelToken}) async {
     final uid = _requireUserId(_client);
-    final resp = await _client.get('/Users/$uid/Items', queryParameters: {
-      'SearchTerm': query,
-      'Recursive': recursive,
-      'Limit': 50,
-      'Fields':
-          'Overview,Genres,CommunityRating,OfficialRating,PremiereDate,RunTimeTicks,ProductionYear,Tags,SeriesName,IndexNumber,ParentIndexNumber,ProviderIds,PresentationUniqueKey,Path,ChildCount,RecursiveItemCount',
-    });
+    final resp = await _client.get('/Users/$uid/Items',
+        cancelToken: cancelToken,
+        queryParameters: {
+          'SearchTerm': query,
+          'Recursive': recursive,
+          'Limit': 50,
+          'Fields':
+              'Overview,Genres,CommunityRating,OfficialRating,PremiereDate,RunTimeTicks,ProductionYear,Tags,SeriesName,IndexNumber,ParentIndexNumber,ProviderIds,PresentationUniqueKey,Path,ChildCount,RecursiveItemCount',
+        });
     return _parseItemList(resp.data);
   }
 

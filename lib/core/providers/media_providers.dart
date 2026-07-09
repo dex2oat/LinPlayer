@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/api_interfaces.dart';
@@ -315,12 +316,18 @@ final aggregateSearchResultsProvider =
     return;
   }
 
+  // 离开搜索页即杀掉在飞的搜索请求，别让服务器继续白算。
+  final cancelToken = CancelToken();
+  ref.onDispose(() {
+    if (!cancelToken.isCancelled) cancelToken.cancel('search-disposed');
+  });
+
   // 每台一条：查询 → 只留电影/剧集 → 排除隐藏库。单台异常被隔离为空结果 + 日志。
   Future<MapEntry<String, List<MediaItem>>> queryOne(ServerConfig server) async {
     final client = ref.read(serverApiClientProvider(server.id));
     if (client == null) return MapEntry(server.name, const <MediaItem>[]);
     try {
-      final items = await client.search.search(query);
+      final items = await client.search.search(query, cancelToken: cancelToken);
       final filtered = items.where((item) {
         if (item.type != 'Movie' && item.type != 'Series') return false;
         if (item.parentId != null &&
@@ -399,11 +406,17 @@ final rankingCrossServerMatchProvider = StreamProvider.autoDispose
     return;
   }
 
+  // 关掉排行榜弹窗即杀掉在飞的跨服搜索请求。
+  final cancelToken = CancelToken();
+  ref.onDispose(() {
+    if (!cancelToken.isCancelled) cancelToken.cancel('ranking-match-disposed');
+  });
+
   Future<ServerMatchInfo?> matchOne(ServerConfig server) async {
     final client = ref.read(serverApiClientProvider(server.id));
     if (client == null) return null;
     try {
-      final items = await client.search.search(query);
+      final items = await client.search.search(query, cancelToken: cancelToken);
       if (items.isEmpty) return null;
       // 打来源标记：让封面/点击解析到正确的服务器。
       for (final item in items) {

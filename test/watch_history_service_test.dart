@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:linplayer_mobile/core/api/api_interfaces.dart';
 import 'package:linplayer_mobile/core/services/watch_history/watch_history_models.dart';
@@ -312,7 +313,7 @@ class _FakeApiClientFactory implements ApiClientFactory {
 
 class _FakeMediaApi implements MediaApi {
   @override
-  Future<MediaItem> getItemDetails(String itemId) {
+  Future<MediaItem> getItemDetails(String itemId, {CancelToken? cancelToken}) {
     throw UnimplementedError();
   }
 
@@ -322,12 +323,13 @@ class _FakeMediaApi implements MediaApi {
   }
 
   @override
-  Future<List<Season>> getSeasons(String seriesId) {
+  Future<List<Season>> getSeasons(String seriesId, {CancelToken? cancelToken}) {
     throw UnimplementedError();
   }
 
   @override
-  Future<List<Episode>> getEpisodes(String seriesId, {String? seasonId}) {
+  Future<List<Episode>> getEpisodes(String seriesId,
+      {String? seasonId, CancelToken? cancelToken}) {
     throw UnimplementedError();
   }
 
@@ -341,12 +343,14 @@ class _FakeMediaApi implements MediaApi {
     Map<String, String> providerIds, {
     String? includeItemTypes,
     int limit = 10,
+    CancelToken? cancelToken,
   }) {
     throw UnimplementedError();
   }
 
   @override
-  Future<List<MediaSource>> getItemMediaSources(String itemId) {
+  Future<List<MediaSource>> getItemMediaSources(String itemId,
+      {CancelToken? cancelToken}) {
     throw UnimplementedError();
   }
 }

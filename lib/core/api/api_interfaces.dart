@@ -7,6 +7,8 @@
 // 3. UI层只依赖这些抽象接口，不依赖具体实现
 // ============================================================
 
+import 'package:dio/dio.dart' show CancelToken;
+
 // ==================== 认证相关 ====================
 
 abstract class AuthApi {
@@ -225,7 +227,7 @@ class Filters {
 abstract class MediaApi {
   /// 获取单项详情
   /// GET /Items/{Id}
-  Future<MediaItem> getItemDetails(String itemId);
+  Future<MediaItem> getItemDetails(String itemId, {CancelToken? cancelToken});
 
   /// 获取相似推荐
   /// GET /Items/{Id}/Similar
@@ -233,11 +235,12 @@ abstract class MediaApi {
 
   /// 获取季列表
   /// GET /Shows/{Id}/Seasons
-  Future<List<Season>> getSeasons(String seriesId);
+  Future<List<Season>> getSeasons(String seriesId, {CancelToken? cancelToken});
 
   /// 获取集列表
   /// GET /Shows/{Id}/Episodes
-  Future<List<Episode>> getEpisodes(String seriesId, {String? seasonId});
+  Future<List<Episode>> getEpisodes(String seriesId,
+      {String? seasonId, CancelToken? cancelToken});
 
   /// 获取人物参演
   /// GET /Persons/{Name}/Items
@@ -251,13 +254,15 @@ abstract class MediaApi {
     Map<String, String> providerIds, {
     String? includeItemTypes,
     int limit = 10,
+    CancelToken? cancelToken,
   });
 
   /// 轻量枚举某条目的媒体源（版本）列表——跨服聚合用。
   /// GET /Items/{Id}?Fields=MediaSources,MediaStreams（**不**触发 PlaybackInfo 的
   /// 开流/转码会话，也不 ffprobe 远程文件），比 [PlaybackApi.getPlaybackInfo] 轻得多，
   /// 只为列出版本、不为起播。
-  Future<List<MediaSource>> getItemMediaSources(String itemId);
+  Future<List<MediaSource>> getItemMediaSources(String itemId,
+      {CancelToken? cancelToken});
 }
 
 class MediaItem {
@@ -548,7 +553,8 @@ abstract class SearchApi {
 
   /// 搜索
   /// GET /Users/{UserId}/Items?SearchTerm=...
-  Future<List<MediaItem>> search(String query, {bool recursive = true});
+  Future<List<MediaItem>> search(String query,
+      {bool recursive = true, CancelToken? cancelToken});
 
   /// 聚合搜索（跨服务器）
   Future<Map<String, List<MediaItem>>> searchAggregate(String query);
