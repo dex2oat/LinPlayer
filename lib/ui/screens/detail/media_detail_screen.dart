@@ -954,7 +954,29 @@ class _MoviePlaybackSection extends ConsumerWidget {
         padding: EdgeInsets.all(16),
         child: AppLoadingIndicator(),
       ),
-      error: (_, __) => const SizedBox.shrink(),
+      // 曾经 error 直接返回空白 → 播放选项(音频/字幕/版本/线路)整块消失且无任何提示,
+      // 无法区分「服务器慢/超时」还是「解析失败」。改为显示错误并给重试。
+      error: (err, __) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: Row(
+          children: [
+            const Icon(Icons.error_outline, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '播放信息加载失败:$err',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+            TextButton(
+              onPressed: () => ref.invalidate(playbackInfoProvider(itemId)),
+              child: const Text('重试'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

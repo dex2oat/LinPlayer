@@ -1332,6 +1332,18 @@ double? _parseTicksDouble(dynamic v) {
   return t?.toDouble();
 }
 
+/// 网盘/前后端分离服可能把数值字段以 double 或字符串下发,直接 `as int?` 会抛
+/// 类型异常并连累整个 PlaybackInfo 解析失败 → 详情页音频/字幕/版本/线路选择整块空白。
+int? _asInt(dynamic v) => _parseTicks(v);
+
+bool? _asBool(dynamic v) {
+  if (v == null || v is bool) return v as bool?;
+  final s = v.toString().toLowerCase();
+  if (s == 'true' || s == '1') return true;
+  if (s == 'false' || s == '0') return false;
+  return null;
+}
+
 DateTime? _parseDate(dynamic v) {
   if (v == null) return null;
   return DateTime.tryParse(v.toString());
@@ -1369,7 +1381,7 @@ Episode _parseEpisode(Map<String, dynamic> d) {
     final source = _parseMediaSource(sources.first as Map<String, dynamic>);
     videoResolution = source.primaryVideoStream?.resolution;
     if (videoResolution != null && videoResolution.isEmpty) videoResolution = null;
-    videoBitRate = (sources.first as Map<String, dynamic>)['Bitrate'] as int? ??
+    videoBitRate = _asInt((sources.first as Map<String, dynamic>)['Bitrate']) ??
         source.primaryVideoStream?.bitRate;
   }
   return Episode(
@@ -1431,10 +1443,10 @@ MediaSource _parseMediaSource(Map<String, dynamic> d) {
     name: d['Name']?.toString(),
     path: d['Path']?.toString(),
     container: d['Container']?.toString(),
-    size: d['Size'] as int?,
+    size: _asInt(d['Size']),
     runTimeTicks: _parseTicks(d['RunTimeTicks']),
     protocol: d['Protocol']?.toString(),
-    isRemote: d['IsRemote'] as bool?,
+    isRemote: _asBool(d['IsRemote']),
     mediaStreams: streams
         .map((e) => _parseMediaStream(e as Map<String, dynamic>))
         .toList(),
@@ -1443,23 +1455,23 @@ MediaSource _parseMediaSource(Map<String, dynamic> d) {
 
 MediaStream _parseMediaStream(Map<String, dynamic> d) {
   return MediaStream(
-    index: d['Index'] as int? ?? 0,
+    index: _asInt(d['Index']) ?? 0,
     type: d['Type'] ?? '',
     codec: d['Codec']?.toString(),
     language: d['Language']?.toString(),
     title: d['Title']?.toString(),
-    isDefault: d['IsDefault'] as bool?,
-    isExternal: d['IsExternal'] as bool?,
+    isDefault: _asBool(d['IsDefault']),
+    isExternal: _asBool(d['IsExternal']),
     displayTitle: d['DisplayTitle']?.toString(),
     path: d['Path']?.toString(),
     deliveryUrl: d['DeliveryUrl']?.toString(),
     deliveryMethod: d['DeliveryMethod']?.toString(),
-    isExternalUrl: d['IsExternalUrl'] as bool?,
+    isExternalUrl: _asBool(d['IsExternalUrl']),
     videoCodec: d['VideoCodec']?.toString() ?? d['Codec']?.toString(),
-    width: d['Width'] as int?,
-    height: d['Height'] as int?,
-    channels: d['Channels'] as int?,
-    bitRate: d['BitRate'] as int?,
+    width: _asInt(d['Width']),
+    height: _asInt(d['Height']),
+    channels: _asInt(d['Channels']),
+    bitRate: _asInt(d['BitRate']),
     videoRange: d['VideoRange']?.toString(),
     videoRangeType: d['VideoRangeType']?.toString(),
   );
