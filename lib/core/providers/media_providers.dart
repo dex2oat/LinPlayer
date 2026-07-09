@@ -536,10 +536,16 @@ class SearchHistoryNotifier extends StateNotifier<List<String>> {
 /// ==========================================
 
 /// 播放信息
+/// 详情页 / 播放器设置面板「媒体信息 + 版本 + 轨道列表」用的数据源：只 GET 条目已缓存
+/// 的 MediaSources/MediaStreams（`Fields` 查询），**不**带 IsPlayback / AutoOpenLiveStream，
+/// 绝不为了展示就让服务端开流 ffprobe（尤其 strm/网盘，白探一次很费服务器）。服务端返回
+/// 什么就展示什么、没返回就没有；**真正播放**走的是播放页里直接调用的
+/// [PlaybackApi.getPlaybackInfo]（不经本 provider），该完整流程照旧。
 final playbackInfoProvider = FutureProvider.autoDispose.family<PlaybackInfo, String>((ref, itemId) async {
   _metadataKeepAlive.retain('playback:$itemId', ref);
   final api = ref.watch(apiClientProvider);
-  return await api.playback.getPlaybackInfo(itemId);
+  final sources = await api.media.getItemMediaSources(itemId);
+  return PlaybackInfo(itemId: itemId, mediaSources: sources);
 });
 
 /// 当前播放项
