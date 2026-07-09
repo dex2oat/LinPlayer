@@ -15,6 +15,8 @@
 /// 器，与聚合搜索点击跳转同一模式，见 [openMediaItem]）。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -37,9 +39,6 @@ const Duration _kAggregationStartDelay = Duration(milliseconds: 1800);
 /// 起跑后若预热(PreloadService)仍在拉 32MB 头部，再等它空闲（最多这么久）才发聚合请求，
 /// 让出关键起播带宽。超时则不再干等（避免预热异常时聚合永不出现）。
 const Duration _kMaxWarmWait = Duration(seconds: 6);
-
-/// 跨服并发上限：聚合请求分批发，避免一次性对多台服务器发起请求打满移动端上行/连接。
-const int _kServerConcurrency = 3;
 
 /// 被用户关闭「参与聚合」的服务器 id 集合（默认空 = 全部参与）。
 /// 存已关闭的一方：新加入的服务器不在集合里，即默认参与，符合「开=允许」。
@@ -107,12 +106,18 @@ class AggregatedVersion {
 
 /// 聚合当前条目在**其它** Emby 服务器上的所有版本，正则命中优先、按服务器顺序、
 /// 清晰度降序排列。仅 Episode/Movie 有意义；无其它可用服务器或匹配不到时返回空。
-final episodeAggregationProvider = FutureProvider.autoDispose
-    .family<List<AggregatedVersion>, String>((ref, itemId) async {
+///
+/// **逐台增量**：用 [StreamProvider] + [Stream.fromFutures]，哪台服务器先匹配到就先
+/// emit 一版累积结果，一台慢/掉线不阻塞其它台（不再 `Future.wait` 等齐才出）。
+final episodeAggregationProvider = StreamProvider.autoDispose
+    .family<List<AggregatedVersion>, String>((ref, itemId) async* {
   final item = await ref.watch(mediaItemProvider(itemId).future);
   final kind = item.type.toLowerCase();
   final isEpisode = kind == 'episode';
-  if (!isEpisode && kind != 'movie') return const <AggregatedVersion>[];
+  if (!isEpisode && kind != 'movie') {
+    yield const <AggregatedVersion>[];
+    return;
+  }
 
   final homeServerId =
       item.sourceServerId ?? ref.read(currentServerProvider)?.id;
@@ -126,19 +131,22 @@ final episodeAggregationProvider = FutureProvider.autoDispose
         s.id != homeServerId &&
         !disabled.contains(s.id);
   }).toList();
-  if (servers.isEmpty) return const <AggregatedVersion>[];
+  if (servers.isEmpty) {
+    yield const <AggregatedVersion>[];
+    return;
+  }
 
   // 让路给起播：先延后，再等预热空闲，之后才发聚合网络请求。离开详情页则中止。
   var disposed = false;
   ref.onDispose(() => disposed = true);
   await Future<void>.delayed(_kAggregationStartDelay);
-  if (disposed) return const <AggregatedVersion>[];
+  if (disposed) return;
   var waited = Duration.zero;
   while (PreloadService.instance.isWarming && waited < _kMaxWarmWait) {
     const step = Duration(milliseconds: 250);
     await Future<void>.delayed(step);
     waited += step;
-    if (disposed) return const <AggregatedVersion>[];
+    if (disposed) return;
   }
 
   final regex = compilePreferenceRegex(ref.read(preferredVersionRegexProvider));
@@ -209,22 +217,24 @@ final episodeAggregationProvider = FutureProvider.autoDispose
     }
   }
 
-  // 分批发起（并发上限 [_kServerConcurrency]），别一次性打满移动端连接/上行。
-  final all = <AggregatedVersion>[];
-  for (var i = 0; i < servers.length; i += _kServerConcurrency) {
-    if (disposed) break;
-    final batch = servers.skip(i).take(_kServerConcurrency);
-    final results = await Future.wait(batch.map(versionsOf));
-    for (final list in results) {
-      all.addAll(list);
-    }
-  }
-
   final order = <String, int>{
     for (var i = 0; i < servers.length; i++) servers[i].id: i,
   };
-  sortAggregatedVersions(all, order);
-  return all;
+
+  // 全部服务器并发发起，哪台先匹配到就先 emit：Stream.fromFutures 按完成顺序吐结果，
+  // 一台慢/掉线不拖累其它台（versionsOf 内部已吞异常返回空，故无 error 事件）。
+  final all = <AggregatedVersion>[];
+  var emitted = false;
+  await for (final list in Stream.fromFutures(servers.map(versionsOf))) {
+    if (disposed) return;
+    if (list.isEmpty) continue;
+    all.addAll(list);
+    sortAggregatedVersions(all, order);
+    emitted = true;
+    yield List<AggregatedVersion>.of(all);
+  }
+  // 全部服务器都无匹配：emit 一次空，让 UI 从 loading 落到「无版本」而非一直转圈。
+  if (!emitted && !disposed) yield const <AggregatedVersion>[];
 });
 
 /// 排序：① 正则命中优先 ② 服务器原顺序 ③ 同服内清晰度（像素）降序。

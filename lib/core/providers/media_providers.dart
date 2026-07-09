@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/api_interfaces.dart';
@@ -291,27 +293,36 @@ final aggregateSearchProvider = StateProvider<bool>((ref) => false);
 ///
 /// 注：旧实现把聚合委托给 `api.search.searchAggregate()`，但那只查当前 client
 /// 指向的单台服务器（等价于普通搜索），是聚合搜索"看似开了却没效果"的根因。
+/// **逐台增量**：用 [StreamProvider] + [Stream.fromFutures]，哪台服务器先返回就先 emit
+/// 一版累积结果，一台慢/掉线不阻塞其它台（不再 `Future.wait` 等齐才出）。
+/// 只保留电影/剧集——聚合搜索面向剧、电影，过滤掉分集/人物等非顶层条目。
 final aggregateSearchResultsProvider =
-    FutureProvider.autoDispose<Map<String, List<MediaItem>>>((ref) async {
+    StreamProvider.autoDispose<Map<String, List<MediaItem>>>((ref) async* {
   final query = ref.watch(searchQueryProvider).trim();
   final servers = ref.watch(serverListProvider);
   final hiddenLibraries = ref.watch(hiddenLibrariesProvider);
 
-  if (query.isEmpty) return <String, List<MediaItem>>{};
+  if (query.isEmpty) {
+    yield const <String, List<MediaItem>>{};
+    return;
+  }
 
   // 仅搜已登录（authToken 非空）的服务器。
   final targets =
       servers.where((s) => (s.authToken ?? '').isNotEmpty).toList();
-  if (targets.isEmpty) return <String, List<MediaItem>>{};
+  if (targets.isEmpty) {
+    yield const <String, List<MediaItem>>{};
+    return;
+  }
 
-  // 并行查询：各服务器用缓存的只读 client（避免泄漏代理监听），互不影响；
-  // 单台异常被隔离为空结果 + 日志。
-  final entries = await Future.wait(targets.map((server) async {
+  // 每台一条：查询 → 只留电影/剧集 → 排除隐藏库。单台异常被隔离为空结果 + 日志。
+  Future<MapEntry<String, List<MediaItem>>> queryOne(ServerConfig server) async {
     final client = ref.read(serverApiClientProvider(server.id));
     if (client == null) return MapEntry(server.name, const <MediaItem>[]);
     try {
       final items = await client.search.search(query);
       final filtered = items.where((item) {
+        if (item.type != 'Movie' && item.type != 'Series') return false;
         if (item.parentId != null &&
             hiddenLibraries.contains(item.parentId)) {
           return false;
@@ -327,13 +338,23 @@ final aggregateSearchResultsProvider =
       AppLogger().w('AggregateSearch', '服务器「${server.name}」搜索失败: $e');
       return MapEntry(server.name, const <MediaItem>[]);
     }
-  }));
+  }
 
-  // 丢弃无命中的服务器，保留 serverListProvider 的顺序。
-  return <String, List<MediaItem>>{
-    for (final e in entries)
-      if (e.value.isNotEmpty) e.key: e.value,
-  };
+  // 哪台先返回就先显示：Stream.fromFutures 按完成顺序吐结果。每次都按 serverListProvider
+  // 原顺序重排后 emit（完成顺序 ≠ 展示顺序），一台掉线不拖累其它台。
+  final acc = <String, List<MediaItem>>{};
+  var emitted = false;
+  await for (final e in Stream.fromFutures(targets.map(queryOne))) {
+    if (e.value.isEmpty) continue;
+    acc[e.key] = e.value;
+    emitted = true;
+    yield <String, List<MediaItem>>{
+      for (final s in targets)
+        if (acc[s.name]?.isNotEmpty ?? false) s.name: acc[s.name]!,
+    };
+  }
+  // 全部服务器都无命中：emit 一次空，让 UI 从 loading 落到「没有找到结果」而非一直转圈。
+  if (!emitted) yield const <String, List<MediaItem>>{};
 });
 
 /// 排行榜条目在某台服务器上的最佳命中。
