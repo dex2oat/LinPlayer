@@ -1166,63 +1166,9 @@ class _VersionInfoSection extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Column(
-            children: info.mediaSources.map((source) {
-              final video = source.primaryVideoStream;
-              final audio = source.mediaStreams.where((s) => s.isAudio).firstOrNull;
-              final subtitle = source.mediaStreams.where((s) => s.isSubtitle).firstOrNull;
-              String videoLabel = '';
-              if (video != null) {
-                final segs = <String>[
-                  if (video.resolution.isNotEmpty) video.resolution,
-                  if (video.videoFormatLabel.isNotEmpty) video.videoFormatLabel,
-                ];
-                videoLabel = segs.isNotEmpty
-                    ? segs.join(' / ')
-                    : (video.displayTitle ?? video.codec ?? '');
-              }
-              return Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (source.name != null) ...[
-                        Text(source.name!, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-                        const SizedBox(height: 6),
-                      ],
-                      if (video != null)
-                        Row(
-                          children: [
-                            Icon(Icons.videocam, size: 16, color: Theme.of(context).colorScheme.primary),
-                            const SizedBox(width: 6),
-                            Text(videoLabel, style: const TextStyle(fontSize: 13)),
-                          ],
-                        ),
-                      if (audio != null) ...[
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            Icon(Icons.audiotrack, size: 16, color: Theme.of(context).colorScheme.secondary),
-                            const SizedBox(width: 6),
-                            Text(audio.displayTitle ?? '${audio.language ?? ""} ${audio.codec ?? ""} ${audio.channels ?? 0}ch', style: const TextStyle(fontSize: 13)),
-                          ],
-                        ),
-                      ],
-                      if (subtitle != null) ...[
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            Icon(Icons.subtitles, size: 16, color: Theme.of(context).colorScheme.tertiary),
-                            const SizedBox(width: 6),
-                            Text(subtitle.displayTitle ?? subtitle.language ?? '', style: const TextStyle(fontSize: 13)),
-                          ],
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
+            children: info.mediaSources
+                .map((source) => MediaSourceInfoCard(source: source))
+                .toList(),
           ),
         ),
       ],

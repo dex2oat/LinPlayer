@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -8,6 +9,7 @@ import '../api/emby_api.dart';
 import '../network/cf_proxy/cf_proxy_runtime.dart';
 import '../network/proxy_http_client.dart';
 import '../services/secure_credential_store.dart';
+import '../services/server_icon_cache.dart';
 import '../sources/source_credentials.dart';
 import '../sources/source_kind.dart';
 import 'app_preferences.dart';
@@ -283,6 +285,31 @@ class ServerListNotifier extends StateNotifier<List<ServerConfig>> {
   ServerListNotifier() : super(_loadServersSync()) {
     // 初始加载不经过 set state 覆写，这里补一次白名单同步。
     _syncInsecureTlsHosts();
+    // 首启一次性把「网络 URL 图标」物化为本地文件，之后启动直接离线显示、不再重拉。
+    unawaited(_materializeNetworkIcons());
+  }
+
+  /// 把仍是网络 URL 的服务器图标下载物化为本地文件并改存本地路径：此后每次启动直接
+  /// `Image.file` 离线显示，不再重新获取/重试（用户手选的网络图标已在选择时物化，这里
+  /// 覆盖自动探测的 touchicon 等）。拉取失败的服保持原样（继续显示默认图标），不阻塞启动。
+  Future<void> _materializeNetworkIcons() async {
+    for (final s in List<ServerConfig>.from(state)) {
+      final url = s.iconUrl;
+      if (url == null || !url.startsWith('http')) continue; // 空 / 已是本地，跳过
+      final local = await ServerIconCache.persist(serverId: s.id, url: url);
+      if (local == null || local == url) continue; // 拉不到就保持网络 URL 原样
+      // 状态可能在下载期间被改动，按 id 核对后再更新，避免覆盖用户中途的改动。
+      ServerConfig? current;
+      for (final e in state) {
+        if (e.id == s.id) {
+          current = e;
+          break;
+        }
+      }
+      if (current != null && current.iconUrl == url) {
+        updateServer(current.copyWith(iconUrl: local));
+      }
+    }
   }
 
   static const _serversKey = 'linplayer_servers';

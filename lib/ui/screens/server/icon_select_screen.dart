@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../../core/app_identity.dart';
 import '../../../core/providers/app_providers.dart';
+import '../../../core/services/server_icon_cache.dart';
 import '../../widgets/common/media_widgets.dart';
 
 class IconSelectScreen extends ConsumerStatefulWidget {
@@ -615,8 +616,13 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
     _closePage();
   }
 
-  void _selectIcon(IconItem icon) {
-    _updateServerIcon(icon.url);
+  Future<void> _selectIcon(IconItem icon) async {
+    // 用户选了网络图标：立刻下载到本地并存**本地路径**，此后永远离线直接显示，
+    // 不再每次启动重新拉取（拉取失败才退回存网络 URL）。
+    final local =
+        await ServerIconCache.persist(serverId: widget.serverId, url: icon.url);
+    if (!mounted) return;
+    _updateServerIcon(local ?? icon.url);
   }
 
   void _clearSearch() {

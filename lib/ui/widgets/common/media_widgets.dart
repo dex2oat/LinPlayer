@@ -778,6 +778,95 @@ class SectionHeader extends StatelessWidget {
   }
 }
 
+/// 单个版本（MediaSource）的媒体信息卡片：与桌面 `_MediaInfoPanel` 同字段——名称 /
+/// 视频 / 容器·大小·码率 + **全部**音频轨、**全部**字幕轨（用 readableLabel 统一标签）。
+/// 移动端详情页共用，修复此前只显示首条音轨/字幕、且缺容器·大小·码率的「信息太少」。
+class MediaSourceInfoCard extends StatelessWidget {
+  final MediaSource source;
+  const MediaSourceInfoCard({super.key, required this.source});
+
+  static String _formatSize(int? bytes) {
+    if (bytes == null || bytes <= 0) return '未知';
+    if (bytes >= 1073741824) {
+      return '${(bytes / 1073741824).toStringAsFixed(2)} GB';
+    }
+    if (bytes >= 1048576) return '${(bytes / 1048576).toStringAsFixed(1)} MB';
+    if (bytes >= 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
+    return '$bytes B';
+  }
+
+  static String? _formatBitrate(int? bps) {
+    if (bps == null || bps <= 0) return null;
+    return bps >= 1000000
+        ? '${(bps / 1000000).toStringAsFixed(1)} Mbps'
+        : '${(bps / 1000).toStringAsFixed(0)} Kbps';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final video = source.primaryVideoStream;
+    final audios = source.mediaStreams.where((s) => s.isAudio).toList();
+    final subs = source.mediaStreams.where((s) => s.isSubtitle).toList();
+
+    String videoLabel = '';
+    if (video != null) {
+      final segs = <String>[
+        if (video.resolution.isNotEmpty) video.resolution,
+        if (video.videoFormatLabel.isNotEmpty) video.videoFormatLabel,
+      ];
+      videoLabel = segs.isNotEmpty
+          ? segs.join(' / ')
+          : (video.displayTitle ?? video.codec ?? '');
+    }
+
+    // 容器 · 大小 · 码率 合成一行次要信息（与桌面 _MediaInfoPanel 同来源）。
+    final meta = <String>[
+      if ((source.container ?? '').isNotEmpty) source.container!.toUpperCase(),
+      _formatSize(source.size),
+      if (_formatBitrate(video?.bitRate) != null) _formatBitrate(video!.bitRate)!,
+    ].join(' · ');
+
+    Widget iconRow(IconData icon, Color color, String text) => Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 6),
+              Expanded(child: Text(text, style: const TextStyle(fontSize: 13))),
+            ],
+          ),
+        );
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if ((source.name ?? '').isNotEmpty) ...[
+              Text(source.name!,
+                  style:
+                      const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+              const SizedBox(height: 2),
+            ],
+            if (video != null) iconRow(Icons.videocam, scheme.primary, videoLabel),
+            if (meta.isNotEmpty)
+              iconRow(Icons.info_outline, scheme.outline, meta),
+            for (final a in audios)
+              iconRow(Icons.audiotrack, scheme.secondary,
+                  a.readableLabel(siblings: audios)),
+            for (final s in subs)
+              iconRow(Icons.subtitles, scheme.tertiary,
+                  s.readableLabel(siblings: subs)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class RatingBadge extends StatelessWidget {
   final double? rating;
   final double size;
