@@ -2058,6 +2058,13 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
           selected: false,
           onTap: () => go(_showSubtitleSelector),
         ),
+        if (isMpv)
+          PanelOptionTile(
+            label: '次字幕选择',
+            leading: const Icon(Icons.subtitles),
+            selected: false,
+            onTap: () => go(_showSecondarySubtitleSelector),
+          ),
         PanelOptionTile(
           label: '音轨选择',
           leading: const Icon(Icons.audiotrack),
@@ -2223,6 +2230,55 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
         ref.read(audioTrackProvider.notifier).state = streamIndex;
       },
       subtitle: false,
+    );
+  }
+
+  /// 次字幕选择（桌面）。次字幕走 MPV `secondary-sid`，仅支持文本字幕,
+  /// 图形字幕(PGS/SUP)与已作主字幕的那一条都排除。设 provider 后由监听器套用。
+  Future<void> _showSecondarySubtitleSelector() async {
+    await _waitForTrackSelectorItems(subtitle: true);
+    final primaryIndex = ref.read(subtitleTrackProvider);
+    final streams = _subtitleStreamsFromCurrentSource().where((s) {
+      final kind = SubtitleTrackMatcher.classifyKind(
+          codec: s.codec, title: s.displayTitle ?? s.title);
+      return kind != SubtitleKind.bitmap && s.index != primaryIndex;
+    }).toList();
+    if (streams.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('没有可作为次字幕的文本字幕轨道')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    final selectedIndex = ref.read(secondarySubtitleTrackProvider);
+    showPlayerSettingsPanel(
+      context: context,
+      title: '次字幕选择',
+      width: 380,
+      children: [
+        PanelOptionTile(
+          label: '关闭次字幕',
+          selected: selectedIndex == null,
+          onTap: () {
+            ref.read(secondarySubtitleTrackProvider.notifier).state = null;
+            Navigator.pop(context);
+          },
+        ),
+        ...streams.map((stream) => PanelOptionTile(
+              label: stream.readableLabel(siblings: streams),
+              subtitle: stream.codec != null
+                  ? '编码: ${stream.codec}'
+                      '${stream.isExternal == true ? ' (外挂)' : ' (内封)'}'
+                  : null,
+              selected: selectedIndex == stream.index,
+              onTap: () {
+                ref.read(secondarySubtitleTrackProvider.notifier).state =
+                    stream.index;
+                Navigator.pop(context);
+              },
+            )),
+      ],
     );
   }
 

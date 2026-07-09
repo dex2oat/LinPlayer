@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
@@ -151,7 +152,7 @@ Future<T?> showPlayerSettingsPanel<T>({
   );
 }
 
-class _PlayerSettingsPanel extends StatelessWidget {
+class _PlayerSettingsPanel extends StatefulWidget {
   const _PlayerSettingsPanel({
     required this.title,
     required this.width,
@@ -165,6 +166,19 @@ class _PlayerSettingsPanel extends StatelessWidget {
   final double maxHeight;
   final List<Widget> children;
   final Widget? titleTrailing;
+
+  @override
+  State<_PlayerSettingsPanel> createState() => _PlayerSettingsPanelState();
+}
+
+class _PlayerSettingsPanelState extends State<_PlayerSettingsPanel> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -182,8 +196,8 @@ class _PlayerSettingsPanel extends StatelessWidget {
           // 在 Windows/ANGLE 上卡顿。改用淡深色半透明遮罩——几乎透明、
           // 隐约透出画面，又够暗看清参数，且零模糊开销。
           child: Container(
-              width: width,
-              constraints: BoxConstraints(maxHeight: maxHeight),
+              width: widget.width,
+              constraints: BoxConstraints(maxHeight: widget.maxHeight),
               decoration: BoxDecoration(
                 color: colors.surface,
                 borderRadius: borderRadius,
@@ -205,15 +219,33 @@ class _PlayerSettingsPanel extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _PanelHeader(
-                      title: title,
+                      title: widget.title,
                       colors: colors,
-                      trailing: titleTrailing,
+                      trailing: widget.titleTrailing,
                     ),
                     Flexible(
-                      child: ListView(
-                        shrinkWrap: true,
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        children: children,
+                      // 桌面默认 ScrollBehavior 不含鼠标拖拽 → 列表项超出面板高度时
+                      // 用鼠标拖不动(只有滚轮能动,易被误当「不能滑动」)。这里放开
+                      // 鼠标/触控板拖拽并常驻滚动条,三端一致可滑。
+                      child: ScrollConfiguration(
+                        behavior: ScrollConfiguration.of(context).copyWith(
+                          dragDevices: {
+                            PointerDeviceKind.touch,
+                            PointerDeviceKind.mouse,
+                            PointerDeviceKind.trackpad,
+                            PointerDeviceKind.stylus,
+                          },
+                        ),
+                        child: Scrollbar(
+                          controller: _scrollController,
+                          thumbVisibility: true,
+                          child: ListView(
+                            controller: _scrollController,
+                            shrinkWrap: true,
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            children: widget.children,
+                          ),
+                        ),
                       ),
                     ),
                   ],
