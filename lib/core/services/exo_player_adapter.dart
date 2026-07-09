@@ -685,6 +685,20 @@ class ExoPlayerAdapter implements PlayerAdapter {
     return Stack(fit: StackFit.expand, children: children);
   }
 
+  // 缓存视频 Texture：整棵播放页 setState（弹出面板等）时返回同一实例，
+  // identical 让 Flutter 跳过 Texture 元素重挂载 → 消除黑帧闪现（同桌面 mpv 缓存思路）。
+  // 字幕叠加层各自用 ValueListenableBuilder 反应式重建，不受影响。
+  Widget? _textureWidget;
+  int? _textureWidgetId;
+
+  Widget _cachedTexture(int tid) {
+    if (_textureWidget == null || _textureWidgetId != tid) {
+      _textureWidgetId = tid;
+      _textureWidget = RepaintBoundary(child: Texture(textureId: tid));
+    }
+    return _textureWidget!;
+  }
+
   @override
   Widget buildVideo() {
     if (_textureId != null) {
@@ -694,7 +708,7 @@ class ExoPlayerAdapter implements PlayerAdapter {
           return Stack(
             fit: StackFit.expand,
             children: [
-          Texture(textureId: _textureId!),
+          _cachedTexture(_textureId!),
           ValueListenableBuilder<int>(
             valueListenable: _subtitleSettingsVersion,
             builder: (context, _, __) {
@@ -833,6 +847,8 @@ class ExoPlayerAdapter implements PlayerAdapter {
     _videoHeight = 0;
     _enableAssSupport = false;
     _textureId = null;
+    _textureWidget = null;
+    _textureWidgetId = null;
     _isInitialized = false;
     _isPlaying = false;
     _isBuffering = false;

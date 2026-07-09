@@ -676,13 +676,25 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
 
   /// Build the video widget.
   ///
+  // 缓存视频 Texture 组件：整棵播放页 setState（如弹出选集/设置面板）时返回
+  // 同一实例，identical(old,new) 让 Flutter 跳过该子树重建，避免 Texture 重挂载
+  // 导致的黑帧闪现。RepaintBoundary 再隔离上层覆盖层重绘。桌面 mpv 早有此缓存，
+  // 移动原生内核漏了 → 这就是「点开面板画面闪一下」的根因。
+  Widget? _videoWidget;
+  int? _videoWidgetTextureId;
+
   /// Always uses Texture widget (SurfaceTexture backend) for both gpu and gpu-next modes.
   /// SurfaceView is not used because it creates a separate window layer that conflicts
   /// with Flutter's overlay controls.
   @override
   Widget buildVideo() {
-    if (_textureId != null) {
-      return Texture(textureId: _textureId!);
+    final tid = _textureId;
+    if (tid != null) {
+      if (_videoWidget == null || _videoWidgetTextureId != tid) {
+        _videoWidgetTextureId = tid;
+        _videoWidget = RepaintBoundary(child: Texture(textureId: tid));
+      }
+      return _videoWidget!;
     }
     return const Center(child: CircularProgressIndicator());
   }
@@ -844,6 +856,8 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
     _videoWidth = 0;
     _videoHeight = 0;
     _textureId = null;
+    _videoWidget = null;
+    _videoWidgetTextureId = null;
     _surfaceViewId = null;
     _useSurfaceView = false;
     _isInitialized = false;
