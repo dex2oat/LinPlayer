@@ -98,25 +98,26 @@ class _EntryHeader extends StatelessWidget {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    margin: const EdgeInsets.only(top: 2, right: 8),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: (accent ?? theme.colorScheme.primary)
-                          .withValues(alpha: 0.16),
-                      borderRadius: BorderRadius.circular(7),
-                    ),
-                    child: Text(
-                      '#${entry.rank}',
-                      style: TextStyle(
-                        color: accent ?? theme.colorScheme.primary,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 13,
-                        fontStyle: FontStyle.italic,
+                  if (entry.rank > 0)
+                    Container(
+                      margin: const EdgeInsets.only(top: 2, right: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: (accent ?? theme.colorScheme.primary)
+                            .withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(7),
+                      ),
+                      child: Text(
+                        '#${entry.rank}',
+                        style: TextStyle(
+                          color: accent ?? theme.colorScheme.primary,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13,
+                          fontStyle: FontStyle.italic,
+                        ),
                       ),
                     ),
-                  ),
                   Expanded(
                     child: Text(
                       entry.title,
@@ -247,6 +248,28 @@ Color? _accent(int rank) => switch (rank) {
       3 => const Color(0xFFCD7F32),
       _ => null,
     };
+
+/// 用「标题 + 封面」在已登录服务器里查找并打开的通用面板（追剧日历等复用榜单弹窗）。
+/// [dialog] 为 true 走居中弹窗（桌面/TV），否则底部弹窗（移动端）。
+void showCrossServerLookup(
+  BuildContext context, {
+  required String title,
+  String? imageUrl,
+  String? subtitle,
+  bool dialog = false,
+}) {
+  final entry = RankingEntry(
+    source: RankingSource.tmdb,
+    id: '',
+    title: title,
+    rank: 0, // 0 = 非榜单来源，隐藏名次徽标
+    imageUrl: imageUrl,
+    subtitle: subtitle,
+  );
+  dialog
+      ? showRankingEntryDialog(context, entry)
+      : showRankingEntrySheet(context, entry);
+}
 
 /// 移动端：底部弹窗承载聚合面板。
 void showRankingEntrySheet(BuildContext context, RankingEntry entry) {

@@ -7,6 +7,7 @@ import '../../../core/providers/sync_providers.dart';
 import '../../../core/services/afdian_service.dart';
 import '../../../core/services/sync/calendar_models.dart';
 import '../../../core/services/sync/sync_models.dart';
+import '../../../ui/widgets/common/ranking_entry_panel.dart';
 import '../../theme/tv_design_tokens.dart';
 import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_focusable.dart';
@@ -159,7 +160,13 @@ class _TvCalendarScreenState extends ConsumerState<TvCalendarScreen> {
 
   Widget _entry(TvMetrics m, CalendarEntry e) {
     return TvFocusable(
-      onSelect: () {},
+      onSelect: () => showCrossServerLookup(
+        context,
+        title: e.title,
+        imageUrl: e.imageUrl,
+        subtitle: e.subtitle,
+        dialog: true,
+      ),
       child: Container(
         padding: EdgeInsets.all(m.spacingMd),
         margin: EdgeInsets.only(bottom: m.spacingSm),

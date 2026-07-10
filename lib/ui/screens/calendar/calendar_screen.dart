@@ -8,6 +8,8 @@ import '../../../core/providers/sync_providers.dart';
 import '../../../core/services/afdian_service.dart';
 import '../../../core/services/sync/calendar_models.dart';
 import '../../../core/services/sync/sync_models.dart';
+import '../../../core/utils/platform_utils.dart';
+import '../../widgets/common/ranking_entry_panel.dart';
 
 /// 打开追剧日历（未解锁先弹爱发电订单校验）。设置入口与底部导航共用。
 Future<void> openCalendarGated(BuildContext context, WidgetRef ref) async {
@@ -217,6 +219,13 @@ class _EntryTile extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
+        onTap: () => showCrossServerLookup(
+          context,
+          title: entry.title,
+          imageUrl: img,
+          subtitle: entry.subtitle,
+          dialog: isDesktopPlatform,
+        ),
         leading: img != null
             ? ClipRRect(
                 borderRadius: BorderRadius.circular(6),
