@@ -14,8 +14,11 @@ class CalendarEntry {
   /// 每周放送日 1=周一…7=周日（Bangumi 用；[airDate] 为空时有效）。
   final int? weekday;
 
-  /// 封面图（Bangumi 有；Trakt 不提供图片，为空）。
+  /// 封面图（Bangumi 直接给；Trakt 无图，后续用 [tmdbId] 从 TMDB 补）。
   final String? imageUrl;
+
+  /// TMDB 剧集 id（Trakt 条目带，用于补封面）。
+  final int? tmdbId;
 
   final SyncService source;
 
@@ -26,7 +29,18 @@ class CalendarEntry {
     this.airDate,
     this.weekday,
     this.imageUrl,
+    this.tmdbId,
   });
+
+  CalendarEntry copyWith({String? imageUrl}) => CalendarEntry(
+        title: title,
+        source: source,
+        subtitle: subtitle,
+        airDate: airDate,
+        weekday: weekday,
+        imageUrl: imageUrl ?? this.imageUrl,
+        tmdbId: tmdbId,
+      );
 }
 
 /// 星期简称，索引 = DateTime.weekday - 1（1=周一…7=周日）。

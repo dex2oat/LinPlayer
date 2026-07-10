@@ -311,6 +311,8 @@ class TraktSyncService {
         final ep = raw['episode'];
         final title =
             (show is Map ? show['title']?.toString() : null) ?? '未知剧集';
+        final ids = show is Map ? show['ids'] : null;
+        final tmdbId = ids is Map ? (ids['tmdb'] as num?)?.toInt() : null;
         final airedRaw = raw['first_aired']?.toString();
         final aired =
             airedRaw != null ? DateTime.tryParse(airedRaw)?.toLocal() : null;
@@ -331,6 +333,7 @@ class TraktSyncService {
           title: title,
           subtitle: sub,
           airDate: aired,
+          tmdbId: tmdbId,
           source: SyncService.trakt,
         ));
       }

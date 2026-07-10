@@ -9,6 +9,7 @@ import '../services/sync/sync_models.dart';
 import '../services/sync/sync_scrobble_service.dart';
 import '../services/sync/sync_secure_store.dart';
 import '../services/sync/trakt_sync_service.dart';
+import '../services/tmdb_image_service.dart';
 
 /// 同步功能的全局状态：每个服务的已连接账号 + Bangumi 回调地址。
 class SyncState {
@@ -164,10 +165,25 @@ class SyncController extends StateNotifier<SyncState> {
   }) {
     switch (source) {
       case SyncService.trakt:
-        return trakt.fetchShowsCalendar(onlyMine: onlyMine);
+        return trakt
+            .fetchShowsCalendar(onlyMine: onlyMine)
+            .then(_enrichTraktPosters);
       case SyncService.bangumi:
         return bangumi.fetchAnimeCalendar(onlyMine: onlyMine);
     }
+  }
+
+  /// Trakt 不提供图片，用条目自带的 TMDB id 从 TMDB 补封面（去重 + 缓存）。
+  Future<List<CalendarEntry>> _enrichTraktPosters(
+      List<CalendarEntry> entries) async {
+    if (!TmdbImageService.instance.isConfigured) return entries;
+    final ids = entries.map((e) => e.tmdbId).whereType<int>().toSet();
+    if (ids.isEmpty) return entries;
+    final posters = await TmdbImageService.instance.posters(ids);
+    return entries.map((e) {
+      final url = e.tmdbId == null ? null : posters[e.tmdbId];
+      return url == null ? e : e.copyWith(imageUrl: url);
+    }).toList();
   }
 
   // ---- 断开连接 ----
