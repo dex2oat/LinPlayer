@@ -121,6 +121,8 @@ $env:LINPLAYER_SKIP_LIBMPV_UPGRADE = "1"; flutter build windows
 - [Emby](https://emby.media/) — 媒体服务器
 - [弹弹play (DanDanPlay)](https://www.dandanplay.com/) — 弹幕与动漫排行榜数据
 - [TMDB](https://www.themoviedb.org/) — 影视排行榜数据
+- [Bangumi (bgm.tv)](https://bgm.tv/) — 番剧追番进度与收藏同步
+- [Trakt](https://trakt.tv/) — 影视观看记录同步（Scrobble）
 - [OpenList](https://github.com/OpenListTeam/OpenList) — 网盘聚合源
 
 ### 网络与代理
