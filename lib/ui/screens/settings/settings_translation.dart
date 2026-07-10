@@ -402,15 +402,11 @@ class _WhisperSectionState extends ConsumerState<_WhisperSection> {
         if (mounted) setState(() => _progress = p);
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${model.displayName} 下载完成')),
-        );
+        AppToast.show(context, '${model.displayName} 下载完成');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('下载失败: $e')),
-        );
+        AppToast.show(context, '下载失败: $e', kind: AppToastKind.error);
       }
     } finally {
       if (mounted) setState(() => _downloading = null);

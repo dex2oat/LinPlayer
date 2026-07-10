@@ -122,15 +122,11 @@ class BackupRestoreScreen extends ConsumerWidget {
       final container = await _buildCommonConfig(ref);
       await File(path).writeAsString(jsonEncode(container));
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('备份已导出: $path')),
-        );
+        AppToast.show(context, '备份已导出: $path');
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('导出失败: $e')),
-        );
+        AppToast.show(context, '导出失败: $e', kind: AppToastKind.error);
       }
     }
   }
@@ -181,15 +177,12 @@ class BackupRestoreScreen extends ConsumerWidget {
       if (payload == null) return; // 取消输入密码
       await _restoreBackupPayload(ref, payload);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('备份已导入')),
-        );
+        AppToast.show(context, '备份已导入');
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('导入失败：文件已损坏或格式不支持')),
-        );
+        AppToast.show(context, '导入失败：文件已损坏或格式不支持',
+            kind: AppToastKind.error);
       }
     }
   }
@@ -207,9 +200,7 @@ class BackupRestoreScreen extends ConsumerWidget {
       final settings =
           (extra?['linplayer_settings'] as Map?)?.cast<String, dynamic>();
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已识别备份（${servers.length} 个服务器）')),
-        );
+        AppToast.show(context, '已识别备份（${servers.length} 个服务器）');
       }
       return {
         'servers': servers.map(serverConfigToJson).toList(),
@@ -298,9 +289,7 @@ class BackupRestoreScreen extends ConsumerWidget {
           FilledButton(
             onPressed: () {
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('配置已导入')),
-              );
+              AppToast.show(context, '配置已导入');
             },
             child: const Text('导入'),
           ),
@@ -365,9 +354,7 @@ class BackupRestoreScreen extends ConsumerWidget {
                     passwordController.text,
                   );
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('WebDAV 配置已保存')),
-              );
+              AppToast.show(context, 'WebDAV 配置已保存');
             },
             child: const Text('保存'),
           ),
@@ -405,15 +392,11 @@ class BackupRestoreScreen extends ConsumerWidget {
       final backupData = jsonEncode(await _buildCommonConfig(ref));
       await service.backupApp(backupData);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已备份到 WebDAV')),
-        );
+        AppToast.show(context, '已备份到 WebDAV');
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('备份失败: $e')),
-        );
+        AppToast.show(context, '备份失败: $e', kind: AppToastKind.error);
       }
     }
   }
@@ -451,15 +434,12 @@ class BackupRestoreScreen extends ConsumerWidget {
       if (payload == null) return;
       await _restoreBackupPayload(ref, payload);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已成功从 WebDAV 还原设置')),
-        );
+        AppToast.show(context, '已成功从 WebDAV 还原设置');
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('还原失败：文件已损坏或格式不支持')),
-        );
+        AppToast.show(context, '还原失败：文件已损坏或格式不支持',
+            kind: AppToastKind.error);
       }
     }
   }

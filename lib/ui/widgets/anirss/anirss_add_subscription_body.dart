@@ -6,6 +6,7 @@ import '../../../core/sources/anirss/anirss_providers.dart';
 import '../../../core/sources/anirss/models/ani.dart';
 import '../../../core/sources/anirss/models/bgm_info.dart';
 import '../../../core/sources/anirss/models/discover.dart';
+import '../common/app_toast.dart';
 import '../common/media_widgets.dart';
 
 /// 添加订阅的搜索源。
@@ -331,8 +332,7 @@ class _AniRssAddSubscriptionBodyState extends State<AniRssAddSubscriptionBody> {
   }
 
   void _toast(String msg) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg)));
+    AppToast.show(context, msg);
   }
 
   @override

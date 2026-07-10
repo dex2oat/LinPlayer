@@ -212,21 +212,15 @@ class SettingsScreen extends ConsumerWidget {
       final livePath = AppLogger().logFilePath;
       await Clipboard.setData(ClipboardData(text: path));
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            duration: const Duration(seconds: 6),
-            content: Text(
-              '日志已导出（路径已复制）:\n$path'
-              '${livePath != null ? '\n实时日志文件: $livePath' : ''}',
-            ),
-          ),
+        AppToast.show(
+          context,
+          '日志已导出（路径已复制）:\n$path'
+          '${livePath != null ? '\n实时日志文件: $livePath' : ''}',
         );
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('导出日志失败: $e')),
-        );
+        AppToast.show(context, '导出日志失败: $e', kind: AppToastKind.error);
       }
     }
   }
@@ -278,8 +272,7 @@ class SettingsScreen extends ConsumerWidget {
   }
 
   Future<void> _checkUpdate(BuildContext context, WidgetRef ref) async {
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.showSnackBar(const SnackBar(content: Text('正在检查更新…')));
+    AppToast.show(context, '正在检查更新…');
     final channel = ref.read(updateChannelProvider);
     final UpdateInfo? info;
     try {
@@ -288,16 +281,13 @@ class SettingsScreen extends ConsumerWidget {
           );
     } catch (_) {
       if (!context.mounted) return;
-      messenger.showSnackBar(
-        const SnackBar(content: Text('检查更新失败，请稍后重试')),
-      );
+      AppToast.show(context, '检查更新失败，请稍后重试',
+          kind: AppToastKind.error);
       return;
     }
     if (!context.mounted) return;
     if (info == null) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('已是最新版本（$kCurrentAppVersion）')),
-      );
+      AppToast.show(context, '已是最新版本（$kCurrentAppVersion）');
     } else {
       ref.read(availableUpdateProvider.notifier).state = info;
       await showUpdateDialog(context, info);

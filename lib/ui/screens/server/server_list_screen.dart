@@ -9,6 +9,7 @@ import '../../../core/sources/openlist_backend.dart';
 import '../../../core/sources/source_http.dart';
 import '../../../core/sources/source_kind.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../widgets/common/app_toast.dart';
 import '../../widgets/common/media_widgets.dart';
 import '../source/quark_qr_login_view.dart';
 
@@ -307,9 +308,7 @@ class _ServerListScreenState extends ConsumerState<ServerListScreen> {
                   AuthState.authenticated;
               if (ctx.mounted) Navigator.pop(ctx);
               if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('夸克已重新登录')),
-                );
+                AppToast.show(context, '夸克已重新登录');
               }
             },
           ),

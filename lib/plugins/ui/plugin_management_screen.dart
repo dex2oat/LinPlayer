@@ -12,6 +12,7 @@ import '../providers/plugin_providers.dart';
 import 'plugin_permission_dialog.dart';
 import 'plugin_settings_page_host.dart';
 import 'plugin_store_screen.dart';
+import '../../ui/widgets/common/app_toast.dart';
 
 /// 插件管理页（移动端）。负责安装、启用/禁用、查看权限、打开设置、卸载。
 class PluginManagementScreen extends ConsumerWidget {
@@ -145,15 +146,11 @@ class PluginManagementScreen extends ConsumerWidget {
     try {
       final info = await install();
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已安装 ${info.name}，请在列表中启用')),
-        );
+        AppToast.show(context, '已安装 ${info.name}，请在列表中启用');
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('安装失败: $e')),
-        );
+        AppToast.show(context, '安装失败: $e', kind: AppToastKind.error);
       }
     }
   }
@@ -300,9 +297,7 @@ class _PluginTile extends StatelessWidget {
         await manager.enable(info.id);
       } catch (e) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('启用失败: $e')),
-          );
+          AppToast.show(context, '启用失败: $e', kind: AppToastKind.error);
         }
       }
     } else {

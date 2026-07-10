@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/plugin_providers.dart';
 import '../store/plugin_store.dart';
+import '../../ui/widgets/common/app_toast.dart';
 
 /// 插件市场页（移动端 + 桌面共用）。从仓库 registry.json 拉取可安装插件，
 /// 一键网络安装——解决 iOS 无法用文件选择器导入 .ipk 的问题，也方便桌面安装。
@@ -37,15 +38,11 @@ class _PluginStoreScreenState extends ConsumerState<PluginStoreScreen> {
     try {
       final info = await ref.read(pluginManagerProvider).installFromUrl(url);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已安装 ${info.name}，请到「插件」列表中启用')),
-        );
+        AppToast.show(context, '已安装 ${info.name}，请到「插件」列表中启用');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('安装失败: $e')),
-        );
+        AppToast.show(context, '安装失败: $e', kind: AppToastKind.error);
       }
     } finally {
       if (mounted) setState(() => _installing.remove(plugin.id));

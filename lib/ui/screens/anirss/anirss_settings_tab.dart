@@ -8,6 +8,7 @@ import '../../../core/sources/anirss/anirss_providers.dart';
 import '../../../core/sources/anirss/anirss_token.dart';
 import '../../../core/sources/anirss/models/ani_config.dart';
 import '../../../core/widgets/app_shimmer.dart';
+import '../../widgets/common/app_toast.dart';
 import '../../widgets/anirss/anirss_diagnostics.dart';
 import '../../widgets/anirss/config_form.dart';
 
@@ -91,13 +92,11 @@ class _AniRssSettingsTabState extends ConsumerState<AniRssSettingsTab> {
       ref.invalidate(aniConfigProvider);
       _seeded = false;
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('设置已保存')));
+        AppToast.show(context, '设置已保存');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('保存失败：$e')));
+        AppToast.show(context, '保存失败：$e', kind: AppToastKind.error);
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -178,8 +177,7 @@ class _ServerManagementCard extends ConsumerWidget {
     final u = server.username ?? '';
     final p = server.password ?? '';
     if (u.isEmpty || p.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('未保存账密，无法自动重登')));
+      AppToast.show(context, '未保存账密，无法自动重登');
       return;
     }
     try {
@@ -190,13 +188,11 @@ class _ServerManagementCard extends ConsumerWidget {
       ref.read(currentServerProvider.notifier).state = updated;
       _invalidateAll(ref);
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('已重新登录')));
+        AppToast.show(context, '已重新登录');
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('重新登录失败：$e')));
+        AppToast.show(context, '重新登录失败：$e', kind: AppToastKind.error);
       }
     }
   }

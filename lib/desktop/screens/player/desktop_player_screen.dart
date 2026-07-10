@@ -42,6 +42,7 @@ import '../../../ui/widgets/common/danmaku_overlay.dart';
 import '../../../ui/widgets/common/danmaku_search_widget.dart';
 import '../../../ui/widgets/common/source_quality_button.dart';
 import '../../shell/desktop_nav_model.dart';
+import '../../../ui/widgets/common/app_toast.dart';
 
 part 'desktop_player_screen_state.dart';
 part 'desktop_player_screen_panels.dart';

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' show max, min;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'anime4k_shaders.dart';
 import 'player_adapter.dart';
 import 'app_logger.dart';
 import 'cache_service.dart';
@@ -135,6 +136,7 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
     bool useGpuNext = false,  // Optional: gpu-next rendering mode
     Map<String, String>? httpHeaders,
     String? userAgentOverride,
+    String? superResolutionLevel,  // Anime4K 档位；初始化时解析成 shader 链
   }) async {
     _logger.i('NativeMpv', '开始初始化 - videoUrl=$videoUrl, surfaceViewId=$surfaceViewId, useGpuNext=$useGpuNext');
     try {
@@ -226,8 +228,21 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
         (_) => _pollState(),
       );
 
+      // Anime4K 超分：把请求的档位解析成落地 shader 文件路径。以前这里只在
+      // _superResolutionEnabled 为真时重放，但档位→shader 的映射从来没在原生
+      // 适配器里建立过（映射只在 media_kit 适配器），导致 Android 开超分毫无效果。
+      if (isAnime4KLevelEnabled(superResolutionLevel)) {
+        _superResolutionLevel = superResolutionLevel!;
+        _superResolutionEnabled = true;
+        try {
+          _currentShaders = await resolveAnime4KShaderPaths(superResolutionLevel);
+        } catch (e) {
+          _logger.w('NativeMpv', 'Anime4K shader 资源缺失: $e');
+          _currentShaders = [];
+        }
+      }
       // Re-apply shaders if super resolution was previously enabled
-      if (_superResolutionEnabled) {
+      if (_superResolutionEnabled && _currentShaders.isNotEmpty) {
         _applyShaderList();
       }
 
@@ -525,20 +540,31 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
 
   @override
   Future<void> applySuperResolution(bool enable) async {
-    if (_playerId == null || !_isInitialized) return;
-    _superResolutionEnabled = enable;
-    if (enable) {
-      _applyShaderList();
-    } else {
-      _clearShaders();
-    }
+    await applySuperResolutionLevel(enable ? 'modeB' : 'off');
   }
 
   @override
   Future<void> applySuperResolutionLevel(String level) async {
     _superResolutionLevel = level;
-    if (_superResolutionEnabled) {
+    final enabled = isAnime4KLevelEnabled(level);
+    _superResolutionEnabled = enabled;
+    // 档位→shader 文件路径：以前原生适配器没有这层映射，超分档位切了也没 shader
+    // 可放，等于没开。现在统一从 anime4k_shaders.dart 解析并落地资源。
+    if (enabled) {
+      try {
+        _currentShaders = await resolveAnime4KShaderPaths(level);
+      } catch (e) {
+        _logger.w('NativeMpv', 'Anime4K shader 资源缺失: $e');
+        _currentShaders = [];
+      }
+    } else {
+      _currentShaders = [];
+    }
+    if (_playerId == null || !_isInitialized) return;
+    if (enabled && _currentShaders.isNotEmpty) {
       _applyShaderList();
+    } else {
+      _clearShaders();
     }
   }
 

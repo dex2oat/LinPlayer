@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:math' show max, min;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -45,6 +46,9 @@ class VideoPlayerService extends ChangeNotifier {
   String? _lastPreferredSubtitleLanguage;
   bool _lastHardwareDecoding = true;
   bool _lastStartWithSoftwareDecoding = false;
+  // 当前 Anime4K 超分档位（off/modeA/…）。跨适配器重建保留，初始化时回传给内核，
+  // 让 media_kit 在开超分时选硬件纹理、原生 mpv 解析出 shader 链。
+  String _superResolutionLevel = 'off';
   String? _primaryVideoUrl;
   String? _fallbackVideoUrl;
   // 逐流取流鉴权（网盘/聚合源直链）：主/兜底链路与适配器重建都复用同一份。
@@ -330,6 +334,7 @@ class VideoPlayerService extends ChangeNotifier {
       useGpuNext: useGpuNext,
       httpHeaders: _httpHeaders,
       userAgentOverride: _userAgentOverride,
+      superResolutionLevel: _superResolutionLevel,
     );
     _logger.i('VideoPlayerService', '适配器初始化完成, surfaceViewId=$_surfaceViewId');
     if (!(_adapter?.isInitialized ?? false) || (_adapter?.hasError ?? false)) {
@@ -677,6 +682,7 @@ class VideoPlayerService extends ChangeNotifier {
     Map<String, String>? httpHeaders,  // 网盘/聚合源直链逐流 headers；Emby/本地为 null
     String? userAgentOverride,  // 覆盖默认 UA（夸克等要求特定 UA）
     String? playSessionId,  // Emby 播放会话 id：关联 Start/Progress/Stopped 落地续播进度
+    String? superResolutionLevel,  // Anime4K 档位；播放页从持久化状态回传，重建后自动重放
   }) async {
     // 屏幕已销毁：不要再创建/初始化适配器，否则会留下后台空跑的孤儿播放器。
     if (_disposed) return;
@@ -708,6 +714,7 @@ class VideoPlayerService extends ChangeNotifier {
     _lastPreferredSubtitleLanguage = preferredSubtitleLanguage;
     _lastHardwareDecoding = hardwareDecoding ?? true;
     _lastStartWithSoftwareDecoding = startWithSoftwareDecoding;
+    _superResolutionLevel = superResolutionLevel ?? 'off';
     _autoRetryInFlight = false;
     _startupRetryCount = 0;
     _selectedSubtitleTrackId = null;
@@ -1085,15 +1092,33 @@ class VideoPlayerService extends ChangeNotifier {
 
   /// 应用超分辨率
   Future<void> applySuperResolution(bool enable) async {
+    _superResolutionLevel = enable ? 'modeB' : 'off';
     await _adapter?.applySuperResolution(enable);
     notifyListeners();
   }
 
-  /// 应用超分辨率档位
+  /// 应用超分辨率档位。记住档位，重建适配器时（换线路/换硬解）自动重放。
   Future<void> applySuperResolutionLevel(String level) async {
+    _superResolutionLevel = level;
     await _adapter?.applySuperResolutionLevel(level);
     notifyListeners();
   }
+
+  /// 切到 [level] 是否需要外层整体重建播放管线才能生效。
+  ///
+  /// media_kit 在 Windows/macOS 默认走软件纹理（消除弹面板闪屏），而软件纹理的
+  /// libmpv SW 渲染管线根本不跑 GLSL user shader → 超分开了也无变化。开/关超分
+  /// 会跨越「软件纹理↔硬件纹理」边界，纹理模式在建 VideoController 时就定死，只能
+  /// 整体重建。档位之间互切（都开着）不跨边界，直接 live 应用即可。
+  bool superResolutionRequiresReinit(String level) {
+    final crossesOnOff =
+        (_superResolutionLevel == 'off') != (level == 'off');
+    final swTextureKernel = _adapter is MpvPlayerAdapter &&
+        (Platform.isMacOS || Platform.isWindows);
+    return crossesOnOff && swTextureKernel;
+  }
+
+  String get superResolutionLevel => _superResolutionLevel;
 
   /// 获取播放统计信息
   Future<Map<String, String>> getPlaybackStats() async {

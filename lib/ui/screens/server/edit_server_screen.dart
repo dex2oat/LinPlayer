@@ -3,6 +3,7 @@ import '../../../core/widgets/td_switch_tile.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/providers/app_providers.dart';
+import '../../widgets/common/app_toast.dart';
 
 /// 编辑服务器页面
 class EditServerScreen extends ConsumerStatefulWidget {
@@ -36,9 +37,7 @@ class _EditServerScreenState extends ConsumerState<EditServerScreen> {
   void _save() {
     final name = _nameController.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('服务器名称不能为空')),
-      );
+      AppToast.show(context, '服务器名称不能为空');
       return;
     }
     
@@ -64,9 +63,7 @@ class _EditServerScreenState extends ConsumerState<EditServerScreen> {
 
     context.pop();
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('服务器已更新')),
-    );
+    AppToast.show(context, '服务器已更新');
   }
   
   @override

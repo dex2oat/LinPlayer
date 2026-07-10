@@ -123,9 +123,7 @@ class _SyncServiceTile extends ConsumerWidget {
           : const _BangumiConnectDialog(),
     );
     if (connected == true && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${service.displayName} 已连接')),
-      );
+      AppToast.show(context, '${service.displayName} 已连接');
     }
   }
 }
@@ -442,10 +440,7 @@ class _CopyRow extends StatelessWidget {
             tooltip: '复制',
             onPressed: () {
               Clipboard.setData(ClipboardData(text: value));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text('已复制'), duration: Duration(seconds: 1)),
-              );
+              AppToast.show(context, '已复制');
             },
           ),
         ],

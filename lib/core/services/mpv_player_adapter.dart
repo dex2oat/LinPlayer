@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import '../app_identity.dart';
+import 'anime4k_shaders.dart';
 import 'player_adapter.dart';
 import 'app_logger.dart';
 import 'cache_service.dart';
@@ -550,8 +551,18 @@ class MpvPlayerAdapter implements PlayerAdapter {
     bool useGpuNext = false, // Not used by media_kit, only for native mpv
     Map<String, String>? httpHeaders,
     String? userAgentOverride,
+    String? superResolutionLevel, // Anime4K 档位：决定 shader 链 + 纹理渲染模式
   }) async {
     _logger.i('MpvAdapter', '开始初始化 media_kit 内核');
+    // Anime4K 超分档位在建控制器前定下：GLSL user shader 只能在硬件(OpenGL)渲染
+    // 管线里跑；软件纹理(MPV_RENDER_API_TYPE_SW)会静默忽略 glsl-shaders，超分开了
+    // 也毫无变化。因此开超分时强制走硬件纹理（代价是 Win 弹面板可能有轻微闪一下，
+    // 但那是用户主动开超分才付出的、可接受的取舍）。
+    if (superResolutionLevel != null) {
+      _glslShaders = isAnime4KLevelEnabled(superResolutionLevel)
+          ? kAnime4KShaderPresets[superResolutionLevel]
+          : null;
+    }
     try {
       await dispose();
       _errorMessage = null;
@@ -600,7 +611,11 @@ class MpvPlayerAdapter implements PlayerAdapter {
       // 移动端 SurfaceTexture 缓存末帧故不闪。软件纹理由 Flutter 托管、末帧常驻，
       // 重组图层不掉帧→消除闪现；代价同 macOS：4K 每帧 CPU 上传。若 4K 掉帧明显，
       // 回退本行即可(仅去掉 isWindows)。解码仍是硬解(dxva2/d3d11)。
-      final softwareTexture = Platform.isMacOS || Platform.isWindows;
+      // 开了 Anime4K 超分时必须走硬件纹理，否则 SW 渲染管线不跑 GLSL shader
+      // （超分完全无效，画面无变化）。未开超分则维持软件纹理以消除弹面板闪屏。
+      final wantsShaders = _glslShaders != null && _glslShaders!.isNotEmpty;
+      final softwareTexture =
+          (Platform.isMacOS || Platform.isWindows) && !wantsShaders;
       _videoController = VideoController(
         _player!,
         configuration: softwareTexture
@@ -2010,69 +2025,19 @@ class MpvPlayerAdapter implements PlayerAdapter {
     await _configManager.updateConfigValue('video-aspect-override', value);
   }
 
-  static final Map<String, List<String>> _anime4KShaderPresets = {
-    'modeA': [
-      'Anime4K_Clamp_Highlights.glsl',
-      'Anime4K_Restore_CNN_S.glsl',
-      'Anime4K_Upscale_CNN_x2_S.glsl',
-    ],
-    'modeB': [
-      'Anime4K_Clamp_Highlights.glsl',
-      'Anime4K_Restore_CNN_M.glsl',
-      'Anime4K_Upscale_CNN_x2_M.glsl',
-      'Anime4K_AutoDownscalePre_x2.glsl',
-      'Anime4K_AutoDownscalePre_x4.glsl',
-      'Anime4K_Upscale_CNN_x2_S.glsl',
-    ],
-    'modeC': [
-      'Anime4K_Clamp_Highlights.glsl',
-      'Anime4K_Restore_CNN_VL.glsl',
-      'Anime4K_Upscale_CNN_x2_VL.glsl',
-      'Anime4K_AutoDownscalePre_x2.glsl',
-      'Anime4K_AutoDownscalePre_x4.glsl',
-      'Anime4K_Upscale_CNN_x2_M.glsl',
-    ],
-    // A+A / B+B / A+C：官方 Anime4K 双通道加强档，用现有 shader 近似
-    // （缺 Soft/Denoise 变体，以 Restore VL/M 代替），Restore→Upscale 走两轮。
-    'modeAA': [
-      'Anime4K_Clamp_Highlights.glsl',
-      'Anime4K_Restore_CNN_VL.glsl',
-      'Anime4K_Upscale_CNN_x2_VL.glsl',
-      'Anime4K_Restore_CNN_M.glsl',
-      'Anime4K_AutoDownscalePre_x2.glsl',
-      'Anime4K_AutoDownscalePre_x4.glsl',
-      'Anime4K_Upscale_CNN_x2_M.glsl',
-    ],
-    'modeBB': [
-      'Anime4K_Clamp_Highlights.glsl',
-      'Anime4K_Restore_CNN_M.glsl',
-      'Anime4K_Upscale_CNN_x2_VL.glsl',
-      'Anime4K_AutoDownscalePre_x2.glsl',
-      'Anime4K_Restore_CNN_M.glsl',
-      'Anime4K_AutoDownscalePre_x4.glsl',
-      'Anime4K_Upscale_CNN_x2_M.glsl',
-    ],
-    'modeAC': [
-      'Anime4K_Clamp_Highlights.glsl',
-      'Anime4K_Upscale_CNN_x2_VL.glsl',
-      'Anime4K_AutoDownscalePre_x2.glsl',
-      'Anime4K_AutoDownscalePre_x4.glsl',
-      'Anime4K_Restore_CNN_M.glsl',
-      'Anime4K_Upscale_CNN_x2_M.glsl',
-    ],
-  };
+  // Anime4K 档位→shader 链已抽到 anime4k_shaders.dart（kAnime4KShaderPresets），
+  // 与 Android 原生 mpv 适配器共用同一份映射。
 
   @override
   Future<void> applySuperResolution(bool enable) async {
-    _glslShaders = enable ? _anime4KShaderPresets['modeB'] : null;
+    _glslShaders = enable ? kAnime4KShaderPresets['modeB'] : null;
     await _applyShaderList(_glslShaders);
   }
 
   @override
   Future<void> applySuperResolutionLevel(String level) async {
-    _glslShaders = level == 'off'
-        ? null
-        : (_anime4KShaderPresets[level] ?? _anime4KShaderPresets['modeB']);
+    _glslShaders =
+        isAnime4KLevelEnabled(level) ? kAnime4KShaderPresets[level] : null;
     await _applyShaderList(_glslShaders);
   }
 

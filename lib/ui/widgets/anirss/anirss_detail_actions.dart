@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/sources/anirss/anirss_api.dart';
 import '../../../core/sources/anirss/anirss_providers.dart';
 import '../../../core/sources/anirss/models/ani.dart';
+import '../common/app_toast.dart';
 
 /// 详情页订阅操作（三端共用逻辑）。触发 UI（菜单/按钮）由各端各自实现，
 /// 这里统一动作执行 + 结果反馈 + provider 失效。
@@ -210,18 +211,17 @@ class _RateDialogState extends State<_RateDialog> {
   Future<void> _submit() async {
     if (_rating <= 0) return;
     setState(() => _submitting = true);
-    final messenger = ScaffoldMessenger.of(context);
     try {
       // setRate 读 Ani.score 作为提交的评分。
       await widget.api
           .setRate(widget.ani.copyWithRaw({'score': _rating}));
       if (!mounted) return;
       Navigator.pop(context);
-      messenger.showSnackBar(SnackBar(content: Text('已评分 $_rating 分')));
+      AppToast.show(context, '已评分 $_rating 分');
     } catch (e) {
       if (mounted) {
         setState(() => _submitting = false);
-        messenger.showSnackBar(SnackBar(content: Text('评分失败：$e')));
+        AppToast.show(context, '评分失败：$e', kind: AppToastKind.error);
       }
     }
   }

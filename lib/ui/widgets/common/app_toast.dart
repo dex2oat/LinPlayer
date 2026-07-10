@@ -8,10 +8,16 @@ import '../../../core/theme/app_colors.dart';
 /// 提示类型，决定气泡的强调色与图标。
 enum AppToastKind { info, success, error }
 
+/// 气泡出现的位置。
+/// - [lowerCenter] 屏幕中部偏下：非播放页统一用这里（默认）。
+/// - [topCenter] 顶部居中：播放页专用（避免遮挡底部进度条/控件）。
+enum AppToastPosition { topCenter, lowerCenter }
+
 /// 全局气泡提示（Overlay 实现，三端通用：移动 / 桌面）。
 ///
-/// 取代默认「底部大黑框」SnackBar：顶部居中、圆角毛玻璃气泡，滑入淡入 +
-/// 自动淡出，自带强调色图标。单实例——新提示出现时立即顶掉旧的。
+/// 取代默认「底部大黑框」SnackBar：圆角毛玻璃气泡，滑入淡入 + 自动淡出，
+/// 自带强调色图标。单实例——新提示出现时立即顶掉旧的。位置由 [AppToastPosition]
+/// 决定：非播放页中部偏下，播放页顶部居中。
 class AppToast {
   AppToast._();
 
@@ -22,6 +28,7 @@ class AppToast {
     BuildContext context,
     String message, {
     AppToastKind kind = AppToastKind.info,
+    AppToastPosition position = AppToastPosition.lowerCenter,
     Duration duration = const Duration(seconds: 3),
   }) {
     if (message.trim().isEmpty) return;
@@ -34,6 +41,7 @@ class AppToast {
       builder: (_) => _AppToastBubble(
         message: message,
         kind: kind,
+        position: position,
         duration: duration,
         onClosed: () {
           if (identical(_entry, entry)) _entry = null;
@@ -62,12 +70,14 @@ class _AppToastBubble extends StatefulWidget {
   const _AppToastBubble({
     required this.message,
     required this.kind,
+    required this.position,
     required this.duration,
     required this.onClosed,
   });
 
   final String message;
   final AppToastKind kind;
+  final AppToastPosition position;
   final Duration duration;
   final VoidCallback onClosed;
 
@@ -92,8 +102,11 @@ class _AppToastBubbleState extends State<_AppToastBubble>
       reverseDuration: const Duration(milliseconds: 220),
     );
     _fade = CurvedAnimation(parent: _c, curve: Curves.easeOut);
+    // 顶部气泡从上方滑入，中下部气泡从下方滑入。
+    final beginDy =
+        widget.position == AppToastPosition.topCenter ? -0.35 : 0.35;
     _slide = Tween<Offset>(
-      begin: const Offset(0, -0.35),
+      begin: Offset(0, beginDy),
       end: Offset.zero,
     ).animate(CurvedAnimation(parent: _c, curve: Curves.easeOutCubic));
     _c.forward();
@@ -131,21 +144,19 @@ class _AppToastBubbleState extends State<_AppToastBubble>
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final media = MediaQuery.of(context);
     final s = _style;
     final bg = (isDark ? const Color(0xFF2A2A2E) : Colors.white)
         .withValues(alpha: 0.94);
     final textColor = isDark ? Colors.white : const Color(0xFF1A1A1A);
+    final isTop = widget.position == AppToastPosition.topCenter;
 
-    return Positioned(
-      top: media.padding.top + 16,
-      left: 0,
-      right: 0,
+    return Positioned.fill(
       child: SafeArea(
-        bottom: false,
         child: Align(
-          alignment: Alignment.topCenter,
-          child: FadeTransition(
+          alignment: isTop ? Alignment.topCenter : const Alignment(0, 0.55),
+          child: Padding(
+            padding: EdgeInsets.only(top: isTop ? 16 : 0),
+            child: FadeTransition(
             opacity: _fade,
             child: SlideTransition(
               position: _slide,
@@ -202,6 +213,7 @@ class _AppToastBubbleState extends State<_AppToastBubble>
                   ),
                 ),
               ),
+            ),
             ),
           ),
         ),

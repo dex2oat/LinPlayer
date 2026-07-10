@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/sources/anirss/anirss_providers.dart';
 import '../../../core/sources/anirss/models/ani.dart';
+import '../common/app_toast.dart';
 
 /// 订阅「编辑」面板（对齐 ani-rss 原版订阅配置）。
 ///
@@ -141,8 +142,7 @@ class _EditBodyState extends State<_EditBody> {
       widget.parentRef.invalidate(aniListProvider);
       if (mounted) {
         Navigator.of(context).pop();
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('订阅已保存')));
+        AppToast.show(context, '订阅已保存');
       }
     } catch (e) {
       if (mounted) {

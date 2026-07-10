@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../manager/plugin_manager.dart';
 import '../models/plugin_extension_point.dart';
+import '../../ui/widgets/common/app_toast.dart';
 
 /// 渲染一个插件「设置页」扩展（settingsPages）。
 ///
@@ -96,8 +97,7 @@ class _PluginSettingsPageHostState extends State<PluginSettingsPageHost> {
     await PluginManager.instance
         .invokeExtensionField(widget.extension, 'submit', [_collect()]);
     if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('已保存')));
+      AppToast.show(context, '已保存');
       Navigator.of(context).maybePop();
     }
   }

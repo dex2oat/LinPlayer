@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/server_providers.dart';
 import 'cf_proxy_controller.dart';
 import 'cf_speed_tester.dart';
+import '../../../ui/widgets/common/app_toast.dart';
 
 /// CF 优选反代可视化面板（PC 优先，移动/TV 也能用同一页面）。
 ///
@@ -64,23 +65,20 @@ class _CfProxyPanelPageState extends ConsumerState<CfProxyPanelPage> {
         },
       );
       if (!mounted) return;
-      final messenger = ScaffoldMessenger.maybeOf(context);
       if (cancel.canceled) {
-        messenger?.showSnackBar(const SnackBar(content: Text('已取消测速')));
+        AppToast.show(context, '已取消测速');
       } else if (best == null) {
-        messenger?.showSnackBar(SnackBar(
-            content: Text(errMsg ?? '测速失败：未找到可用的优选 IP'),
-            duration: const Duration(seconds: 4)));
+        AppToast.show(context, errMsg ?? '测速失败：未找到可用的优选 IP',
+            kind: AppToastKind.error);
       } else {
-        messenger?.showSnackBar(SnackBar(
-            content: Text(
-                '已反代「${server.name}」→ ${best.ip}（${best.latencyMs}ms'
-                '${best.downloadKBps != null ? ' · ${(best.downloadKBps! / 1024).toStringAsFixed(2)} MB/s' : ''}）')));
+        AppToast.show(
+            context,
+            '已反代「${server.name}」→ ${best.ip}（${best.latencyMs}ms'
+            '${best.downloadKBps != null ? ' · ${(best.downloadKBps! / 1024).toStringAsFixed(2)} MB/s' : ''}）');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.maybeOf(context)
-            ?.showSnackBar(SnackBar(content: Text('测速出错: $e')));
+        AppToast.show(context, '测速出错: $e', kind: AppToastKind.error);
       }
     } finally {
       _cancels.remove(server.id);

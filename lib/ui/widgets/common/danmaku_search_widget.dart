@@ -11,6 +11,7 @@ import '../../../core/providers/app_providers.dart';
 import '../../../core/utils/danmaku_local_parser.dart';
 import '../../../core/utils/danmaku_matcher.dart';
 import '../../../core/utils/danmaku_postprocess.dart';
+import 'app_toast.dart';
 
 /// 弹幕搜索/选择面板（移动端右侧面板、桌面端弹层复用）。
 ///
@@ -297,7 +298,7 @@ class _DanmakuSearchContentState extends ConsumerState<DanmakuSearchContent> {
 
   void _toast(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    AppToast.show(context, msg);
   }
 
   // ============ UI ============

@@ -839,9 +839,7 @@ class PlayerSettingsScreen extends ConsumerWidget {
     if (!context.mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已更新外部 MPV 路径')),
-    );
+    AppToast.show(context, '已更新外部 MPV 路径');
   }
 }
 

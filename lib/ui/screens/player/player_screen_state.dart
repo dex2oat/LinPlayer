@@ -473,6 +473,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           selection.startsWithSoftwareDecoding && hardwareDecoding,
       fallbackReason: selection.fallbackReason,
       preferredSubtitleLanguage: preferredSubtitleLanguage,
+      superResolutionLevel: _anime4kMode,
       surfaceViewId: surfaceViewId, // Pass for gpu-next rendering
       useGpuNext: gpuNextEnabled, // Pass gpu-next rendering mode
       // L2：仅在线流注入重解析回调（本地文件/离线为 null → 退回旧行为）。
@@ -614,8 +615,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       _playerService.setAspectRatio(ref.read(aspectRatioProvider));
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('播放失败: $e')));
+        AppToast.show(context, '播放失败: $e',
+            kind: AppToastKind.error, position: AppToastPosition.topCenter);
         Navigator.of(context).maybePop();
       }
     }
@@ -795,11 +796,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         logger.i('Player', 'MPV外挂字幕加载成功');
 
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-                content: Text(
-                    '外挂字幕: ${target.language ?? '默认'} (${codec.toUpperCase()})')),
-          );
+          AppToast.show(context,
+              '外挂字幕: ${target.language ?? '默认'} (${codec.toUpperCase()})',
+              position: AppToastPosition.topCenter);
         }
       } else {
         final embyCodec = _embySubtitleCodec(codec);
@@ -826,20 +825,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           logger.i('Player', 'EXO外挂字幕加载成功');
 
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                  content: Text(
-                      '外挂字幕: ${target.language ?? '默认'} (${codec.toUpperCase()})')),
-            );
+            AppToast.show(context,
+                '外挂字幕: ${target.language ?? '默认'} (${codec.toUpperCase()})',
+                position: AppToastPosition.topCenter);
           }
         }
       }
     } catch (e, stackTrace) {
       logger.eWithStack('Player', '外挂字幕加载失败', e, stackTrace);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('字幕加载失败: $e')),
-        );
+        AppToast.show(context, '字幕加载失败: $e',
+            kind: AppToastKind.error, position: AppToastPosition.topCenter);
       }
     }
   }
@@ -1082,12 +1078,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
       // PGS 字幕提示：显示能力依赖设备侧 Media3 解码输出，异常时建议切换 MPV
       if (isGraphical && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('PGS字幕加载中，如无法显示请切换MPV内核'),
-            duration: Duration(seconds: 3),
-          ),
-        );
+        AppToast.show(context, 'PGS字幕加载中，如无法显示请切换MPV内核',
+            position: AppToastPosition.topCenter);
       }
     }
   }
@@ -1178,18 +1170,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     translator.errorMessage.addListener(() {
       final msg = translator.errorMessage.value;
       if (msg != null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('流式翻译引擎错误: $msg')),
-        );
+        AppToast.show(context, '流式翻译引擎错误: $msg',
+            kind: AppToastKind.error, position: AppToastPosition.topCenter);
       }
     });
     _streamTranslator = translator;
     translator.start(_playerService);
     if (mounted) {
       setState(() {});
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('该字幕为内封、无法整轨下载，已改为流式翻译（边播边译）')),
-      );
+      AppToast.show(context, '该字幕为内封、无法整轨下载，已改为流式翻译（边播边译）',
+          position: AppToastPosition.topCenter);
     }
   }
 
@@ -1339,9 +1329,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         _playerService.coreType != PlayerCoreType.nativeMpv) {
       logger.w('Player', '次字幕仅支持MPV内核');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('次字幕功能需要MPV内核，请在设置中切换')),
-        );
+        AppToast.show(context, '次字幕功能需要MPV内核，请在设置中切换',
+            position: AppToastPosition.topCenter);
       }
       return;
     }
@@ -1367,9 +1356,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       if (isGraphical) {
         logger.w('Player', '次字幕: 图形字幕暂不支持作为次字幕');
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('图形字幕(PGS/SUP)暂不支持作为次字幕')),
-          );
+          AppToast.show(context, '图形字幕(PGS/SUP)暂不支持作为次字幕',
+              position: AppToastPosition.topCenter);
         }
         return;
       }
@@ -1493,9 +1481,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
 
     if (inOpening && autoSkip) {
       _playerService.seekTo(Duration(seconds: openingEnd));
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已自动跳过片头')),
-      );
+      AppToast.show(context, '已自动跳过片头',
+          position: AppToastPosition.topCenter);
     } else if (inOpening && !_showSkipButton) {
       setState(() => _showSkipButton = true);
       _skipButtonTimer?.cancel();
@@ -2308,9 +2295,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       await _playerService.seekTo(savedPosition);
     }
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(!current ? '已切换硬件解码' : '已切换软件解码')),
-      );
+      AppToast.show(context, !current ? '已切换硬件解码' : '已切换软件解码',
+          position: AppToastPosition.topCenter);
     }
   }
 
@@ -2340,12 +2326,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
               await _playerService.applySuperResolutionLevel(mode);
               if (!mounted) return;
               setState(() => _anime4kMode = mode);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                      mode == 'off' ? '已关闭超分' : '已应用 Anime4K Mode $label'),
-                ),
-              );
+              AppToast.show(context,
+                  mode == 'off' ? '已关闭超分' : '已应用 Anime4K Mode $label',
+                  position: AppToastPosition.topCenter);
             },
           ),
       ],
@@ -2646,16 +2629,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           }
         } else {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('已经是第一集了')),
-            );
+            AppToast.show(context, '已经是第一集了',
+                position: AppToastPosition.topCenter);
           }
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('加载失败: $e')),
-          );
+          AppToast.show(context, '加载失败: $e',
+              kind: AppToastKind.error, position: AppToastPosition.topCenter);
         }
       }
     }
@@ -2677,16 +2658,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           }
         } else {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('已经是最后一集了')),
-            );
+            AppToast.show(context, '已经是最后一集了',
+                position: AppToastPosition.topCenter);
           }
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('加载失败: $e')),
-          );
+          AppToast.show(context, '加载失败: $e',
+              kind: AppToastKind.error, position: AppToastPosition.topCenter);
         }
       }
     }
@@ -2803,9 +2782,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
       final data = await _playerService.screenshot();
       if (!mounted) return;
       if (data == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('截图功能暂不支持当前播放器内核')),
-        );
+        AppToast.show(context, '截图功能暂不支持当前播放器内核',
+            position: AppToastPosition.topCenter);
         return;
       }
       // 真正落盘到系统「下载/Linpic」目录（之前只拿到字节、从未落盘）。
@@ -2823,14 +2801,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         saved = false;
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(saved ? '截图已保存到 下载/Linpic' : '截图保存失败，请重试')),
-      );
+      AppToast.show(context, saved ? '截图已保存到 下载/Linpic' : '截图保存失败，请重试',
+          position: AppToastPosition.topCenter);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('截图失败，请重试')),
-      );
+      AppToast.show(context, '截图失败，请重试',
+          kind: AppToastKind.error, position: AppToastPosition.topCenter);
     }
   }
 
@@ -2941,16 +2917,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     _sleepTimer = Timer(duration, () {
       if (mounted) {
         _playerService.pause();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已定时关闭播放')),
-        );
+        AppToast.show(context, '已定时关闭播放',
+            position: AppToastPosition.topCenter);
       }
       _sleepTimer = null;
     });
     ref.read(sleepTimerRemainingProvider.notifier).state = duration;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已设置 ${duration.inMinutes} 分钟后关闭')),
-    );
+    AppToast.show(context, '已设置 ${duration.inMinutes} 分钟后关闭',
+        position: AppToastPosition.topCenter);
   }
 
   void _showCoreSwitchDialog() {
@@ -3017,9 +2991,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
         'nativeMpv' => 'MPV 原生',
         _ => 'ExoPlayer',
       };
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已切换到 $label')),
-      );
+      AppToast.show(context, '已切换到 $label',
+          position: AppToastPosition.topCenter);
     }
   }
 
@@ -3027,9 +3000,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     final server = ref.read(currentServerProvider);
     if (server == null || server.lines.length <= 1) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('当前只有一个可用线路')),
-        );
+        AppToast.show(context, '当前只有一个可用线路',
+            position: AppToastPosition.topCenter);
       }
       return;
     }
@@ -3064,9 +3036,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
                 await _playerService.seekTo(savedPosition);
               }
               if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('已切换到线路: ${line.name}')),
-                );
+                AppToast.show(context, '已切换到线路: ${line.name}',
+                    position: AppToastPosition.topCenter);
               }
             },
           );
@@ -3087,9 +3058,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
                   ref.read(aspectRatioProvider.notifier).state = ratio;
                   _playerService.setAspectRatio(ratio);
                   Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('画面比例: $ratio')),
-                  );
+                  AppToast.show(context, '画面比例: $ratio',
+                      position: AppToastPosition.topCenter);
                 },
               ))
           .toList(),

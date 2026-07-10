@@ -1,4 +1,5 @@
 import '../../../core/widgets/app_shimmer.dart';
+import '../../widgets/tv_toast.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -630,8 +631,8 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
 
   void _toast(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg)));
+    // 播放页统一顶部居中，避免遮挡底部进度条/控件。
+    TvToast.show(context, msg, top: true);
   }
 
   Widget _buildDanmakuOverlay() {

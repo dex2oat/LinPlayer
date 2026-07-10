@@ -14,6 +14,7 @@ import '../../utils/media_helpers.dart';
 import '../../utils/image_size_helper.dart';
 import '../../widgets/common/double_back_exit.dart';
 import '../../widgets/common/dynamic_background.dart';
+import '../../widgets/common/app_toast.dart';
 import '../../widgets/common/media_widgets.dart';
 import '../../../plugins/manager/plugin_manager.dart';
 import '../../../plugins/models/plugin_extension_point.dart';
@@ -528,9 +529,7 @@ class _HomeAppBarState extends ConsumerState<_HomeAppBar> {
   void _showServerSelector() {
     final servers = ref.read(serverListProvider);
     if (servers.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('暂无服务器')),
-      );
+      AppToast.show(context, '暂无服务器');
       return;
     }
 
@@ -1371,15 +1370,11 @@ class ContinueWatchingCard extends ConsumerWidget {
           await api.user.markAsUnplayed(item.id);
           ref.invalidate(resumeItemsProvider);
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('已移除')),
-            );
+            AppToast.show(context, '已移除');
           }
         } catch (e) {
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('移除失败: $e')),
-            );
+            AppToast.show(context, '移除失败: $e', kind: AppToastKind.error);
           }
         }
       },
@@ -1397,15 +1392,11 @@ class ContinueWatchingCard extends ConsumerWidget {
           await api.favorite.addFavorite(item.id);
           refreshFavorites(ref);
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('已添加到收藏')),
-            );
+            AppToast.show(context, '已添加到收藏');
           }
         } catch (e) {
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('添加失败: $e')),
-            );
+            AppToast.show(context, '添加失败: $e', kind: AppToastKind.error);
           }
         }
       },
@@ -1423,15 +1414,11 @@ class ContinueWatchingCard extends ConsumerWidget {
           await api.user.markAsPlayed(item.id);
           ref.invalidate(resumeItemsProvider);
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('已标记为已播放')),
-            );
+            AppToast.show(context, '已标记为已播放');
           }
         } catch (e) {
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('标记失败: $e')),
-            );
+            AppToast.show(context, '标记失败: $e', kind: AppToastKind.error);
           }
         }
       },

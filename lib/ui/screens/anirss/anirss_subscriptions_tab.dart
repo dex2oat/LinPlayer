@@ -5,6 +5,7 @@ import '../../../core/sources/anirss/anirss_match.dart';
 import '../../../core/sources/anirss/anirss_providers.dart';
 import '../../../core/sources/anirss/models/ani.dart';
 import '../../../core/widgets/app_shimmer.dart';
+import '../../widgets/common/app_toast.dart';
 import '../../widgets/anirss/anirss_edit_subscription_sheet.dart';
 import 'anirss_add_subscription_sheet.dart';
 import 'anirss_download_widgets.dart';
@@ -27,9 +28,7 @@ class AniRssSubscriptionsTab extends ConsumerWidget {
             if (api == null) return;
             await api.refreshAll();
             if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('已触发全部订阅刷新')),
-              );
+              AppToast.show(context, '已触发全部订阅刷新');
             }
           },
         ),
@@ -127,8 +126,7 @@ class _SubscriptionList extends ConsumerWidget {
     if (api == null) return;
     await api.refreshAni(ani.id);
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('已刷新「${ani.title}」')));
+      AppToast.show(context, '已刷新「${ani.title}」');
     }
   }
 
@@ -139,8 +137,7 @@ class _SubscriptionList extends ConsumerWidget {
     await api.deleteAni([ani.id], deleteFiles: deleteFiles);
     ref.invalidate(aniListProvider);
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('已删除「${ani.title}」')));
+      AppToast.show(context, '已删除「${ani.title}」');
     }
   }
 

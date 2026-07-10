@@ -15,6 +15,7 @@ import '../utils/platform_utils.dart';
 import '../utils/server_batch_adder.dart';
 import '../utils/server_batch_parser.dart';
 import 'app_logger.dart';
+import '../../ui/widgets/common/app_toast.dart';
 
 /// 处理 `linplayer://` 自定义协议深链。
 ///
@@ -176,7 +177,7 @@ class DeepLinkService {
   void _toast(String msg) {
     final ctx = _navContext();
     if (ctx != null && ctx.mounted) {
-      ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(msg)));
+      AppToast.show(ctx, msg);
     }
   }
 

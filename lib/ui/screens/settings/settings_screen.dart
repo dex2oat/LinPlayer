@@ -37,6 +37,7 @@ import '../../../core/network/cf_proxy/cf_proxy_panel_page.dart';
 import '../../../core/services/update/app_update_service.dart';
 import '../../../core/services/watch_history/watch_history_writeback_service.dart';
 import '../../widgets/common/app_update_gate.dart';
+import '../../widgets/common/app_toast.dart';
 import '../../../plugins/ui/plugin_management_screen.dart';
 import '../server/server_list_screen.dart';
 import '../calendar/calendar_screen.dart';
@@ -86,13 +87,10 @@ Future<void> _importCustomFont(
     } else {
       ref.read(customDanmakuFontPathProvider.notifier).state = savedPath;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('字体已应用：${p.basename(savedPath)}')),
-    );
+    AppToast.show(context, '字体已应用：${p.basename(savedPath)}');
   } else {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('字体加载失败，请确认文件为有效的 ttf/otf 字体')),
-    );
+    AppToast.show(context, '字体加载失败，请确认文件为有效的 ttf/otf 字体',
+        kind: AppToastKind.error);
   }
 }
 

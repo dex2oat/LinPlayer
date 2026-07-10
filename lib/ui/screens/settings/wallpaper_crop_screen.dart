@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import '../../widgets/common/app_toast.dart';
 
 /// 壁纸裁剪页 —— 纯 Flutter 实现，无额外原生依赖。
 ///
@@ -68,9 +69,7 @@ class _WallpaperCropScreenState extends State<WallpaperCropScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('裁剪失败：$e')),
-      );
+      AppToast.show(context, '裁剪失败：$e', kind: AppToastKind.error);
     }
   }
 

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/providers/app_providers.dart';
+import 'app_toast.dart';
 
 /// 首页返回拦截：两秒内连按两次返回键才退出应用，
 /// 避免在首页误触一次系统返回就直接退到桌面。
@@ -31,12 +32,7 @@ class _DoubleBackToExitState extends State<DoubleBackToExit> {
         if (_lastPress == null ||
             now.difference(_lastPress!) > const Duration(seconds: 2)) {
           _lastPress = now;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('再按一次返回键退出'),
-              duration: Duration(seconds: 2),
-            ),
-          );
+          AppToast.show(context, '再按一次返回键退出');
           return;
         }
         SystemNavigator.pop();
@@ -79,12 +75,7 @@ class _PopToHomeState extends ConsumerState<PopToHome> {
         if (_lastPress == null ||
             now.difference(_lastPress!) > const Duration(seconds: 2)) {
           _lastPress = now;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('再按一次返回键退出'),
-              duration: Duration(seconds: 2),
-            ),
-          );
+          AppToast.show(context, '再按一次返回键退出');
           return;
         }
         SystemNavigator.pop();

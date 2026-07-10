@@ -17,6 +17,7 @@ import '../../utils/media_helpers.dart';
 import '../../widgets/common/dynamic_background.dart';
 import '../../widgets/common/media_widgets.dart';
 import '../../widgets/common/playback_options.dart';
+import '../../widgets/common/app_toast.dart';
 import '../../widgets/common/video_background.dart';
 
 /// 季详情页
@@ -59,9 +60,7 @@ class _SeasonDetailScreenState extends ConsumerState<SeasonDetailScreen> {
         setState(() {
           _seasonName = '加载失败';
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('加载季信息失败: $e')),
-        );
+        AppToast.show(context, '加载季信息失败: $e', kind: AppToastKind.error);
       }
     }
   }
@@ -766,9 +765,7 @@ class _PlayButtons extends ConsumerWidget {
                 final allowedByItem = item.canDownload ?? true;
                 if (!allowedByPolicy || !allowedByItem) {
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('当前服务器未开放下载权限')),
-                    );
+                    AppToast.show(context, '当前服务器未开放下载权限');
                   }
                   return;
                 }
@@ -779,9 +776,7 @@ class _PlayButtons extends ConsumerWidget {
                   mediaSourceIdOverride: mediaSourceId,
                 );
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(task != null ? '已添加到下载队列' : '添加下载失败')),
-                  );
+                  AppToast.show(context, task != null ? '已添加到下载队列' : '添加下载失败');
                 }
               },
             ),
@@ -812,15 +807,11 @@ class _PlayButtons extends ConsumerWidget {
                   }
                   ref.invalidate(mediaItemProvider(itemId));
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(isWatched ? '已标记为未观看' : '已标记为已观看')),
-                    );
+                    AppToast.show(context, isWatched ? '已标记为未观看' : '已标记为已观看');
                   }
                 } catch (e) {
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('操作失败: $e')),
-                    );
+                    AppToast.show(context, '操作失败: $e', kind: AppToastKind.error);
                   }
                 }
               },
@@ -841,15 +832,11 @@ class _PlayButtons extends ConsumerWidget {
                   refreshFavorites(ref);
                   ref.invalidate(mediaItemProvider(itemId));
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(isFav ? '已取消喜欢' : '已添加到喜欢')),
-                    );
+                    AppToast.show(context, isFav ? '已取消喜欢' : '已添加到喜欢');
                   }
                 } catch (e) {
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('操作失败: $e')),
-                    );
+                    AppToast.show(context, '操作失败: $e', kind: AppToastKind.error);
                   }
                 }
               },
@@ -926,19 +913,12 @@ class _PlayButtons extends ConsumerWidget {
                         final success = await castService.castVideo(videoUrl);
                         if (context.mounted) {
                           Navigator.pop(ctx);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(success
-                                  ? '已投屏到 ${device.name}'
-                                  : '投屏失败，请重试'),
-                            ),
-                          );
+                          AppToast.show(context,
+                              success ? '已投屏到 ${device.name}' : '投屏失败，请重试');
                         }
                       } else {
                         if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('连接设备失败')),
-                          );
+                          AppToast.show(context, '连接设备失败', kind: AppToastKind.error);
                         }
                       }
                     },

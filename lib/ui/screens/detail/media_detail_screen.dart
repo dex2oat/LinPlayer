@@ -14,6 +14,7 @@ import '../../utils/media_helpers.dart';
 import '../../widgets/common/dynamic_background.dart';
 import '../../widgets/common/media_widgets.dart';
 import '../../widgets/common/playback_options.dart';
+import '../../widgets/common/app_toast.dart';
 import '../../widgets/common/video_background.dart';
 
 /// 媒体详情页（剧/电影通用）
@@ -1215,9 +1216,7 @@ class _MoviePlayButtons extends ConsumerWidget {
     final allowedByItem = item.canDownload ?? true;
     if (!allowedByPolicy || !allowedByItem) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('当前服务器未开放下载权限')),
-        );
+        AppToast.show(context, '当前服务器未开放下载权限');
       }
       return;
     }
@@ -1230,9 +1229,7 @@ class _MoviePlayButtons extends ConsumerWidget {
     );
 
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(task != null ? '已添加到下载队列' : '添加下载失败')),
-      );
+      AppToast.show(context, task != null ? '已添加到下载队列' : '添加下载失败');
     }
   }
 
@@ -1272,19 +1269,12 @@ class _MoviePlayButtons extends ConsumerWidget {
               if (connected) {
                 final success = await castService.castVideo(videoUrl);
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(success 
-                        ? '已投屏到 ${device.name}'
-                        : '投屏失败，请重试'),
-                    ),
-                  );
+                  AppToast.show(context,
+                      success ? '已投屏到 ${device.name}' : '投屏失败，请重试');
                 }
               } else {
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('连接设备失败')),
-                  );
+                  AppToast.show(context, '连接设备失败', kind: AppToastKind.error);
                 }
               }
             },

@@ -52,9 +52,7 @@ class _ResumeSyncScreenState extends ConsumerState<ResumeSyncScreen> {
     await ref.read(watchHistoryProvider).clearAll();
     if (!mounted) return;
     setState(() => _recordCount = 0);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已清除本地观看记录')),
-    );
+    AppToast.show(context, '已清除本地观看记录');
   }
 
   Future<void> _pickWritebackRange() async {

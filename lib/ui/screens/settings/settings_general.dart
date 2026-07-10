@@ -233,9 +233,7 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
       await CacheService.clearAllImageCache();
       if (!mounted) return;
       ref.invalidate(cacheSizeProvider);
-      ScaffoldMessenger.of(this.context).showSnackBar(
-        const SnackBar(content: Text('图片缓存已清除')),
-      );
+      AppToast.show(this.context, '图片缓存已清除');
     }
   }
 
@@ -259,9 +257,7 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
       await CacheService.clearVideoCache();
       if (!mounted) return;
       ref.invalidate(cacheSizeProvider);
-      ScaffoldMessenger.of(this.context).showSnackBar(
-        const SnackBar(content: Text('视频缓存已清除')),
-      );
+      AppToast.show(this.context, '视频缓存已清除');
     }
   }
 
@@ -285,9 +281,7 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
       await CacheService.clearAllCache();
       if (!mounted) return;
       ref.invalidate(cacheSizeProvider);
-      ScaffoldMessenger.of(this.context).showSnackBar(
-        const SnackBar(content: Text('所有缓存已清除')),
-      );
+      AppToast.show(this.context, '所有缓存已清除');
     }
   }
 
@@ -523,9 +517,7 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
     ref.read(customWallpaperPathProvider.notifier).state = croppedPath;
 
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('壁纸已设置')),
-    );
+    AppToast.show(context, '壁纸已设置');
   }
 
   Future<void> _clearWallpaper(BuildContext context) async {
@@ -538,9 +530,7 @@ class _GeneralSettingsScreenState extends ConsumerState<GeneralSettingsScreen> {
       } catch (_) {}
     }
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已移除壁纸')),
-    );
+    AppToast.show(context, '已移除壁纸');
   }
 
   void _showThemeSelector(BuildContext context) {

@@ -116,6 +116,7 @@ class ExoPlayerAdapter implements PlayerAdapter {
     bool useGpuNext = false,  // Not used by ExoPlayer, only for native mpv
     Map<String, String>? httpHeaders,
     String? userAgentOverride,
+    String? superResolutionLevel,  // ExoPlayer 不支持 Anime4K，忽略
   }) async {
     _logger.i('ExoPlayer', '开始初始化 - videoUrl=$videoUrl');
     try {

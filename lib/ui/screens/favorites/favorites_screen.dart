@@ -7,6 +7,7 @@ import '../../../core/providers/media_providers.dart';
 import '../../../core/theme/app_motion.dart';
 import '../../../core/widgets/app_shimmer.dart';
 import '../../utils/media_helpers.dart';
+import '../../widgets/common/app_toast.dart';
 import '../../widgets/common/media_widgets.dart';
 
 class FavoritesScreen extends ConsumerWidget {
@@ -145,8 +146,6 @@ class _FavoriteTile extends ConsumerWidget {
     WidgetRef ref,
     MediaItem item,
   ) async {
-    final messenger = ScaffoldMessenger.of(context);
-
     try {
       final api = ref.read(apiClientProvider);
       await api.favorite.removeFavorite(item.id);
@@ -154,15 +153,11 @@ class _FavoriteTile extends ConsumerWidget {
       ref.invalidate(mediaItemProvider(item.id));
 
       if (context.mounted) {
-        messenger.showSnackBar(
-          SnackBar(content: Text('已从收藏移除 ${item.name}')),
-        );
+        AppToast.show(context, '已从收藏移除 ${item.name}');
       }
     } catch (error) {
       if (context.mounted) {
-        messenger.showSnackBar(
-          SnackBar(content: Text('移除收藏失败: $error')),
-        );
+        AppToast.show(context, '移除收藏失败: $error', kind: AppToastKind.error);
       }
     }
   }

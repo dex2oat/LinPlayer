@@ -4,17 +4,18 @@ import '../theme/tv_design_tokens.dart';
 import '../theme/tv_metrics.dart';
 
 /// TV Toast 提示
-/// 中央偏下，3 秒停留，支持动画淡入淡出
+/// 默认中央偏下（非播放页）；播放页传 top=true 顶部居中，避免遮挡底部控件。
+/// 3 秒停留，支持动画淡入淡出。
 class TvToast {
   static OverlayEntry? _currentEntry;
   static Timer? _timer;
 
-  static void show(BuildContext context, String message) {
+  static void show(BuildContext context, String message, {bool top = false}) {
     _removeCurrent();
 
     final overlay = Overlay.of(context);
     _currentEntry = OverlayEntry(
-      builder: (context) => _TvToastWidget(message: message),
+      builder: (context) => _TvToastWidget(message: message, top: top),
     );
     overlay.insert(_currentEntry!);
 
@@ -32,8 +33,9 @@ class TvToast {
 
 class _TvToastWidget extends StatefulWidget {
   final String message;
+  final bool top;
 
-  const _TvToastWidget({required this.message});
+  const _TvToastWidget({required this.message, this.top = false});
 
   @override
   State<_TvToastWidget> createState() => _TvToastWidgetState();
@@ -67,8 +69,10 @@ class _TvToastWidgetState extends State<_TvToastWidget>
   @override
   Widget build(BuildContext context) {
     final m = context.tv;
+    final h = MediaQuery.of(context).size.height;
     return Positioned(
-      bottom: MediaQuery.of(context).size.height * 0.25,
+      top: widget.top ? h * 0.08 : null,
+      bottom: widget.top ? null : h * 0.25,
       left: 0,
       right: 0,
       child: FadeTransition(

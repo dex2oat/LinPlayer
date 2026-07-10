@@ -6,6 +6,7 @@ import '../../../core/api/danmaku/danmaku_service.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/utils/server_batch_adder.dart';
 import '../../../core/utils/server_batch_parser.dart';
+import '../common/app_toast.dart';
 
 /// 三端通用的「批量解析添加服务器」视图。
 ///
@@ -79,9 +80,7 @@ class _BatchParseViewState extends ConsumerState<BatchParseView> {
     if (mounted) {
       setState(() {});
       if (blocks.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('没解析到服务器线路，请检查粘贴内容')),
-        );
+        AppToast.show(context, '没解析到服务器线路，请检查粘贴内容');
       }
     }
   }
@@ -156,10 +155,8 @@ class _BatchParseViewState extends ConsumerState<BatchParseView> {
     setState(() => _isAdding = false);
     if (!mounted) return;
     if (addedCount > 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(
-            '已添加 $addedCount 个服务器${danmakuCount > 0 ? '、$danmakuCount 条弹幕线路' : ''}')),
-      );
+      AppToast.show(context,
+          '已添加 $addedCount 个服务器${danmakuCount > 0 ? '、$danmakuCount 条弹幕线路' : ''}');
       widget.onAdded?.call(widget.setAsCurrent);
     }
   }

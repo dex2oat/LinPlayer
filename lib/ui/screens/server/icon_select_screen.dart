@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../../core/app_identity.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/services/server_icon_cache.dart';
+import '../../widgets/common/app_toast.dart';
 import '../../widgets/common/media_widgets.dart';
 
 class IconSelectScreen extends ConsumerStatefulWidget {
@@ -437,12 +438,8 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
                       : () async {
                           final name = nameController.text.trim();
                           final url = urlController.text.trim();
-                          final messenger = ScaffoldMessenger.of(context);
-
                           if (url.isEmpty) {
-                            messenger.showSnackBar(
-                              const SnackBar(content: Text('请输入源地址')),
-                            );
+                            AppToast.show(context, '请输入源地址');
                             return;
                           }
 
@@ -480,9 +477,8 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
                             if (!mounted) {
                               return;
                             }
-                            messenger.showSnackBar(
-                              const SnackBar(content: Text('添加源失败')),
-                            );
+                            AppToast.show(context, '添加源失败',
+                                kind: AppToastKind.error);
                             setDialogState(() {
                               submitting = false;
                             });
@@ -530,9 +526,7 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('选择图片失败')),
-      );
+      AppToast.show(context, '选择图片失败', kind: AppToastKind.error);
     }
   }
 
@@ -553,9 +547,7 @@ class _IconSelectScreenState extends ConsumerState<IconSelectScreen> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('选择文件失败')),
-      );
+      AppToast.show(context, '选择文件失败', kind: AppToastKind.error);
     }
   }
 

@@ -36,6 +36,7 @@ import '../core/sources/source_playback.dart';
 import '../core/sources/source_kind.dart';
 import '../ui/utils/image_size_helper.dart';
 import '../ui/utils/media_helpers.dart';
+import '../ui/widgets/common/app_toast.dart';
 import '../ui/widgets/common/media_widgets.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -440,12 +441,7 @@ class _MainShellState extends State<MainShell> {
     if (_lastBackPress == null ||
         now.difference(_lastBackPress!) > const Duration(seconds: 2)) {
       _lastBackPress = now;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('再按一次返回键退出'),
-          duration: Duration(seconds: 2),
-        ),
-      );
+      AppToast.show(context, '再按一次返回键退出');
       return;
     }
     SystemNavigator.pop();

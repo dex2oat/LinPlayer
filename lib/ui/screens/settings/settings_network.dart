@@ -62,11 +62,7 @@ class _NetworkSettingsScreenState extends ConsumerState<NetworkSettingsScreen> {
     final config = _buildConfig();
     await ref.read(proxyConfigProvider.notifier).save(config);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(config.isEnabled ? '代理已保存并生效' : '已关闭代理'),
-      ),
-    );
+    AppToast.show(context, config.isEnabled ? '代理已保存并生效' : '已关闭代理');
   }
 
   Future<void> _test() async {

@@ -6,6 +6,7 @@ import '../../../core/providers/app_providers.dart';
 import '../../../core/providers/media_providers.dart';
 import '../../../core/theme/app_motion.dart';
 import '../../../core/widgets/app_shimmer.dart';
+import '../../widgets/common/app_toast.dart';
 import '../../widgets/common/media_widgets.dart';
 
 enum LibraryViewMode { grid, list }
@@ -23,12 +24,7 @@ class _LibrariesScreenState extends ConsumerState<LibrariesScreen> {
 
   void _toggleBlock(String libraryId, bool nowBlocked) {
     ref.read(hiddenLibrariesProvider.notifier).toggle(libraryId);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(nowBlocked ? '已解除屏蔽' : '已屏蔽，将不在首页等处显示'),
-        duration: const Duration(seconds: 1),
-      ),
-    );
+    AppToast.show(context, nowBlocked ? '已解除屏蔽' : '已屏蔽，将不在首页等处显示');
   }
 
   @override

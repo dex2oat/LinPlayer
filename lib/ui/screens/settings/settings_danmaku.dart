@@ -395,20 +395,15 @@ class DanmakuSettingsScreen extends ConsumerWidget {
           .importUserBlocks(importResult.userIds);
 
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '已导入 ${importResult.totalImported} 个屏蔽词'
-              '${importResult.skippedCount > 0 ? '（跳过 ${importResult.skippedCount} 个）' : ''}',
-            ),
-          ),
+        AppToast.show(
+          context,
+          '已导入 ${importResult.totalImported} 个屏蔽词'
+          '${importResult.skippedCount > 0 ? '（跳过 ${importResult.skippedCount} 个）' : ''}',
         );
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('导入失败: $e')),
-        );
+        AppToast.show(context, '导入失败: $e', kind: AppToastKind.error);
       }
     }
   }
@@ -632,15 +627,11 @@ class _CustomSourceManagerSheetState
     final url = _urlController.text.trim();
     final token = _tokenController.text.trim();
     if (name.isEmpty || url.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请填写名称和API地址')),
-      );
+      AppToast.show(context, '请填写名称和API地址');
       return;
     }
     if (_needsToken && token.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('当前鉴权方式需要填入 Token')),
-      );
+      AppToast.show(context, '当前鉴权方式需要填入 Token');
       return;
     }
     final cfg = DanmakuSourceConfig(
@@ -657,9 +648,7 @@ class _CustomSourceManagerSheetState
     _urlController.clear();
     _tokenController.clear();
     setState(() => _isAdding = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已添加 $name')),
-    );
+    AppToast.show(context, '已添加 $name');
   }
 }
 

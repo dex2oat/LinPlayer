@@ -68,6 +68,7 @@ abstract class PlayerAdapter {
     bool useGpuNext = false,  // Optional: gpu-next rendering mode
     Map<String, String>? httpHeaders,
     String? userAgentOverride,
+    String? superResolutionLevel,  // Anime4K 档位；决定初始 shader 链 + 渲染模式
   });
 
   /// 加载外部字幕文件（通过 libass）

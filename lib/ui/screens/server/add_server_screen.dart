@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import '../../../core/api/emby_api.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/utils/server_batch_adder.dart';
+import '../../widgets/common/app_toast.dart';
 import '../../widgets/server/batch_parse_view.dart';
 
 /// 添加服务器页面
@@ -228,9 +229,7 @@ class _AddServerScreenState extends ConsumerState<AddServerScreen> with SingleTi
                 }
               } catch (e) {
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('读取文件失败: $e')),
-                  );
+                  AppToast.show(context, '读取文件失败: $e', kind: AppToastKind.error);
                 }
               }
             },
@@ -244,9 +243,7 @@ class _AddServerScreenState extends ConsumerState<AddServerScreen> with SingleTi
   
   void _importFromJson(BuildContext context, WidgetRef ref, String jsonText) {
     if (jsonText.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请输入JSON配置')),
-      );
+      AppToast.show(context, '请输入JSON配置');
       return;
     }
     
@@ -282,15 +279,11 @@ class _AddServerScreenState extends ConsumerState<AddServerScreen> with SingleTi
         ref.read(serverListProvider.notifier).addServer(server);
       }
       
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('成功导入 ${urls.length} 个服务器')),
-      );
+      AppToast.show(context, '成功导入 ${urls.length} 个服务器');
       
       Navigator.pop(context);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('导入失败: $e')),
-      );
+      AppToast.show(context, '导入失败: $e', kind: AppToastKind.error);
     }
   }
   

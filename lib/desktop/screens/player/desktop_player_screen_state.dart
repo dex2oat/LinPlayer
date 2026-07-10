@@ -431,6 +431,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
             selection.startsWithSoftwareDecoding && hardwareDecoding,
         fallbackReason: selection.fallbackReason,
         preferredSubtitleLanguage: preferredSubtitleLanguage,
+        superResolutionLevel: ref.read(anime4KLevelProvider),
         onStart: (info) async {
           try {
             await api.playback.reportPlaybackStart(info);
@@ -895,15 +896,13 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _externalSubtitleFallbackUnavailableMessage(
-              target,
-              subtitleKind,
-            ),
-          ),
+      AppToast.show(
+        context,
+        _externalSubtitleFallbackUnavailableMessage(
+          target,
+          subtitleKind,
         ),
+        position: AppToastPosition.topCenter,
       );
       return;
     }
@@ -928,9 +927,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('字幕加载失败: $e')),
-      );
+      AppToast.show(context, '字幕加载失败: $e',
+          kind: AppToastKind.error, position: AppToastPosition.topCenter);
     }
   }
 
@@ -1816,19 +1814,16 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
         await file.writeAsBytes(data, flush: true);
 
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('截图已保存到 ${file.path}')),
-        );
+        AppToast.show(context, '截图已保存到 ${file.path}',
+            position: AppToastPosition.topCenter);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('截图功能暂不支持当前播放器内核')),
-        );
+        AppToast.show(context, '截图功能暂不支持当前播放器内核',
+            position: AppToastPosition.topCenter);
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('截图失败: $e')),
-        );
+        AppToast.show(context, '截图失败: $e',
+            kind: AppToastKind.error, position: AppToastPosition.topCenter);
       }
     }
   }
@@ -1908,16 +1903,14 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
         }
       } else {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('已经是第一集了')),
-          );
+          AppToast.show(context, '已经是第一集了',
+              position: AppToastPosition.topCenter);
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('加载失败: $e')),
-        );
+        AppToast.show(context, '加载失败: $e',
+            kind: AppToastKind.error, position: AppToastPosition.topCenter);
       }
     }
   }
@@ -1942,16 +1935,14 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
         }
       } else {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('已经是最后一集了')),
-          );
+          AppToast.show(context, '已经是最后一集了',
+              position: AppToastPosition.topCenter);
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('加载失败: $e')),
-        );
+        AppToast.show(context, '加载失败: $e',
+            kind: AppToastKind.error, position: AppToastPosition.topCenter);
       }
     }
   }
@@ -1980,28 +1971,42 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
     );
     if (result != null && mounted) {
       try {
-        if (result == 'off') {
-          await _playerService.applySuperResolution(false);
+        // Win/macOS 软件纹理下开/关超分要跨「软件↔硬件纹理」边界，纹理模式在建
+        // VideoController 时定死，只能整体重建播放管线才能让 GLSL shader 真正生效。
+        if (_playerService.superResolutionRequiresReinit(result)) {
+          ref.read(anime4KLevelProvider.notifier).state = result;
+          final savedPosition = _playerService.position;
+          final wasPlaying = _playerService.isPlaying;
+          await _playerService.dispose();
+          _playerService = VideoPlayerService();
+          await _initializePlayer();
+          if (savedPosition > Duration.zero) {
+            await _playerService.seekTo(savedPosition);
+          }
+          if (!wasPlaying) {
+            await _playerService.pause();
+          }
         } else {
-          await _playerService.applySuperResolutionLevel(result);
+          if (result == 'off') {
+            await _playerService.applySuperResolution(false);
+          } else {
+            await _playerService.applySuperResolutionLevel(result);
+          }
+          ref.read(anime4KLevelProvider.notifier).state = result;
         }
-        ref.read(anime4KLevelProvider.notifier).state = result;
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              result == 'off'
-                  ? '已关闭 Anime4K 超分'
-                  : '已应用 Anime4K ${_anime4KLevelLabel(result)}',
-            ),
-          ),
+        AppToast.show(
+          context,
+          result == 'off'
+              ? '已关闭 Anime4K 超分'
+              : '已应用 Anime4K ${_anime4KLevelLabel(result)}',
+          position: AppToastPosition.topCenter,
         );
       } catch (e) {
         ref.read(anime4KLevelProvider.notifier).state = 'off';
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Anime4K 应用失败: $e')),
-        );
+        AppToast.show(context, 'Anime4K 应用失败: $e',
+            kind: AppToastKind.error, position: AppToastPosition.topCenter);
       }
     }
   }
@@ -2135,9 +2140,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
                   ref.read(aspectRatioProvider.notifier).state = ratio;
                   _playerService.setAspectRatio(ratio);
                   Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('画面比例: $ratio')),
-                  );
+                  AppToast.show(context, '画面比例: $ratio',
+                      position: AppToastPosition.topCenter);
                 },
               ))
           .toList(),
@@ -2187,9 +2191,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
     final subtitleStreams = _subtitleStreamsFromCurrentSource();
     if (subtitleStreams.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('当前没有可切换的字幕轨道')),
-      );
+      AppToast.show(context, '当前没有可切换的字幕轨道',
+          position: AppToastPosition.topCenter);
       return;
     }
     _showTrackSelectorDialog(
@@ -2215,9 +2218,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
     final audioStreams = _audioStreamsFromCurrentSource();
     if (audioStreams.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('当前没有可切换的音轨')),
-      );
+      AppToast.show(context, '当前没有可切换的音轨',
+          position: AppToastPosition.topCenter);
       return;
     }
     _showTrackSelectorDialog(
@@ -2243,9 +2245,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
     }).toList();
     if (streams.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('没有可作为次字幕的文本字幕轨道')),
-      );
+      AppToast.show(context, '没有可作为次字幕的文本字幕轨道',
+          position: AppToastPosition.topCenter);
       return;
     }
     if (!mounted) return;
@@ -2430,8 +2431,7 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
 
   void _translateMsg(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg)));
+    AppToast.show(context, msg, position: AppToastPosition.topCenter);
   }
 
   /// 启动/停止 Whisper 实时字幕（桌面专属）。
@@ -3977,9 +3977,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
       await _playerService.pause();
     }
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(!current ? '已切换硬件解码' : '已切换软件解码')),
-      );
+      AppToast.show(context, !current ? '已切换硬件解码' : '已切换软件解码',
+          position: AppToastPosition.topCenter);
     }
   }
 }

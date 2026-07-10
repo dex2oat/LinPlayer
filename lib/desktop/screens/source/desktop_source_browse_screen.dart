@@ -9,6 +9,7 @@ import '../../../core/sources/media_source_backend.dart';
 import '../../../core/sources/source_browse_controller.dart';
 import '../../../core/sources/source_playback.dart';
 import '../../../core/theme/app_motion.dart';
+import '../../../ui/widgets/common/app_toast.dart';
 import '../../../ui/widgets/common/media_widgets.dart';
 import '../../utils/desktop_smooth_scroll.dart';
 
@@ -57,9 +58,7 @@ class _DesktopSourceBrowseViewState
       context.push('/source-player',
           extra: SourcePlayback(server: c.server, entry: e));
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('暂不支持播放该文件类型')),
-      );
+      AppToast.show(context, '暂不支持播放该文件类型');
     }
   }
 

@@ -297,9 +297,8 @@ class _SkipDialogState extends ConsumerState<_SkipDialog> {
                 _openingEnd.inSeconds;
             ref.read(skipAutoModeProvider.notifier).state = _autoSkip;
             Navigator.pop(context);
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('跳过设置已保存')),
-            );
+            AppToast.show(context, '跳过设置已保存',
+                position: AppToastPosition.topCenter);
           },
         ),
         const SizedBox(height: 8),
@@ -692,23 +691,21 @@ class _SubtitleSettingsContentState
           }
           await playerService.loadLibassSubtitle(pathToLoad);
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('已导入并加载字幕: ${result.files.single.name}')),
-            );
+            AppToast.show(
+                context, '已导入并加载字幕: ${result.files.single.name}',
+                position: AppToastPosition.topCenter);
           }
         } else {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('字幕文件已选择，但播放器未就绪')),
-            );
+            AppToast.show(context, '字幕文件已选择，但播放器未就绪',
+                position: AppToastPosition.topCenter);
           }
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('导入失败: $e')),
-        );
+        AppToast.show(context, '导入失败: $e',
+            kind: AppToastKind.error, position: AppToastPosition.topCenter);
       }
     }
   }
@@ -848,7 +845,7 @@ class _SubtitleSettingsContentState
 
   void _toast(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    AppToast.show(context, msg, position: AppToastPosition.topCenter);
   }
 
   void _showFontSelector(BuildContext context) {
