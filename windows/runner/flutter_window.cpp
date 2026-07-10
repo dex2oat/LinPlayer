@@ -138,9 +138,16 @@ bool FlutterWindow::SetFullscreen(bool fullscreen) {
 
     // 仅去掉边框/标题相关样式（窗口本就是无边框自绘标题栏），不整片清掉
     // WS_OVERLAPPEDWINDOW，避免与 window_manager 的无边框处理打架导致还原失败。
+    //
+    // ⚠️ 关键（修全屏四周 8px 缝隙）：必须以「刚最大化后的当前样式」为基准做位运算，
+    // 而不是 saved_style_(最大化前的快照)。saved_style_ 不含 WS_MAXIMIZE 运行态位，
+    // 写回它会清掉缩放态 → IsZoomed() 变 false → window_manager 的 WM_NCCALCSIZE
+    // 走「非最大化 hidden」分支，给客户区四周内缩 8px 留缩放边 → 全屏后露出缝隙。
+    // 保留 WS_MAXIMIZE(不在下面的掩码里) → NCCALCSIZE 走 IsMaximized 分支铺满显示器。
+    LONG maximized_style = GetWindowLong(handle, GWL_STYLE);
     SetWindowLong(handle, GWL_STYLE,
-                  saved_style_ & ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX |
-                                   WS_MAXIMIZEBOX | WS_SYSMENU));
+                  maximized_style & ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX |
+                                      WS_MAXIMIZEBOX | WS_SYSMENU));
     SetWindowLong(handle, GWL_EXSTYLE,
                   saved_ex_style_ &
                       ~(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE |
