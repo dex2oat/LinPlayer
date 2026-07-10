@@ -171,6 +171,40 @@ class BangumiSyncService {
     return null;
   }
 
+  /// 设置条目收藏状态（type: 1=想看 2=看过 3=在看 4=搁置 5=抛弃）。
+  ///
+  /// 更新单集进度前必须先确保条目已被收藏，否则「未收藏的番」更新单集会失败——
+  /// 这是把「看过」正确同步到 Bangumi 的前提，同时给账号带上「在看」状态。
+  Future<bool> setCollectionType({
+    required int subjectId,
+    required int type,
+  }) async {
+    final account = SyncSession.current(SyncService.bangumi);
+    if (account == null) return false;
+    final valid = await ensureValid(account);
+    if (valid == null) return false;
+    try {
+      final resp = await _dio.post(
+        '$_apiBase/v0/users/-/collections/$subjectId',
+        data: {'type': type},
+        options: Options(headers: {
+          'Authorization': 'Bearer ${valid.accessToken}',
+          'User-Agent': kSyncUserAgent,
+          'Content-Type': 'application/json',
+        }),
+      );
+      final ok = (resp.statusCode ?? 0) >= 200 && (resp.statusCode ?? 0) < 300;
+      if (!ok) {
+        _logger.w('BangumiSync',
+            '设置收藏状态失败: HTTP ${resp.statusCode} ${resp.data}');
+      }
+      return ok;
+    } catch (e) {
+      _logger.w('BangumiSync', '设置收藏状态异常: $e');
+      return false;
+    }
+  }
+
   /// 更新单集观看状态（type: 2=看过）。供播放器集成阶段调用。
   Future<bool> updateEpisodeStatus({
     required int subjectId,

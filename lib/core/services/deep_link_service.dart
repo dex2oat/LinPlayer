@@ -10,6 +10,7 @@ import '../../routes/app_router.dart';
 import '../../tv/routes/tv_router.dart';
 import '../api/danmaku/danmaku_service.dart';
 import '../providers/server_providers.dart';
+import '../providers/sync_providers.dart';
 import '../utils/platform_utils.dart';
 import '../utils/server_batch_adder.dart';
 import '../utils/server_batch_parser.dart';
@@ -56,6 +57,14 @@ class DeepLinkService {
 
   Future<void> _handle(Uri uri) async {
     if (uri.scheme.toLowerCase() != 'linplayer') return;
+
+    // Bangumi 授权回填：浏览器授权页(bangumi.html)把授权码通过深链送回，免去
+    // 「复制授权码→回 App 粘贴」这一步。
+    if (uri.host == 'sync-bangumi' || uri.path.contains('sync-bangumi')) {
+      await _handleBangumiSync(uri);
+      return;
+    }
+
     final isAddServer =
         uri.host == 'add-server' || uri.path.contains('add-server');
     if (!isAddServer) return;
@@ -112,6 +121,62 @@ class DeepLinkService {
       _goHome();
     } catch (e) {
       _logger.w('DeepLink', '深链添加服务器失败: $e');
+    }
+  }
+
+  /// 用深链送回的 Bangumi 授权码换令牌。外部链接不可信（防止网页 drive-by 把用户
+  /// 绑到攻击者账号），需用户显式确认后再交换。用 App 侧 [state.bangumiRedirectUri]
+  /// 交换——须与授权时一致（默认即 bangumi.html 所在地址）。
+  Future<void> _handleBangumiSync(Uri uri) async {
+    final code = uri.queryParameters['code']?.trim();
+    if (code == null || code.isEmpty) {
+      _logger.w('DeepLink', 'Bangumi 深链缺少授权码');
+      return;
+    }
+    if (!await _confirmBangumiSync()) {
+      _logger.i('DeepLink', '用户取消（或无 UI 上下文）未连接 Bangumi');
+      return;
+    }
+    try {
+      await container
+          .read(syncControllerProvider.notifier)
+          .connectBangumiWithCode(code);
+      _logger.i('DeepLink', 'Bangumi 已通过深链连接');
+      _toast('Bangumi 已连接');
+    } catch (e) {
+      _logger.w('DeepLink', 'Bangumi 深链连接失败: $e');
+      _toast('Bangumi 连接失败：$e');
+    }
+  }
+
+  Future<bool> _confirmBangumiSync() async {
+    final context = _navContext();
+    if (context == null || !context.mounted) {
+      _logger.w('DeepLink', '无可用 UI 上下文，拒绝自动连接 Bangumi');
+      return false;
+    }
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('连接 Bangumi？'),
+        content: const Text('检测到来自浏览器的 Bangumi 授权码，是否用它连接你的 Bangumi 账号？'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('连接')),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  void _toast(String msg) {
+    final ctx = _navContext();
+    if (ctx != null && ctx.mounted) {
+      ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(msg)));
     }
   }
 

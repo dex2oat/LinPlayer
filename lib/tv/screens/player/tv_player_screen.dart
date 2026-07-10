@@ -395,6 +395,15 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
           try {
             await api.playback.reportPlaybackStart(info);
           } catch (_) {}
+          // Trakt scrobble/start：账号显示「正在观看」（续播时带上起播进度）。
+          final runtime = item.runTimeTicks;
+          final startTicks = (startPosition?.inMilliseconds ?? 0) * 10000;
+          final startProgress = (runtime != null && runtime > 0)
+              ? (startTicks / runtime * 100).clamp(0, 100).toDouble()
+              : 0.0;
+          unawaited(ref
+              .read(syncControllerProvider.notifier)
+              .scrobbleStart(item, progress: startProgress));
         },
         onProgress: (info) async {
           try {
@@ -498,27 +507,30 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
     await _initSourcePlayer(sp, startPosition: pos);
   }
 
-  /// 看完（进度达到统一观看阈值）→ 上报已连接的 Trakt/Bangumi。
+  /// 播放停止 → 上报同步服务：Trakt 总是发 scrobble/stop（按进度自动判定看过/
+  /// 续播点）；Bangumi 仅在进度达到统一观看阈值时标记「在看 + 单集看过」。
   Future<void> _maybeScrobble(PlaybackStopInfo info, MediaItem item) async {
     if (_didScrobble) return;
+    _didScrobble = true;
     try {
       final runtime = item.runTimeTicks;
       if (runtime == null || runtime <= 0) return;
-      final threshold = ref.read(watchedThresholdProvider);
-      if (info.positionTicks / runtime < threshold / 100) return;
-      _didScrobble = true;
+      final progress =
+          (info.positionTicks / runtime * 100).clamp(0, 100).toDouble();
+      final reachedThreshold = progress >= ref.read(watchedThresholdProvider);
 
       Map<String, String>? seriesProviderIds;
-      if (item.type == 'Episode' && item.seriesId != null) {
+      if (reachedThreshold && item.type == 'Episode' && item.seriesId != null) {
         try {
           final series =
               await ref.read(apiClientProvider).media.getItemDetails(item.seriesId!);
           seriesProviderIds = series.providerIds;
         } catch (_) {}
       }
-      await ref
-          .read(syncControllerProvider.notifier)
-          .scrobbleWatched(item, seriesProviderIds: seriesProviderIds);
+      await ref.read(syncControllerProvider.notifier).scrobbleStop(item,
+          progress: progress,
+          reachedThreshold: reachedThreshold,
+          seriesProviderIds: seriesProviderIds);
     } catch (_) {}
   }
 

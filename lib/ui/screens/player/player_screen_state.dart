@@ -491,6 +491,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           incrementPlayCount: true,
           force: true,
         );
+        // Trakt scrobble/start：账号显示「正在观看」（续播时带上起播进度）。
+        final runtime = item.runTimeTicks;
+        final startProgress = (runtime != null && runtime > 0)
+            ? (startPositionTicks / runtime * 100).clamp(0, 100).toDouble()
+            : 0.0;
+        unawaited(syncController.scrobbleStart(item, progress: startProgress));
       },
       onProgress: (info) async {
         try {
@@ -510,7 +516,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
           positionTicks: info.positionTicks,
           force: true,
         );
-        await _maybeScrobbleWatched(
+        await _scrobbleOnStop(
             info, item, api, watchedThreshold, syncController);
         // 看完一集后刷新媒体库网格，让封面右上角"未看集数"角标随之 -1。
         if (mounted) ref.invalidate(libraryItemsProvider);
@@ -2586,9 +2592,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     );
   }
 
-  /// 播放停止时判断是否「看完」（进度达到设置里的统一观看阈值），是则上报到
-  /// 已连接的同步服务。onStop 可能因显式停止 + dispose 触发两次，用 [_didScrobble] 去重。
-  Future<void> _maybeScrobbleWatched(
+  /// 播放停止时上报同步服务：Trakt 总是发 scrobble/stop（由其按进度自动判定看过/
+  /// 续播点）；Bangumi 仅在进度达到统一观看阈值时标记「在看 + 单集看过」。
+  /// onStop 可能因显式停止 + dispose 触发两次，用 [_didScrobble] 去重。
+  Future<void> _scrobbleOnStop(
     PlaybackStopInfo info,
     MediaItem item,
     ApiClientFactory api,
@@ -2596,16 +2603,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     SyncController syncController,
   ) async {
     if (_didScrobble) return;
+    _didScrobble = true;
     final runtime = item.runTimeTicks;
     if (runtime == null || runtime <= 0) return;
+    final progress =
+        (info.positionTicks / runtime * 100).clamp(0, 100).toDouble();
     // 「观看阈值」（linplayer_watched_threshold，75~95，默认90）已在
     // _initializePlayer 里 widget 仍 mounted 时捕获，避免 dispose 后用 ref。
-    if (info.positionTicks / runtime < thresholdPercent / 100) return;
-    _didScrobble = true;
+    final reachedThreshold = progress >= thresholdPercent;
 
-    // 剧集需要所属剧的 ProviderIds 才能给 Bangumi 取 subject_id。
+    // 剧集需要所属剧的 ProviderIds 才能给 Bangumi 取 subject_id——仅在达到阈值
+    // （会写 Bangumi）时才做这次查询，未达阈值只发 Trakt stop 无需它。
     Map<String, String>? seriesProviderIds;
-    if (item.type == 'Episode' && item.seriesId != null) {
+    if (reachedThreshold && item.type == 'Episode' && item.seriesId != null) {
       try {
         final series = await api.media.getItemDetails(item.seriesId!);
         seriesProviderIds = series.providerIds;
@@ -2613,7 +2623,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
     }
 
     try {
-      await syncController.scrobbleWatched(item,
+      await syncController.scrobbleStop(item,
+          progress: progress,
+          reachedThreshold: reachedThreshold,
           seriesProviderIds: seriesProviderIds);
     } catch (_) {}
   }

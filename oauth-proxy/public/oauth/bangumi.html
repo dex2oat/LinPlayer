@@ -23,11 +23,13 @@
       background: #11141a; border: 1px solid #2a2e37; border-radius: 10px;
       padding: 14px 12px; margin: 16px 0;
     }
-    button {
-      appearance: none; border: 0; border-radius: 10px; padding: 12px 18px; cursor: pointer;
+    button, a.btn {
+      display: inline-block; appearance: none; border: 0; border-radius: 10px;
+      padding: 12px 18px; cursor: pointer; text-decoration: none;
       font-size: 14px; font-weight: 600; background: #ff4d6d; color: #fff;
     }
-    button:active { transform: scale(.98); }
+    a.btn.ghost { background: #2a2e37; }
+    button:active, a.btn:active { transform: scale(.98); }
     .err { color: #ff7081; }
   </style>
 </head>
@@ -52,11 +54,15 @@
         box.innerHTML = '<p class="err">未检测到授权码。</p><p>请从 App 内重新发起授权。</p>';
         return;
       }
+      var deepLink = 'linplayer://sync-bangumi?code=' + encodeURIComponent(code);
       box.innerHTML =
-        '<p>复制下面的授权码，粘贴回 LinPlayer：</p>' +
+        '<p>点下面的按钮回到 LinPlayer 自动完成连接：</p>' +
+        '<a class="btn" id="open" href="' + deepLink + '">打开 LinPlayer</a>' +
+        '<p style="margin-top:20px;font-size:12px">没有自动跳转？复制授权码回 App 手动粘贴：</p>' +
         '<div class="code" id="code">' + code + '</div>' +
-        '<button id="copy">复制授权码</button>' +
-        '<p style="margin-top:16px">复制后回到 App 粘贴即可完成连接。</p>';
+        '<button id="copy" class="ghost" style="background:#2a2e37">复制授权码</button>';
+      // 移动端多数会直接尝试唤起 App；桌面若已注册 linplayer 协议同样可唤起。
+      try { window.location.href = deepLink; } catch (e) {}
       document.getElementById('copy').addEventListener('click', function () {
         var t = document.getElementById('code').textContent;
         navigator.clipboard && navigator.clipboard.writeText(t);

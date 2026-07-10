@@ -25,6 +25,11 @@ class TraktDeviceCode {
 /// 设备码轮询的结果状态。
 enum TraktPollState { pending, slowDown, authorized, expired, denied, error }
 
+/// Scrobble 动作：start=开始观看（Trakt 显示「正在观看」），pause=暂停，
+/// stop=停止。Trakt 在 stop 且 progress≥80% 时自动标记看过并写入历史，
+/// <80% 则存为续播点（/sync/playback），供跨设备续播。
+enum TraktScrobbleAction { start, pause, stop }
+
 class TraktPollResult {
   final TraktPollState state;
   final SyncAccount? account;
@@ -228,45 +233,43 @@ class TraktSyncService {
     return null;
   }
 
-  /// 将一个影片标记为已观看（写入 Trakt 历史）。
+  /// Scrobble 一次（start/pause/stop）。这是 Trakt 官方设计的实时观看机制：
+  /// start 时账号显示「正在观看」，stop 时 Trakt 按 [progress] 自动判定看过/续播点。
   ///
-  /// [ids] 为外部 ID 映射，如 {'imdb': 'tt...', 'tmdb': 12345}。
-  /// [type] 为 'movie' 或 'episode'。Episode 需提供 tvdb/tmdb/imdb 等。
-  /// 该方法供播放完成时调用（播放器集成阶段接入）。
-  Future<bool> addToHistory({
+  /// [ids] 为外部 ID 映射，如 {'imdb': 'tt...', 'tmdb': 12345}；
+  /// [type] 为 'movie' 或 'episode'（episode 需 tvdb/tmdb/imdb 等）；
+  /// [progress] 为 0~100 的百分比。
+  Future<bool> scrobble({
     required String type,
     required Map<String, dynamic> ids,
-    DateTime? watchedAt,
+    required double progress,
+    required TraktScrobbleAction action,
   }) async {
     final account = SyncSession.current(SyncService.trakt);
     if (account == null) return false;
     final valid = await ensureValid(account);
     if (valid == null) return false;
 
-    final entry = {
-      'ids': ids,
-      if (watchedAt != null) 'watched_at': watchedAt.toUtc().toIso8601String(),
+    final body = {
+      type: {'ids': ids},
+      'progress': progress.clamp(0, 100),
     };
-    final body = type == 'movie'
-        ? {
-            'movies': [entry]
-          }
-        : {
-            'episodes': [entry]
-          };
     try {
       final resp = await _dio.post(
-        '/sync/history',
+        '/scrobble/${action.name}',
         data: body,
         options: Options(headers: _authHeaders(valid.accessToken)),
       );
-      final ok = (resp.statusCode ?? 0) >= 200 && (resp.statusCode ?? 0) < 300;
+      final code = resp.statusCode ?? 0;
+      // 409 = 已有进行中的 scrobble（重复 start），对播放器而言视作成功。
+      final ok = (code >= 200 && code < 300) || code == 409;
       if (!ok) {
-        _logger.w('TraktSync', '写入历史失败: HTTP ${resp.statusCode} ${resp.data}');
+        _logger.w('TraktSync',
+            'scrobble ${action.name} 失败: HTTP $code ${resp.data}');
       }
       return ok;
     } catch (e) {
-      _logger.w('TraktSync', '写入历史异常: $e');
+      _logger.w('TraktSync', 'scrobble ${action.name} 异常: $e');
       return false;
     }
   }

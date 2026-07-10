@@ -39,47 +39,67 @@ class SyncScrobbleService {
         bangumi = bangumi ?? BangumiSyncService(),
         bangumiMatcher = bangumiMatcher ?? BangumiMatcher();
 
-  /// 上报「看过」。[seriesProviderIds] 为剧集所属剧的 ProviderIds（Bangumi 取
-  /// subject_id 用；影片可不传）。[dandanplay] 在线时作为 Bangumi 反查的首选来源。
-  /// 只会对已连接的服务发起调用。
-  Future<SyncScrobbleResult> scrobbleWatched(
+  /// Trakt scrobble 生命周期（start/pause/stop）。仅需影片自身的 ProviderIds，
+  /// 不做任何耗时的反查，供 onStart/onStop 直接调用。未连 Trakt 时静默返回。
+  Future<void> traktScrobble(
+    MediaItem item,
+    TraktScrobbleAction action,
+    double progress,
+  ) async {
+    if (SyncSession.current(SyncService.trakt) == null) return;
+    final type = _traktType(item);
+    if (type == null) return;
+    final ids = _traktIds(item.providerIds);
+    if (ids.isEmpty) {
+      _logger.w('SyncScrobble', 'Trakt 跳过 ${item.name}: 无可用 ProviderIds');
+      return;
+    }
+    await trakt.scrobble(
+        type: type, ids: ids, progress: progress, action: action);
+  }
+
+  /// 播放停止时上报。Trakt 总是发 scrobble/stop（由其按 [progress] 判定看过/续播点）；
+  /// Bangumi 仅在 [reachedThreshold]（进度达到观看阈值）时标记「在看 + 单集看过」。
+  /// [seriesProviderIds] 为剧集所属剧的 ProviderIds（Bangumi 取 subject 用）。
+  /// [dandanplay] 在线时作为 Bangumi 反查的首选来源。
+  Future<SyncScrobbleResult> scrobbleStop(
     MediaItem item, {
+    required double progress,
+    required bool reachedThreshold,
     Map<String, String>? seriesProviderIds,
     DandanplaySource? dandanplay,
   }) async {
     final out = <SyncService, bool>{};
 
     if (SyncSession.current(SyncService.trakt) != null) {
-      final ok = await _scrobbleTrakt(item);
-      if (ok != null) out[SyncService.trakt] = ok;
+      final type = _traktType(item);
+      final ids = _traktIds(item.providerIds);
+      if (type != null && ids.isNotEmpty) {
+        out[SyncService.trakt] = await trakt.scrobble(
+            type: type,
+            ids: ids,
+            progress: progress,
+            action: TraktScrobbleAction.stop);
+      }
     }
-    if (SyncSession.current(SyncService.bangumi) != null) {
+    if (reachedThreshold && SyncSession.current(SyncService.bangumi) != null) {
       final ok = await _scrobbleBangumi(item, seriesProviderIds, dandanplay);
       if (ok != null) out[SyncService.bangumi] = ok;
     }
 
     if (out.isNotEmpty) {
-      _logger.i('SyncScrobble', '观看上报 ${item.name}: $out');
+      _logger.i('SyncScrobble', '停止上报 ${item.name}: $out');
     }
     return SyncScrobbleResult(out);
   }
 
   // ---- Trakt ----
 
-  Future<bool?> _scrobbleTrakt(MediaItem item) async {
-    final type = switch (item.type) {
-      'Movie' => 'movie',
-      'Episode' => 'episode',
-      _ => null,
-    };
-    if (type == null) return null;
-    final ids = _traktIds(item.providerIds);
-    if (ids.isEmpty) {
-      _logger.w('SyncScrobble', 'Trakt 跳过 ${item.name}: 无可用 ProviderIds');
-      return null;
-    }
-    return trakt.addToHistory(type: type, ids: ids, watchedAt: DateTime.now());
-  }
+  String? _traktType(MediaItem item) => switch (item.type) {
+        'Movie' => 'movie',
+        'Episode' => 'episode',
+        _ => null,
+      };
 
   /// Emby ProviderIds（如 {'Tmdb':'123','Imdb':'tt...'}）→ Trakt ids 对象。
   Map<String, dynamic> _traktIds(Map<String, String>? p) {
@@ -115,15 +135,34 @@ class SyncScrobbleService {
     // Bangumi 以「单集」为粒度，需要 subject_id + episode_id。
     if (item.type != 'Episode') return null;
 
+    final ref = await _resolveBangumi(item, seriesProviderIds, dandanplay);
+    if (ref == null) {
+      _logger.w('SyncScrobble', 'Bangumi 跳过 ${item.name}: 未匹配到条目');
+      return null;
+    }
+
+    // 先确保条目在收藏中（设「在看」）：这是 Bangumi 的招牌追番状态，也是更新单集
+    // 进度的前提——未收藏的番直接更新单集会失败。
+    // ponytail: 每次都写「在看」，重看已「看过」的番会被降回「在看」（罕见，可接受）。
+    await bangumi.setCollectionType(subjectId: ref.subjectId, type: 3);
+    return bangumi.updateEpisodeStatus(
+      subjectId: ref.subjectId,
+      episodeId: ref.episodeId,
+      type: 2,
+    );
+  }
+
+  /// 三级回退把剧集反查成 Bangumi 的 (subject_id, episode_id)。
+  Future<BangumiEpisodeRef?> _resolveBangumi(
+    MediaItem item,
+    Map<String, String>? seriesProviderIds,
+    DandanplaySource? dandanplay,
+  ) async {
     // 一级：Emby 自带 Bangumi providerId（剧给 subject、集给 episode），最快最准。
     final directEp = _bangumiId(item.providerIds);
     final directSubject = _bangumiId(seriesProviderIds);
     if (directEp != null && directSubject != null) {
-      return bangumi.updateEpisodeStatus(
-        subjectId: directSubject,
-        episodeId: directEp,
-        type: 2,
-      );
+      return BangumiEpisodeRef(directSubject, directEp);
     }
 
     final episode = item.indexNumber;
@@ -135,31 +174,16 @@ class SyncScrobbleService {
       final subjectId = await _resolveSubjectViaDandanplay(item, dandanplay);
       if (subjectId != null) {
         final epId = await bangumiMatcher.findEpisodeId(subjectId, episode);
-        if (epId != null) {
-          return bangumi.updateEpisodeStatus(
-            subjectId: subjectId,
-            episodeId: epId,
-            type: 2,
-          );
-        }
+        if (epId != null) return BangumiEpisodeRef(subjectId, epId);
       }
     }
 
     // 三级（兜底）：纯 Bangumi API 搜索（剧名 + 开播日期）+ 续集链定位季度。
-    final ref = await bangumiMatcher.resolveEpisode(
+    return bangumiMatcher.resolveEpisode(
       title: item.seriesName ?? item.name,
       airDate: item.premiereDate,
       season: item.parentIndexNumber ?? 1,
       episode: episode,
-    );
-    if (ref == null) {
-      _logger.w('SyncScrobble', 'Bangumi 跳过 ${item.name}: 未匹配到条目');
-      return null;
-    }
-    return bangumi.updateEpisodeStatus(
-      subjectId: ref.subjectId,
-      episodeId: ref.episodeId,
-      type: 2,
     );
   }
 

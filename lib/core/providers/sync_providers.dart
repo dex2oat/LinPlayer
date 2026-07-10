@@ -122,10 +122,20 @@ class SyncController extends StateNotifier<SyncState> {
 
   // ---- 观看记录自动同步 ----
 
-  /// 播放达到完成阈值后调用：把「看过」写入已连接的 Trakt/Bangumi。
+  /// 起播时调用：给 Trakt 发 scrobble/start，账号显示「正在观看」。
+  /// [progress] 为起播位置的百分比（续播时非 0）。未连 Trakt 时不产生请求。
+  Future<void> scrobbleStart(MediaItem item, {double progress = 0}) async {
+    if (!state.isConnected(SyncService.trakt)) return;
+    await _scrobble.traktScrobble(item, TraktScrobbleAction.start, progress);
+  }
+
+  /// 播放停止时调用：Trakt 总是发 scrobble/stop（按 [progress] 自动判定看过/续播点）；
+  /// Bangumi 仅在 [reachedThreshold] 时标记「在看 + 单集看过」。
   /// 未连接任何服务时直接返回，不产生网络请求。
-  Future<void> scrobbleWatched(
+  Future<void> scrobbleStop(
     MediaItem item, {
+    required double progress,
+    required bool reachedThreshold,
     Map<String, String>? seriesProviderIds,
   }) async {
     if (!state.isConnected(SyncService.trakt) &&
@@ -134,8 +144,10 @@ class SyncController extends StateNotifier<SyncState> {
     }
     // 弹弹play 在线时作为 Bangumi 反查首选（需配置 DANDANPLAY 凭据，与弹幕同一套）。
     final dandanplay = _ref.read(danmakuServiceProvider).dandanplay;
-    await _scrobble.scrobbleWatched(
+    await _scrobble.scrobbleStop(
       item,
+      progress: progress,
+      reachedThreshold: reachedThreshold,
       seriesProviderIds: seriesProviderIds,
       dandanplay: dandanplay,
     );
