@@ -126,10 +126,25 @@ if (-not (Test-Path -LiteralPath (Join-Path \$src \$exeName))) {
 }
 
 # 3) 覆盖安装目录（只动程序文件；用户数据在 %APPDATA% 等处，不受影响）。
+# WARN 用 robocopy 而非 Copy-Item：Copy-Item -Recurse -Force 把新的 data 目录
+# 拷进已存在的安装目录 data 子目录时，可能嵌套成 data/data（或跳过内层文件），
+# 导致新的 data/app.so（Flutter Windows 的 Dart AOT 快照，版本号 kAppVersion 就
+# 编在这里）没覆盖旧的 → 重启后仍跑旧 Dart 代码 → 版本号不变、像没更新。
+# robocopy /E 会正确镜像合并进已存在目录并覆盖同名文件。
 \$ok = \$true
 try {
-  Copy-Item -Path (Join-Path \$src '*') -Destination \$installDir -Recurse -Force
-  Log "覆盖完成"
+  # /E 复制所有子目录(含空);/IS /IT 连同名/看似相同的文件也覆盖(防按时间跳过);
+  # /R:3 /W:1 失败重试;/NFL /NDL /NJH /NJS 精简日志。
+  \$rc = Start-Process -FilePath 'robocopy' `
+    -ArgumentList @('"' + \$src + '"', '"' + \$installDir + '"', '/E', '/IS', '/IT', '/R:3', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS') `
+    -Wait -PassThru -WindowStyle Hidden
+  # robocopy 退出码 <8 皆为成功(0=无变化,1=有复制,2/4/... 组合),>=8 才是真失败。
+  if (\$rc.ExitCode -ge 8) {
+    \$ok = \$false
+    Log "覆盖失败 robocopy exit=\$(\$rc.ExitCode)"
+  } else {
+    Log "覆盖完成 robocopy exit=\$(\$rc.ExitCode)"
+  }
 } catch {
   \$ok = \$false
   Log "覆盖失败: \$_"

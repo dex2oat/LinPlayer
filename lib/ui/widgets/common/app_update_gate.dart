@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/providers/update_providers.dart';
 import '../../../core/services/update/app_update_service.dart';
@@ -24,16 +25,53 @@ class AppUpdateGate extends ConsumerStatefulWidget {
 
 class _AppUpdateGateState extends ConsumerState<AppUpdateGate> {
   static const _interval = Duration(hours: 24);
+  // 事后校验用：更新前存下目标 tag，重启后核对现版本是否真的追上（Windows 覆盖
+  // 可能因安装目录无写权限/被占用/杀软拦截而悄悄失败）。存在 %APPDATA% 的
+  // SharedPreferences，不在安装目录，覆盖不会清掉。
+  static const _pendingUpdateKey = 'pending_update_target_tag';
   Timer? _timer;
   bool _dialogShown = false;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _verifyPendingUpdate();
       _maybeCheck();
       _timer = Timer.periodic(_interval, (_) => _maybeCheck());
     });
+  }
+
+  /// 重启后确认上次「立即更新」是否真的生效——否则用户只会看到版本没变、
+  /// 无从判断是没更新还是更新失败（本次要解决的正是「都不知道有没有更新」）。
+  Future<void> _verifyPendingUpdate() async {
+    if (!Platform.isWindows) return; // 仅 Windows 原地覆盖需要事后确认
+    final SharedPreferences prefs;
+    try {
+      prefs = await SharedPreferences.getInstance();
+    } catch (_) {
+      return;
+    }
+    final target = prefs.getString(_pendingUpdateKey);
+    if (target == null || target.isEmpty) return;
+    await prefs.remove(_pendingUpdateKey);
+    if (!mounted) return;
+    // 现版本 >= 目标 → 覆盖成功；否则文件没换成功（权限/占用/被拦截）。
+    final ok =
+        AppUpdateService.compareVersions(kCurrentAppVersion, target) >= 0;
+    if (ok) {
+      AppToast.success(context, '已更新到 $kCurrentAppVersion');
+    } else {
+      final logPath =
+          '${Directory.systemTemp.path}${Platform.pathSeparator}linplayer_update.log';
+      AppToast.show(
+        context,
+        '更新似乎未生效：当前仍为 $kCurrentAppVersion（目标 $target）。'
+        '多因安装目录无写入权限（如装在 Program Files）或被杀软拦截。'
+        '可把程序放到可写目录后重试；详情见 $logPath',
+        kind: AppToastKind.error,
+      );
+    }
   }
 
   @override
@@ -215,6 +253,12 @@ class _UpdateDownloadDialogState extends State<_UpdateDownloadDialog> {
         break;
       case ApplyResult.desktopRelaunching:
         // Windows：覆盖更新脚本已接管，提示后立即退出，让其覆盖并自动重启。
+        // 先存下目标 tag，重启后 _verifyPendingUpdate 核对是否真的更新到位。
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString(
+              _AppUpdateGateState._pendingUpdateKey, widget.info.tag);
+        } catch (_) {}
         setState(() => _relaunching = true);
         await Future<void>.delayed(const Duration(milliseconds: 1200));
         exit(0);
