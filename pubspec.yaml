@@ -38,7 +38,8 @@ dependencies:
   shared_preferences: ^2.2.2
 
   # 匿名遥测：崩溃上报 + Release Health 匿名活跃用户统计（三端 native+Dart，可关）
-  sentry_flutter: ^8.9.0
+  # 用 9.x：8.x 的原生层与新工具链(Flutter 3.44/Xcode 26/Kotlin 2.x)不兼容。
+  sentry_flutter: ^9.0.0
 
   # 原生播放器
   # media_kit: 跨平台视频播放器（基于 libmpv 的封装库）
@@ -113,7 +114,7 @@ dev_dependencies:
   # 微软商店打包：dart run msix:create 生成 .msix（Store 代签）
   msix: ^3.16.0
   # Sentry 调试符号上传：dart run sentry_dart_plugin（CI 构建后跑，主要给 Apple dSYM）
-  sentry_dart_plugin: ^2.0.0
+  sentry_dart_plugin: ^3.0.0
 
 # Sentry 调试符号上传配置（auth_token 从环境变量 SENTRY_AUTH_TOKEN 读，绝不写进仓库）。
 sentry:

@@ -152,6 +152,11 @@ jobs:
               sed -i -E "s/compileSdkVersion = [0-9]+/compileSdkVersion = 36/g" "$dir/build.gradle.kts"
               sed -i -E "s/compileSdk = [0-9]+/compileSdk = 36/g" "$dir/build.gradle.kts"
             fi
+            # Sentry 等老插件把 Kotlin languageVersion/apiVersion 钉在 1.6，
+            # 新版 Kotlin 编译器（Flutter 3.44+）已不支持 <1.8，统一抬到 1.8。
+            for gf in "$dir/build.gradle" "$dir/build.gradle.kts"; do
+              [ -f "$gf" ] && sed -i -E 's/(languageVersion|apiVersion)([[:space:]]*=[[:space:]]*)"1\.[0-7]"/\1\2"1.8"/g' "$gf"
+            done
           done
 
       - name: Decode release keystore
@@ -326,6 +331,11 @@ jobs:
               sed -i -E "s/compileSdkVersion = [0-9]+/compileSdkVersion = 36/g" "$dir/build.gradle.kts"
               sed -i -E "s/compileSdk = [0-9]+/compileSdk = 36/g" "$dir/build.gradle.kts"
             fi
+            # Sentry 等老插件把 Kotlin languageVersion/apiVersion 钉在 1.6，
+            # 新版 Kotlin 编译器（Flutter 3.44+）已不支持 <1.8，统一抬到 1.8。
+            for gf in "$dir/build.gradle" "$dir/build.gradle.kts"; do
+              [ -f "$gf" ] && sed -i -E 's/(languageVersion|apiVersion)([[:space:]]*=[[:space:]]*)"1\.[0-7]"/\1\2"1.8"/g' "$gf"
+            done
           done
 
       - name: Decode release keystore
@@ -867,7 +877,9 @@ jobs:
           sudo apt-get update
           # media_kit_video links libmpv via pkg-config on Linux；
           # flutter_secure_storage_linux 需要 libsecret-1 + jsoncpp（H11 凭据加密）。
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libmpv-dev libepoxy-dev libsecret-1-dev libjsoncpp-dev
+          # libcurl4-openssl-dev：sentry_flutter 的 Linux 原生层(sentry-native)编译时
+          # 需要带 AsynchDNS 的 libcurl，否则 CMake FindCURL 报错、构建失败。
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libmpv-dev libepoxy-dev libsecret-1-dev libjsoncpp-dev libcurl4-openssl-dev
 
       - name: Enable Linux desktop
         run: flutter config --enable-linux-desktop
