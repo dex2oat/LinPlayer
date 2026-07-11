@@ -10,3 +10,5 @@ LINPLAYER_PROXY_KEY=
 # 两者都在爱发电 dashboard/dev（开发者）页面获取。
 AFDIAN_USER_ID=你的爱发电UserId
 AFDIAN_TOKEN=你的爱发电Token
+# 活跃用户徽章（/sentry/users 用）。只需 org:read 权限的 Sentry Auth Token，线上设为 Encrypted。
+SENTRY_TOKEN=你的Sentry只读Token

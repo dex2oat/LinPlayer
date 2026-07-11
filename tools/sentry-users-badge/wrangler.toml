@@ -1,5 +1,0 @@
-name = "linplayer-sentry-users"
-main = "worker.js"
-compatibility_date = "2024-11-01"
-
-# SENTRY_TOKEN 不写在这里，用 `wrangler secret put SENTRY_TOKEN` 存进加密环境变量。
