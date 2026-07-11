@@ -2301,23 +2301,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   }
 
   /// Anime4K 超分档位面板（仅 mpv 内核）：6 档 + 关闭。
-  /// 官方模式（算法）：A=还原 / B=柔和还原 / C=去噪放大，A+A/B+B/C+A 为加强档。
+  /// 纯去噪放大梯子（无 Restore/锐化，不拖影）：核显→壮机，越往后越清晰越吃显卡。
   void _showAnime4kPanel() {
     const gears = <(String, String)>[
       ('off', '关闭'),
-      ('modeA', 'A · 还原'),
-      ('modeB', 'B · 柔和还原'),
-      ('modeC', 'C · 去噪放大'),
-      ('modeAA', 'A+A · 还原加强'),
-      ('modeBB', 'B+B · 柔和加强'),
-      ('modeAC', 'C+A · 去噪加强'),
+      ('modeA', '去噪 S · 核显轻量'),
+      ('modeB', '去噪 M · 均衡'),
+      ('modeC', '去噪 L · 清晰'),
+      ('modeAA', '去噪叠加 M · 更净'),
+      ('modeBB', '去噪叠加 L · 强'),
+      ('modeAC', '去噪叠加 VL · 壮机'),
     ];
     _showRightPanel(
       title: 'Anime4K 超分',
       children: [
         for (final (mode, label) in gears)
           PanelOptionTile(
-            label: mode == 'off' ? label : 'Mode $label',
+            label: label,
             leading: Icon(
                 mode == 'off' ? Icons.block : Icons.auto_awesome),
             selected: _anime4kMode == mode,

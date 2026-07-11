@@ -1951,16 +1951,15 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
 
   Future<void> _showAnime4KMenu() async {
     final currentLevel = ref.read(anime4KLevelProvider);
-    // Anime4K 官方模式（算法，非尺寸）：A=还原 / B=柔和还原 / C=去噪放大，
-    // A+A/B+B/C+A 为各自双通道加强档（三端一致，共 6 档）。
+    // Anime4K 纯去噪放大梯子（无 Restore/锐化，不拖影）：核显→壮机，越往后越清晰越吃显卡。
     const levels = [
       {'value': 'off', 'label': '关闭'},
-      {'value': 'modeA', 'label': '模式 A - 还原（通用）'},
-      {'value': 'modeB', 'label': '模式 B - 柔和还原'},
-      {'value': 'modeC', 'label': '模式 C - 去噪放大'},
-      {'value': 'modeAA', 'label': '模式 A+A - 还原加强'},
-      {'value': 'modeBB', 'label': '模式 B+B - 柔和加强'},
-      {'value': 'modeAC', 'label': '模式 C+A - 去噪加强'},
+      {'value': 'modeA', 'label': '去噪 S · 核显轻量'},
+      {'value': 'modeB', 'label': '去噪 M · 均衡'},
+      {'value': 'modeC', 'label': '去噪 L · 清晰'},
+      {'value': 'modeAA', 'label': '去噪叠加 M · 更净'},
+      {'value': 'modeBB', 'label': '去噪叠加 L · 强'},
+      {'value': 'modeAC', 'label': '去噪叠加 VL · 壮机'},
     ];
     final result = await showPlayerSettingsPanel<String>(
       context: context,
@@ -2020,17 +2019,17 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
   String _anime4KLevelLabel(String level) {
     switch (level) {
       case 'modeA':
-        return '模式 A';
+        return '去噪 S';
       case 'modeB':
-        return '模式 B';
+        return '去噪 M';
       case 'modeC':
-        return '模式 C';
+        return '去噪 L';
       case 'modeAA':
-        return '模式 A+A';
+        return '去噪叠加 M';
       case 'modeBB':
-        return '模式 B+B';
+        return '去噪叠加 L';
       case 'modeAC':
-        return '模式 C+A';
+        return '去噪叠加 VL';
       default:
         return level;
     }
