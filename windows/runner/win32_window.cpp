@@ -201,6 +201,22 @@ Win32Window::MessageHandler(HWND hwnd,
           static_cast<LONG>(kMinLogicalWidth * scale_factor);
       info->ptMinTrackSize.y =
           static_cast<LONG>(kMinLogicalHeight * scale_factor);
+      // Constrain the maximized rect to the monitor work area. Without this,
+      // a borderless (hidden-titlebar) window maximizes with an ~8px overhang
+      // on every edge, pushing the self-drawn caption buttons off-screen —
+      // the "最大化后右上角最小化/关闭没了" bug. Pinning ptMaxSize/ptMaxPosition
+      // to rcWork removes the overhang entirely, so nothing is clipped and it
+      // no longer depends on window_manager's NCCALCSIZE compensation.
+      MONITORINFO mi = {sizeof(MONITORINFO)};
+      if (GetMonitorInfo(monitor, &mi)) {
+        info->ptMaxPosition.x = mi.rcWork.left - mi.rcMonitor.left;
+        info->ptMaxPosition.y = mi.rcWork.top - mi.rcMonitor.top;
+        info->ptMaxSize.x = mi.rcWork.right - mi.rcWork.left;
+        info->ptMaxSize.y = mi.rcWork.bottom - mi.rcWork.top;
+        // ptMaxTrackSize left at its default (virtual-screen size) so the
+        // native fullscreen path's SetWindowPos(rcMonitor) can still cover the
+        // full monitor — only the *maximize* placement is pinned to rcWork.
+      }
       return 0;
     }
     case WM_DPICHANGED: {

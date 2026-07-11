@@ -74,7 +74,8 @@ class LibraryFilterValue {
   final double? ratingMin;
   final double? ratingMax;
 
-  /// 排序：[sortBy] 为 Emby SortBy 字段（更新时间=DateCreated、标题=SortName、
+  /// 排序：[sortBy] 为 Emby SortBy 字段（更新时间=DateLastContentAdded，即剧集
+  /// 最新一集的入库时间；标题=SortName、
   /// 官方评级=OfficialRating），[sortDescending] 决定升/降序。默认按标题升序。
   final String sortBy;
   final bool sortDescending;

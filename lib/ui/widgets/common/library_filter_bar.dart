@@ -322,7 +322,7 @@ class _RatingRowState extends State<_RatingRow> {
 
 /// 排序按钮行：更新时间 / 标题排序 / 官方评级。点选中项切升/降序，点未选中项切到该字段。
 const List<({String label, String key})> kLibrarySortOptions = [
-  (label: '更新时间', key: 'DateCreated'),
+  (label: '更新时间', key: 'DateLastContentAdded'),
   (label: '标题排序', key: 'SortName'),
   (label: '官方评级', key: 'OfficialRating'),
 ];

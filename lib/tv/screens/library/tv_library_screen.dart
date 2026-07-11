@@ -119,7 +119,7 @@ class _TvLibraryScreenState extends ConsumerState<TvLibraryScreen> {
 
   /// 排序选项：更新时间 / 标题排序 / 官方评级。点选中项切升/降序，点未选中项切到该字段。
   static const List<({String label, String key})> _sortOptions = [
-    (label: '更新时间', key: 'DateCreated'),
+    (label: '更新时间', key: 'DateLastContentAdded'),
     (label: '标题排序', key: 'SortName'),
     (label: '官方评级', key: 'OfficialRating'),
   ];
