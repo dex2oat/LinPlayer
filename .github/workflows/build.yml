@@ -225,10 +225,14 @@ jobs:
           ls -lh "$ARM64_TARGET"
 
       - name: Upload debug symbols to Sentry
-        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: dart run sentry_dart_plugin
+        run: |
+          if [ -z "$SENTRY_AUTH_TOKEN" ]; then
+            echo "::notice::SENTRY_AUTH_TOKEN 未设置，跳过符号上传"
+            exit 0
+          fi
+          dart run sentry_dart_plugin
 
       - name: Upload Android Mobile APK
         uses: actions/upload-artifact@v4
@@ -396,10 +400,14 @@ jobs:
           ls -lh "$TV_APK_TARGET"
 
       - name: Upload debug symbols to Sentry
-        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: dart run sentry_dart_plugin
+        run: |
+          if [ -z "$SENTRY_AUTH_TOKEN" ]; then
+            echo "::notice::SENTRY_AUTH_TOKEN 未设置，跳过符号上传"
+            exit 0
+          fi
+          dart run sentry_dart_plugin
 
       - name: Upload Android TV APK
         uses: actions/upload-artifact@v4
@@ -492,10 +500,14 @@ jobs:
             --dart-define=TMDB_API_KEY_ENC="$TMDB_ENC"
 
       - name: Upload debug symbols to Sentry
-        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: dart run sentry_dart_plugin
+        run: |
+          if [ -z "$SENTRY_AUTH_TOKEN" ]; then
+            echo "::notice::SENTRY_AUTH_TOKEN 未设置，跳过符号上传"
+            exit 0
+          fi
+          dart run sentry_dart_plugin
 
       - name: Verify PGS/SUP decoder in iOS libmpv
         run: |
@@ -705,11 +717,15 @@ jobs:
             --dart-define=TMDB_API_KEY_ENC="$tmdbEnc"
 
       - name: Upload debug symbols to Sentry
-        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
         shell: pwsh
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: dart run sentry_dart_plugin
+        run: |
+          if ([string]::IsNullOrEmpty($env:SENTRY_AUTH_TOKEN)) {
+            Write-Host "::notice::SENTRY_AUTH_TOKEN 未设置，跳过符号上传"
+            exit 0
+          }
+          dart run sentry_dart_plugin
 
       - name: Upgrade libmpv-2.dll for PGS/SUP
         shell: pwsh
@@ -876,10 +892,14 @@ jobs:
             --dart-define=TMDB_API_KEY_ENC="$TMDB_ENC"
 
       - name: Upload debug symbols to Sentry
-        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: dart run sentry_dart_plugin
+        run: |
+          if [ -z "$SENTRY_AUTH_TOKEN" ]; then
+            echo "::notice::SENTRY_AUTH_TOKEN 未设置，跳过符号上传"
+            exit 0
+          fi
+          dart run sentry_dart_plugin
 
       - name: Bundle ffmpeg (内置，避免运行时无校验下载，M6)
         run: |
@@ -992,10 +1012,14 @@ jobs:
             --dart-define=TMDB_API_KEY_ENC="$TMDB_ENC"
 
       - name: Upload debug symbols to Sentry
-        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: dart run sentry_dart_plugin
+        run: |
+          if [ -z "$SENTRY_AUTH_TOKEN" ]; then
+            echo "::notice::SENTRY_AUTH_TOKEN 未设置，跳过符号上传"
+            exit 0
+          fi
+          dart run sentry_dart_plugin
 
       - name: Verify PGS/SUP decoder in macOS libmpv
         run: |
