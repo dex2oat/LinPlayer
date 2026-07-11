@@ -11,6 +11,12 @@
   <a href="https://t.me/MikudesuChannels"><img src="https://img.shields.io/badge/Telegram-MikudesuChannels-26A5E4?logo=telegram&logoColor=white" alt="Telegram"></a>
 </p>
 
+<p align="center">
+  <b>简体中文</b> ·
+  <a href="README.en.md">English</a> ·
+  <a href="README.ja.md">日本語</a>
+</p>
+
 **LinPlayer** 是一个跨平台的 Emby 第三方客户端，覆盖 **移动端（Android / iOS）**、**桌面端（Windows / Linux / macOS）** 与 **电视端（Android TV / tvOS）**，以 Flutter 作为唯一长期代码线演进。
 
 > 每个平台使用各自的原生 UI 语言（Material / fluent_ui / macos_ui / TV 自适应），但共享同一套核心逻辑。
