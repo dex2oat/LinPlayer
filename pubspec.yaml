@@ -37,6 +37,9 @@ dependencies:
   # 本地存储
   shared_preferences: ^2.2.2
 
+  # 匿名遥测：崩溃上报 + Release Health 匿名活跃用户统计（三端 native+Dart，可关）
+  sentry_flutter: ^8.9.0
+
   # 原生播放器
   # media_kit: 跨平台视频播放器（基于 libmpv 的封装库）
   # 注意：PC 端 PGS/SUP 渲染依赖 libmpv 是否包含 hdmv_pgs_subtitle 解码器；
@@ -109,6 +112,16 @@ dev_dependencies:
   flutter_lints: ^4.0.0
   # 微软商店打包：dart run msix:create 生成 .msix（Store 代签）
   msix: ^3.16.0
+  # Sentry 调试符号上传：dart run sentry_dart_plugin（CI 构建后跑，主要给 Apple dSYM）
+  sentry_dart_plugin: ^2.0.0
+
+# Sentry 调试符号上传配置（auth_token 从环境变量 SENTRY_AUTH_TOKEN 读，绝不写进仓库）。
+sentry:
+  org: linplayer
+  project: flutter
+  upload_debug_symbols: true
+  upload_sources: false      # 不上传源码（隐私 + 开源仓库本就公开）
+  upload_source_maps: false  # 无 Web 目标
 
 flutter:
   uses-material-design: true

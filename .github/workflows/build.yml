@@ -224,6 +224,12 @@ jobs:
           fi
           ls -lh "$ARM64_TARGET"
 
+      - name: Upload debug symbols to Sentry
+        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: dart run sentry_dart_plugin
+
       - name: Upload Android Mobile APK
         uses: actions/upload-artifact@v4
         with:
@@ -389,6 +395,12 @@ jobs:
           fi
           ls -lh "$TV_APK_TARGET"
 
+      - name: Upload debug symbols to Sentry
+        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: dart run sentry_dart_plugin
+
       - name: Upload Android TV APK
         uses: actions/upload-artifact@v4
         with:
@@ -478,6 +490,12 @@ jobs:
             --dart-define=DANDANPLAY_APP_ID="$CLEAN_ID" \
             --dart-define=DANDANPLAY_APP_SECRET="$CLEAN_SECRET" \
             --dart-define=TMDB_API_KEY_ENC="$TMDB_ENC"
+
+      - name: Upload debug symbols to Sentry
+        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: dart run sentry_dart_plugin
 
       - name: Verify PGS/SUP decoder in iOS libmpv
         run: |
@@ -686,6 +704,13 @@ jobs:
             --dart-define=DANDANPLAY_APP_SECRET="$cleanSecret" `
             --dart-define=TMDB_API_KEY_ENC="$tmdbEnc"
 
+      - name: Upload debug symbols to Sentry
+        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        shell: pwsh
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: dart run sentry_dart_plugin
+
       - name: Upgrade libmpv-2.dll for PGS/SUP
         shell: pwsh
         env:
@@ -850,6 +875,12 @@ jobs:
             --dart-define=DANDANPLAY_APP_SECRET="$CLEAN_SECRET" \
             --dart-define=TMDB_API_KEY_ENC="$TMDB_ENC"
 
+      - name: Upload debug symbols to Sentry
+        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: dart run sentry_dart_plugin
+
       - name: Bundle ffmpeg (内置，避免运行时无校验下载，M6)
         run: |
           OUT="build/linux/x64/release/bundle"
@@ -959,6 +990,12 @@ jobs:
             --dart-define=DANDANPLAY_APP_ID="$CLEAN_ID" \
             --dart-define=DANDANPLAY_APP_SECRET="$CLEAN_SECRET" \
             --dart-define=TMDB_API_KEY_ENC="$TMDB_ENC"
+
+      - name: Upload debug symbols to Sentry
+        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: dart run sentry_dart_plugin
 
       - name: Verify PGS/SUP decoder in macOS libmpv
         run: |

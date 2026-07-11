@@ -97,6 +97,22 @@
 
 Player-core comparison, local development & builds, and the tech stack — see the **[development docs →](DEVELOPMENT.md)**.
 
+## Disclaimer
+
+### About Content & Media
+
+- LinPlayer is a **purely local player / third-party client**. It **does not provide, store, host, or distribute any video content**, and ships with no built-in content sources.
+- All media shown and played inside the app comes from **servers the user adds themselves (e.g. Emby) or network sources the user configures themselves**. The origin, copyright, and legality of that content **are solely the user's responsibility**.
+- Please only play content you **lawfully own or are authorized to access**, and comply with the laws and regulations of your country/region. Any dispute, loss, or legal liability arising from improper use **is borne solely by the user** and is unrelated to this project or its developers.
+- This project is **free, open-source, and non-profit**; it makes no money from content distribution in any form. If a rights holder finds certain content inappropriate, the issue lies with the content's source — please contact the corresponding resource/server provider.
+
+### About Anonymous Telemetry & Privacy
+
+- To continuously improve stability, LinPlayer integrates [Sentry](https://sentry.io) for **crash/error reporting** and **anonymous active-usage statistics** (used only to understand crashes and rough usage scale).
+- We **never collect any information that can identify you personally**: no accounts, passwords, cookies, tokens, server addresses, library contents, watch history, or IP addresses. **No screen recording, no behavior tracking.**
+- Reported data contains only **anonymous crash stack traces, app version, and platform/OS type** and similar technical info, with devices distinguished by a random anonymous identifier (counting heads, not identities).
+- We **never sell, share, or use this data for advertising or any commercial purpose**. The configuration is publicly auditable: [`lib/core/services/telemetry.dart`](../lib/core/services/telemetry.dart).
+
 ## License
 
 [LICENSE](../LICENSE)

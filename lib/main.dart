@@ -11,6 +11,7 @@ import 'core/services/app_logger.dart';
 import 'core/services/cache_service.dart';
 import 'core/services/crash_diagnostics.dart';
 import 'core/services/secure_credential_store.dart';
+import 'core/services/telemetry.dart';
 import 'core/network/cf_proxy/cf_proxy_controller.dart';
 import 'core/services/deep_link_service.dart';
 import 'core/services/font_service.dart';
@@ -88,22 +89,26 @@ Future<void> main() async {
           ? const LinPlayerDesktopApp()
           : const LinPlayerApp();
 
-  runApp(
-    UncontrolledProviderScope(
-      container: container,
-      child: appWidget,
-    ),
-  );
+  // 匿名遥测（崩溃 + Release Health 活跃用户统计）：包住 runApp 及其后的启动尾巴，
+  // 让这段代码的未捕获异常也进 Sentry。见 core/services/telemetry.dart。
+  await Telemetry.runGuarded(() {
+    runApp(
+      UncontrolledProviderScope(
+        container: container,
+        child: appWidget,
+      ),
+    );
 
-  // TV 端没有插件管理界面去触发插件 onEnable→restore，故启动时按持久化状态自动
-  // 恢复已启用的 CF 优选反代（沿用上次优选 IP，不重新测速）。放后台不阻塞首帧。
-  // 其它端的恢复由 cf-proxy 插件的启用流程负责。
-  if (isTvPlatform) {
-    CfProxyController.instance.ensureInit(container);
-    unawaited(CfProxyController.instance.restoreAll());
-  }
+    // TV 端没有插件管理界面去触发插件 onEnable→restore，故启动时按持久化状态自动
+    // 恢复已启用的 CF 优选反代（沿用上次优选 IP，不重新测速）。放后台不阻塞首帧。
+    // 其它端的恢复由 cf-proxy 插件的启用流程负责。
+    if (isTvPlatform) {
+      CfProxyController.instance.ensureInit(container);
+      unawaited(CfProxyController.instance.restoreAll());
+    }
 
-  // 自定义协议深链(linplayer://add-server …)：唤起即自动登录并添加服务器。
-  // 共用同一 container，跨三端生效；放 runApp 之后，确保插件通道已就绪。
-  unawaited(DeepLinkService(container).init());
+    // 自定义协议深链(linplayer://add-server …)：唤起即自动登录并添加服务器。
+    // 共用同一 container，跨三端生效；放 runApp 之后，确保插件通道已就绪。
+    unawaited(DeepLinkService(container).init());
+  });
 }
