@@ -31,6 +31,12 @@ class QjsPluginEngine implements PluginJsEngine {
   IsolateFunction? _hostFn;
   bool _disposed = false;
 
+  // 失控判定用「空转」而非「总墙钟」：插件在等待宿主能力（UI 表单/网络）时不算失控，
+  // 只有长时间既没有宿主交互、也没有完成时才判定卡死。这样交互式流程（等用户填表）
+  // 不会被误杀，同时纯 JS 死循环仍会被 [_lastActivity] 停滞检测到。
+  int _hostCallsInFlight = 0;
+  DateTime _lastActivity = DateTime.now();
+
   @override
   bool get isDisposed => _disposed;
 
@@ -52,9 +58,16 @@ class QjsPluginEngine implements PluginJsEngine {
 
     // 注入宿主桥：包装为 IsolateFunction，调用时在主 isolate 执行 dispatcher。
     // 形参顺序对应 JS 侧 __lp_host(channel, method, argsJson)。
+    // 包装宿主桥：进入/离开宿主调用时更新活跃时间与在途计数（供空转超时判定）。
     final hostFn = IsolateFunction(
-      (channel, method, argsJson) =>
-          dispatcher('$channel', '$method', '$argsJson'),
+      (channel, method, argsJson) {
+        _hostCallsInFlight++;
+        _lastActivity = DateTime.now();
+        return dispatcher('$channel', '$method', '$argsJson').whenComplete(() {
+          if (_hostCallsInFlight > 0) _hostCallsInFlight--;
+          _lastActivity = DateTime.now();
+        });
+      },
     );
     _hostFn = hostFn;
 
@@ -84,13 +97,39 @@ class QjsPluginEngine implements PluginJsEngine {
     final future = engine.evaluate(code);
     if (timeout == null) return future;
 
+    // 空转看门狗：只有在「没有在途宿主调用」且「超过 timeout 无任何宿主交互」时，
+    // 才判定失控。等待用户填表 / 网络请求期间会一直有在途调用或持续刷新活跃时间，
+    // 因此交互式流程不会超时；而纯 JS 死循环不产生宿主交互，会被及时判定卡死。
+    _lastActivity = DateTime.now();
+    final completer = Completer<dynamic>();
+    future.then((v) {
+      if (!completer.isCompleted) completer.complete(v);
+    }).catchError((Object e, StackTrace st) {
+      if (!completer.isCompleted) completer.completeError(e, st);
+    });
+
+    final watchdog = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (completer.isCompleted) {
+        t.cancel();
+        return;
+      }
+      final idle = DateTime.now().difference(_lastActivity);
+      if (_hostCallsInFlight <= 0 && idle >= timeout) {
+        t.cancel();
+        _log.w('PluginEngine',
+            '插件 $pluginId 空转超时（>${timeout.inMilliseconds}ms 无宿主交互）');
+        unawaited(dispose());
+        if (!completer.isCompleted) {
+          completer.completeError(
+              PluginTimeoutError('空转超时 ${timeout.inMilliseconds}ms'));
+        }
+      }
+    });
+
     try {
-      return await future.timeout(timeout);
-    } on TimeoutException {
-      _log.w('PluginEngine', '插件 $pluginId 调用超时（>${timeout.inMilliseconds}ms）');
-      // 失控：销毁该 isolate，调用方据此禁用插件。
-      unawaited(dispose());
-      throw PluginTimeoutError('调用超时 ${timeout.inMilliseconds}ms');
+      return await completer.future;
+    } finally {
+      watchdog.cancel();
     }
   }
 

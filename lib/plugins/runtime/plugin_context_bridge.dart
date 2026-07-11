@@ -314,6 +314,9 @@ class PluginContextBridge {
       case 'showForm':
         return PluginUiHost.showForm(
             (args.isNotEmpty && args[0] is Map) ? args[0] as Map : {});
+      case 'showList':
+        return PluginUiHost.showList(
+            (args.isNotEmpty && args[0] is Map) ? args[0] as Map : {});
       case 'openPage':
         return PluginUiHost.openPage(
           pluginId,

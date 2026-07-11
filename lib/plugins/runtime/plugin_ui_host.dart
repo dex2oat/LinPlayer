@@ -99,9 +99,91 @@ class PluginUiHost {
     );
   }
 
+  /// 弹出可滚动的列表选择器（支持每项缩略图），返回被点条目的 id（或 null）。
+  ///
+  /// opts: { title, items:[{ id, title, subtitle?, image? }], cancelLabel? }
+  /// image 为图片 URL（如 TMDB 海报），由宿主加载显示；缺省则不显示缩略图。
+  static Future<String?> showList(Map opts) async {
+    final ctx = _context;
+    if (ctx == null) return null;
+    final title = '${opts['title'] ?? '请选择'}';
+    final cancelLabel = '${opts['cancelLabel'] ?? '取消'}';
+    final items = <Map>[];
+    final raw = opts['items'];
+    if (raw is List) {
+      for (final it in raw) {
+        if (it is Map) items.add(it);
+      }
+    }
+    return showDialogGeneric<String>(
+      ctx,
+      (context) => AlertDialog(
+        title: Text(title),
+        contentPadding: const EdgeInsets.fromLTRB(0, 12, 0, 0),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 420,
+          child: items.isEmpty
+              ? const Center(child: Text('无可选项'))
+              : ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: items.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (_, i) {
+                    final it = items[i];
+                    final img = it['image'];
+                    return ListTile(
+                      leading: (img is String && img.isNotEmpty)
+                          ? ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: Image.network(
+                                img,
+                                width: 44,
+                                height: 66,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => const SizedBox(
+                                    width: 44,
+                                    height: 66,
+                                    child: Icon(Icons.image_not_supported,
+                                        size: 20)),
+                                loadingBuilder: (c, child, prog) => prog == null
+                                    ? child
+                                    : const SizedBox(
+                                        width: 44,
+                                        height: 66,
+                                        child: Center(
+                                            child: SizedBox(
+                                                width: 16,
+                                                height: 16,
+                                                child: CircularProgressIndicator(
+                                                    strokeWidth: 2)))),
+                              ),
+                            )
+                          : null,
+                      title: Text('${it['title'] ?? ''}',
+                          maxLines: 2, overflow: TextOverflow.ellipsis),
+                      subtitle: it['subtitle'] == null
+                          ? null
+                          : Text('${it['subtitle']}',
+                              maxLines: 2, overflow: TextOverflow.ellipsis),
+                      onTap: () => Navigator.of(context).pop('${it['id'] ?? ''}'),
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(cancelLabel),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 弹出表单，返回 {字段key: 值} 或 null（取消）。
   ///
-  /// schema: { title, fields:[{key,label,type:text|password|number|switch,default,hint}],
+  /// schema: { title, fields:[{key,label,type:text|password|number|switch|select,default,hint,options}],
   ///           submitLabel, cancelLabel }
   static Future<Map<String, dynamic>?> showForm(Map schema) async {
     final ctx = _context;
