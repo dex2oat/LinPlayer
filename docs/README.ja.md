@@ -46,6 +46,9 @@
 
 <table>
   <tr>
+    <td colspan="2"><img src="images/screenshots/pc-player.png" width="100%" alt="プレーヤー"><br><sub><b>プレーヤー</b></sub></td>
+  </tr>
+  <tr>
     <td width="50%"><img src="images/screenshots/pc-home.png" width="100%" alt="ホーム"><br><sub><b>ホーム</b></sub></td>
     <td width="50%"><img src="images/screenshots/pc-library.png" width="100%" alt="ライブラリ"><br><sub><b>ライブラリ</b></sub></td>
   </tr>
@@ -75,6 +78,9 @@
 > 表示コンテンツは [**BAVA サーバー**](https://shop.mebimmer.de) のご提供です。
 
 <table>
+  <tr>
+    <td colspan="3"><img src="images/screenshots/mobile-player.jpg" width="100%" alt="プレーヤー"><br><sub><b>プレーヤー</b></sub></td>
+  </tr>
   <tr>
     <td width="33%"><img src="images/screenshots/mobile-home.jpg" width="100%" alt="ホーム"><br><sub><b>ホーム</b></sub></td>
     <td width="33%"><img src="images/screenshots/mobile-series-detail.jpg" width="100%" alt="シリーズ詳細"><br><sub><b>シリーズ詳細</b></sub></td>

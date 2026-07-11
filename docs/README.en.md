@@ -46,6 +46,9 @@
 
 <table>
   <tr>
+    <td colspan="2"><img src="images/screenshots/pc-player.png" width="100%" alt="Player"><br><sub><b>Player</b></sub></td>
+  </tr>
+  <tr>
     <td width="50%"><img src="images/screenshots/pc-home.png" width="100%" alt="Home"><br><sub><b>Home</b></sub></td>
     <td width="50%"><img src="images/screenshots/pc-library.png" width="100%" alt="Library"><br><sub><b>Library</b></sub></td>
   </tr>
@@ -75,6 +78,9 @@
 > Content shown courtesy of [**BAVA**](https://shop.mebimmer.de).
 
 <table>
+  <tr>
+    <td colspan="3"><img src="images/screenshots/mobile-player.jpg" width="100%" alt="Player"><br><sub><b>Player</b></sub></td>
+  </tr>
   <tr>
     <td width="33%"><img src="images/screenshots/mobile-home.jpg" width="100%" alt="Home"><br><sub><b>Home</b></sub></td>
     <td width="33%"><img src="images/screenshots/mobile-series-detail.jpg" width="100%" alt="Series detail"><br><sub><b>Series Detail</b></sub></td>

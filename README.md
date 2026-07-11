@@ -46,6 +46,9 @@
 
 <table>
   <tr>
+    <td colspan="2"><img src="docs/images/screenshots/pc-player.png" width="100%" alt="播放页"><br><sub><b>播放页</b></sub></td>
+  </tr>
+  <tr>
     <td width="50%"><img src="docs/images/screenshots/pc-home.png" width="100%" alt="首页"><br><sub><b>首页</b></sub></td>
     <td width="50%"><img src="docs/images/screenshots/pc-library.png" width="100%" alt="媒体库"><br><sub><b>媒体库</b></sub></td>
   </tr>
@@ -75,6 +78,9 @@
 > 截图内容来自 [**BAVA 服**](https://shop.mebimmer.de)。
 
 <table>
+  <tr>
+    <td colspan="3"><img src="docs/images/screenshots/mobile-player.jpg" width="100%" alt="播放页"><br><sub><b>播放页</b></sub></td>
+  </tr>
   <tr>
     <td width="33%"><img src="docs/images/screenshots/mobile-home.jpg" width="100%" alt="首页"><br><sub><b>首页</b></sub></td>
     <td width="33%"><img src="docs/images/screenshots/mobile-series-detail.jpg" width="100%" alt="剧集详情"><br><sub><b>剧集详情</b></sub></td>
