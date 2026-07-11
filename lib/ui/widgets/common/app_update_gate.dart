@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -164,7 +165,9 @@ Future<void> showUpdateDialog(BuildContext context, UpdateInfo info) async {
                   ),
                   child: SingleChildScrollView(
                     child: SelectableText(
-                      info.notes.trim().isEmpty ? '（无更新说明）' : info.notes.trim(),
+                      info.notes.trim().isEmpty
+                          ? '（无更新说明）'
+                          : _prettifyNotes(info.notes),
                       style: const TextStyle(fontSize: 13, height: 1.45),
                     ),
                   ),
@@ -208,6 +211,22 @@ Future<void> showUpdateDialog(BuildContext context, UpdateInfo info) async {
       );
     },
   );
+}
+
+/// 把 GitHub 自动生成的 Markdown 发布说明清成干净纯文本——弹窗用 Text 展示，
+/// 不引第三方 markdown 渲染依赖（避免用户看到一堆 `##`/`**`/裸链接）。
+String _prettifyNotes(String raw) {
+  final linkRe = RegExp(r'\[([^\]]+)\]\((?:[^)]+)\)'); // [text](url) → text
+  final out = <String>[];
+  for (var line in const LineSplitter().convert(raw)) {
+    line = line.replaceAll(linkRe, r'$1');
+    line = line.replaceFirst(RegExp(r'^\s{0,3}#{1,6}\s*'), ''); // 去标题井号
+    line = line.replaceFirstMapped(
+        RegExp(r'^(\s*)[-*+]\s+'), (m) => '${m[1]}• '); // 列表点
+    line = line.replaceAll(RegExp(r'\*\*|__|`'), ''); // 去粗体/行内码标记
+    out.add(line);
+  }
+  return out.join('\n').trim();
 }
 
 /// 启动应用内下载 + 落地（带进度对话框）。

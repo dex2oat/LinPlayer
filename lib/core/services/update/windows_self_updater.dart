@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -44,7 +45,12 @@ class WindowsSelfUpdater {
         exePath: exePath,
         logPath: logPath,
       );
-      await File(scriptPath).writeAsString(script);
+      // 关键：带 UTF-8 BOM 写入。脚本含中文注释/日志，Windows PowerShell 5.1 对
+      // 无 BOM 的 .ps1 按系统 ANSI 代码页（国内机器为 GBK）解码 → 中文乱码撑爆
+      // 引号/大括号 → 整段脚本 ParserError 根本不执行 → 覆盖更新永远不落地。
+      // BOM（EF BB BF）让 PowerShell 识别为 UTF-8 正确解析。
+      await File(scriptPath)
+          .writeAsBytes([0xEF, 0xBB, 0xBF, ...utf8.encode(script)]);
 
       // 脱离父进程运行：父进程（本程序）退出后脚本继续执行覆盖。
       await Process.start(
