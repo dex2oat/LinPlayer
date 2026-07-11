@@ -32,64 +32,58 @@
 - **应用内更新**：双渠道（stable / pre）覆盖更新
 - **播放上报**：完整的 Emby 播放进度同步，支持跨服务器续播
 
-## 播放器内核对比
+## 界面预览
 
-| 功能 | ExoPlayer | MPV (media_kit) |
-|------|-----------|-----------------|
-| 视频格式 | H.264/H.265/AV1 | 全格式 |
-| 字幕格式 | SRT/ASS/WEBVTT/TTML | 全格式（含 PGS/SUP） |
-| 字幕特效 | 基础 | libass 完整支持 |
-| Dolby Vision | 部分支持 | 完整支持（gpu-next + 软解自动切换） |
-| 超分辨率 | ❌ | Anime4K GLSL |
-| 体积 | 较小 | 较大（+30MB） |
-| 适用场景 | 普通视频 | 高质量/复杂字幕视频 |
+### 桌面端
 
-## 本地开发
+> 截图内容来自 [**UHD MEDIA**](https://www.uhdnow.com)。
 
-### 环境要求
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/screenshots/pc-home.png" width="100%" alt="首页"><br><sub><b>首页</b></sub></td>
+    <td width="50%"><img src="docs/images/screenshots/pc-library.png" width="100%" alt="媒体库"><br><sub><b>媒体库</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/screenshots/pc-series-detail.png" width="100%" alt="剧集详情"><br><sub><b>剧集详情</b></sub></td>
+    <td><img src="docs/images/screenshots/pc-movie-detail.png" width="100%" alt="电影详情"><br><sub><b>电影详情</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/screenshots/pc-rankings.png" width="100%" alt="排行榜"><br><sub><b>排行榜</b></sub></td>
+    <td><img src="docs/images/screenshots/pc-search.png" width="100%" alt="搜索"><br><sub><b>搜索</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/screenshots/pc-favorites.png" width="100%" alt="收藏"><br><sub><b>收藏</b></sub></td>
+    <td><img src="docs/images/screenshots/pc-settings.png" width="100%" alt="设置"><br><sub><b>设置</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/screenshots/pc-add-server-1.png" width="100%" alt="添加服务器 1"><br><sub><b>添加服务器 ①</b></sub></td>
+    <td><img src="docs/images/screenshots/pc-add-server-2.png" width="100%" alt="添加服务器 2"><br><sub><b>添加服务器 ②</b></sub></td>
+  </tr>
+  <tr>
+    <td colspan="2" width="50%"><img src="docs/images/screenshots/pc-add-server-3.png" width="100%" alt="添加服务器 3"><br><sub><b>添加服务器 ③</b></sub></td>
+  </tr>
+</table>
 
-- Flutter 3.24.0+ / Dart 3.0+
-- Android SDK 34+（Android/TV 构建）
-- Xcode（iOS/tvOS 构建）
-- 桌面端对应的原生工具链（Windows / Linux / macOS）
+### 移动端
 
-### 构建
+> 截图内容来自 [**BAVA 服**](https://shop.mebimmer.de)。
 
-```bash
-git clone https://github.com/zzzwannasleep/LinPlayer.git
-cd LinPlayer
-flutter pub get
+<table>
+  <tr>
+    <td width="33%"><img src="docs/images/screenshots/mobile-home.jpg" width="100%" alt="首页"><br><sub><b>首页</b></sub></td>
+    <td width="33%"><img src="docs/images/screenshots/mobile-series-detail.jpg" width="100%" alt="剧集详情"><br><sub><b>剧集详情</b></sub></td>
+    <td width="33%"><img src="docs/images/screenshots/mobile-episode-detail.jpg" width="100%" alt="集详情"><br><sub><b>集详情</b></sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/screenshots/mobile-movie-detail.jpg" width="100%" alt="电影详情"><br><sub><b>电影详情</b></sub></td>
+    <td><img src="docs/images/screenshots/mobile-rankings.jpg" width="100%" alt="排行榜"><br><sub><b>排行榜</b></sub></td>
+    <td><img src="docs/images/screenshots/mobile-settings.jpg" width="100%" alt="设置"><br><sub><b>设置</b></sub></td>
+  </tr>
+</table>
 
-# 各平台
-flutter build apk --release        # Android / TV
-flutter build windows              # Windows
-flutter build linux                # Linux
-flutter build macos                # macOS
-flutter build ios                  # iOS / tvOS
-```
+## 开发与技术
 
-CI 通过 **GitHub Actions** 自动构建：push 到 `main` 触发，产物在 [Actions](../../actions) 页面的 Artifacts 中下载。
-
-### Windows 端 MPV PGS/SUP 说明
-
-media-kit 的 Windows 预编译 libmpv 为减小体积禁用了 `hdmv_pgs_subtitle` 解码器，导致 PGS/SUP 默认无法渲染。构建时 CMake 会**自动**调用 `windows/scripts/upgrade_libmpv_for_pgs.ps1`，从 shinchiro 发布页下载完整版 `libmpv-2.dll` 替换。若目标 DLL 已含该解码器则自动跳过。
-
-```powershell
-# 跳过自动升级
-$env:LINPLAYER_SKIP_LIBMPV_UPGRADE = "1"; flutter build windows
-
-# 手动运行
-.\windows\scripts\upgrade_libmpv_for_pgs.ps1
-```
-
-## 技术栈
-
-- **Flutter** — 跨平台 UI 框架
-- **Riverpod** — 状态管理，**go_router** — 路由
-- **media_kit / libmpv** — MPV 播放内核，**ExoPlayer** — Android 原生内核
-- **fluent_ui / macos_ui** — 桌面端原生风格，**TDesign** — 三端统一组件
-- **flutter_qjs (QuickJS)** — 插件脚本引擎
-- **dio** — 网络，**Emby API** — 媒体服务器通信
+播放器内核对比、本地开发与构建、技术栈详见 **[开发文档 →](docs/DEVELOPMENT.md)**。
 
 ## 许可证
 
@@ -125,6 +119,13 @@ $env:LINPLAYER_SKIP_LIBMPV_UPGRADE = "1"; flutter build windows
 - [anibt](https://anibt.net) — 感谢站长为 LinPlayer 提供国内 Bangumi 反代（接口与图片加速），让追番同步开箱即用；亦是新生代 BT 磁力搜索站，资源丰沛、体验清爽，诚意推荐
 - [Trakt](https://trakt.tv/) — 影视观看记录同步（Scrobble）
 - [OpenList](https://github.com/OpenListTeam/OpenList) — 网盘聚合源
+
+### Emby 服
+
+感谢以下 Emby 服为 LinPlayer 提供界面演示与长期支持：
+
+- [UHD MEDIA](https://www.uhdnow.com) — 桌面端截图内容来源
+- [BAVA 服](https://shop.mebimmer.de) — 移动端截图内容来源
 
 ### 网络与代理
 
