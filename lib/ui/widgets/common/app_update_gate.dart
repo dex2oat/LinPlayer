@@ -11,6 +11,7 @@ import '../../../core/providers/update_providers.dart';
 import '../../../core/services/update/app_update_service.dart';
 import '../../../core/services/update/update_installer.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../plugins/runtime/plugin_host_bindings.dart';
 import 'app_toast.dart';
 
 /// 挂在根 `MaterialApp.router` 的 builder 下，负责：启动时 + 每 24h 检查更新，
@@ -56,16 +57,19 @@ class _AppUpdateGateState extends ConsumerState<AppUpdateGate> {
     if (target == null || target.isEmpty) return;
     await prefs.remove(_pendingUpdateKey);
     if (!mounted) return;
+    // 同 _maybeCheck：本 context 在根 Navigator 之上，Overlay.maybeOf 取不到根
+    // Overlay，toast 会静默不显示。改用根 Navigator 的 context。
+    final toastContext = PluginHostBindings.instance.context ?? context;
     // 现版本 >= 目标 → 覆盖成功；否则文件没换成功（权限/占用/被拦截）。
     final ok =
         AppUpdateService.compareVersions(kCurrentAppVersion, target) >= 0;
     if (ok) {
-      AppToast.success(context, '已更新到 $kCurrentAppVersion');
+      AppToast.success(toastContext, '已更新到 $kCurrentAppVersion');
     } else {
       final logPath =
           '${Directory.systemTemp.path}${Platform.pathSeparator}linplayer_update.log';
       AppToast.show(
-        context,
+        toastContext,
         '更新似乎未生效：当前仍为 $kCurrentAppVersion（目标 $target）。'
         '多因安装目录无写入权限（如装在 Program Files）或被杀软拦截。'
         '可把程序放到可写目录后重试；详情见 $logPath',
@@ -96,7 +100,12 @@ class _AppUpdateGateState extends ConsumerState<AppUpdateGate> {
     ref.read(availableUpdateProvider.notifier).state = info;
     if (!_dialogShown) {
       _dialogShown = true;
-      await showUpdateDialog(context, info);
+      // 本 Widget 挂在 MaterialApp.router 的 builder 下，其 context 在 go_router 的
+      // 根 Navigator「之上」——直接 showDialog(context: 本context) 会 Navigator.of
+      // 空指针崩溃（更新被检测到却永远弹不出框，表现为「一直检查不到更新」）。
+      // 改用根 Navigator 的 context（插件系统同款做法）。
+      final dialogContext = PluginHostBindings.instance.context ?? context;
+      await showUpdateDialog(dialogContext, info);
     }
   }
 
