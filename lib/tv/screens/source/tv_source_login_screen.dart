@@ -13,6 +13,7 @@ import '../../theme/tv_design_tokens.dart';
 import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_button.dart';
 import '../../widgets/tv_focusable.dart';
+import '../../widgets/tv_text_field.dart';
 
 /// TV 端网盘/聚合源登录页（账密型 OpenList/Ani-rss/飞牛 + 夸克扫码/Cookie）。
 ///
@@ -383,62 +384,17 @@ class _TvSourceLoginScreenState extends ConsumerState<TvSourceLoginScreen> {
           ),
         ),
         SizedBox(height: m.spacingXs),
-        Focus(
-          child: Builder(
-            builder: (context) {
-              final focused = Focus.of(context).hasFocus;
-              return Container(
-                decoration: BoxDecoration(
-                  color: TvDesignTokens.surface,
-                  borderRadius: BorderRadius.circular(m.posterRadius),
-                  border: Border.all(
-                    color: focused
-                        ? TvDesignTokens.brand
-                        : TvDesignTokens.divider,
-                    width: focused ? 3 : 1.5,
-                  ),
-                ),
-                padding: EdgeInsets.symmetric(horizontal: m.spacingMd),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    if (prefixIcon != null) ...[
-                      Icon(prefixIcon,
-                          color: focused
-                              ? TvDesignTokens.brand
-                              : TvDesignTokens.textSecondary,
-                          size: m.s(26)),
-                      SizedBox(width: m.spacingSm),
-                    ],
-                    Expanded(
-                      child: TextField(
-                        controller: controller,
-                        autofocus: autofocus,
-                        obscureText: obscure,
-                        keyboardType: keyboardType,
-                        maxLines: obscure ? 1 : maxLines,
-                        style: TextStyle(
-                          fontSize: m.fontSizeMd,
-                          color: TvDesignTokens.textPrimary,
-                        ),
-                        cursorColor: TvDesignTokens.brand,
-                        decoration: InputDecoration(
-                          border: InputBorder.none,
-                          hintText: hint,
-                          hintStyle: TextStyle(
-                            color: TvDesignTokens.textDisabled,
-                            fontSize: m.fontSizeSm,
-                          ),
-                          contentPadding:
-                              EdgeInsets.symmetric(vertical: m.spacingMd),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
+        TvTextField(
+          controller: controller,
+          hint: hint,
+          obscureText: obscure,
+          autofocus: autofocus,
+          maxLines: maxLines,
+          keyboardType: keyboardType,
+          prefixIcon: prefixIcon == null
+              ? null
+              : Icon(prefixIcon,
+                  color: TvDesignTokens.textSecondary, size: m.s(26)),
         ),
       ],
     );

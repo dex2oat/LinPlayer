@@ -17,6 +17,7 @@ import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_focusable.dart';
 import '../../widgets/tv_grid.dart';
 import '../../widgets/tv_panel.dart';
+import '../../widgets/tv_text_field.dart';
 import '../../widgets/tv_toast.dart';
 
 /// TV 端「同步服务」设置内容（右侧面板）。
@@ -529,15 +530,9 @@ class _TvBangumiDialogState extends ConsumerState<_TvBangumiDialog> {
         const Text('输入授权码：',
             style: TextStyle(color: TvDesignTokens.textSecondary)),
         SizedBox(height: m.spacingSm),
-        TextField(
+        TvTextField(
           controller: _controller,
-          style: const TextStyle(color: TvDesignTokens.textPrimary),
-          decoration: const InputDecoration(
-            hintText: '授权码 (code)',
-            filled: true,
-            fillColor: TvDesignTokens.background,
-            border: OutlineInputBorder(),
-          ),
+          hint: '授权码 (code)',
         ),
         SizedBox(height: m.spacingLg),
         if (_error != null) ...[

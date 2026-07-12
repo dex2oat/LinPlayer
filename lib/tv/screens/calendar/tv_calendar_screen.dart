@@ -13,6 +13,7 @@ import '../../theme/tv_design_tokens.dart';
 import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_focusable.dart';
 import '../../widgets/tv_panel.dart';
+import '../../widgets/tv_text_field.dart';
 
 /// TV 端追剧日历（付费解锁，观感对齐移动端）。顶部 Trakt/Bangumi 分段 + 只看我追的/
 /// 刷新动作，下方按日分组的条目卡片。数据/门控逻辑保持不变，仅重绘 build。
@@ -400,15 +401,9 @@ class _TvAfdianUnlockPanelState extends ConsumerState<TvAfdianUnlockPanel> {
         const Text('赞助页：$kAfdianSponsorUrl',
             style: TextStyle(color: TvDesignTokens.textSecondary)),
         SizedBox(height: m.spacingLg),
-        TextField(
+        TvTextField(
           controller: _controller,
-          style: const TextStyle(color: TvDesignTokens.textPrimary),
-          decoration: const InputDecoration(
-            hintText: '订单号 (out_trade_no)',
-            filled: true,
-            fillColor: TvDesignTokens.background,
-            border: OutlineInputBorder(),
-          ),
+          hint: '订单号 (out_trade_no)',
         ),
         SizedBox(height: m.spacingLg),
         if (_error != null) ...[

@@ -15,6 +15,7 @@ import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_focusable.dart';
 import '../../widgets/tv_media_card.dart';
 import '../../widgets/tv_poster_card.dart';
+import '../../widgets/tv_text_field.dart';
 
 /// TV / Pad 搜索页
 ///
@@ -143,34 +144,23 @@ class _TvSearchScreenState extends ConsumerState<TvSearchScreen> {
 
   Widget _buildSearchField(TvMetrics m) {
     final hasText = _searchController.text.isNotEmpty;
-    return TextField(
+    return TvTextField(
       controller: _searchController,
       focusNode: _fieldFocus,
       autofocus: true,
+      hint: '搜索影片、剧集……（支持中文 / 语音输入）',
       textInputAction: TextInputAction.search,
       onSubmitted: _submit,
       onChanged: (_) => setState(() {}),
-      style: TextStyle(
-        fontSize: m.fontSizeLg,
-        color: TvDesignTokens.textPrimary,
-      ),
-      cursorColor: TvDesignTokens.brand,
-      decoration: InputDecoration(
-        hintText: '搜索影片、剧集……（支持中文 / 语音输入）',
-        prefixIcon: Icon(Icons.search,
-            color: TvDesignTokens.textSecondary, size: m.s(28)),
-        suffixIcon: hasText
-            ? IconButton(
-                icon: Icon(Icons.close,
-                    color: TvDesignTokens.textSecondary, size: m.s(26)),
-                onPressed: _clear,
-              )
-            : null,
-        contentPadding: EdgeInsets.symmetric(
-          horizontal: m.spacingLg,
-          vertical: m.spacingMd,
-        ),
-      ),
+      prefixIcon: Icon(Icons.search,
+          color: TvDesignTokens.textSecondary, size: m.s(28)),
+      suffixIcon: hasText
+          ? IconButton(
+              icon: Icon(Icons.close,
+                  color: TvDesignTokens.textSecondary, size: m.s(26)),
+              onPressed: _clear,
+            )
+          : null,
     );
   }
 

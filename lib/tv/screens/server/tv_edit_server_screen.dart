@@ -8,6 +8,7 @@ import '../../theme/tv_design_tokens.dart';
 import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_focusable.dart';
 import '../../widgets/tv_panel.dart';
+import '../../widgets/tv_text_field.dart';
 import '../../widgets/tv_toast.dart';
 import 'tv_icon_picker.dart';
 
@@ -589,40 +590,10 @@ class _TvEditServerScreenState extends ConsumerState<TvEditServerScreen> {
           ),
         ),
         SizedBox(height: m.spacingXs),
-        Focus(
-          child: Builder(
-            builder: (context) {
-              final focused = Focus.of(context).hasFocus;
-              return Container(
-                decoration: BoxDecoration(
-                  color: TvDesignTokens.surface,
-                  borderRadius: BorderRadius.circular(m.posterRadius),
-                  border: Border.all(
-                    color: focused
-                        ? TvDesignTokens.brand
-                        : TvDesignTokens.divider,
-                    width: focused ? 3 : 1.5,
-                  ),
-                ),
-                padding: EdgeInsets.symmetric(horizontal: m.spacingMd),
-                child: TextField(
-                  controller: ctrl,
-                  keyboardType: keyboardType,
-                  onChanged: onChanged,
-                  style: TextStyle(
-                    fontSize: m.fontSizeMd,
-                    color: TvDesignTokens.textPrimary,
-                  ),
-                  cursorColor: TvDesignTokens.brand,
-                  decoration: InputDecoration(
-                    border: InputBorder.none,
-                    contentPadding:
-                        EdgeInsets.symmetric(vertical: m.spacingMd),
-                  ),
-                ),
-              );
-            },
-          ),
+        TvTextField(
+          controller: ctrl,
+          keyboardType: keyboardType,
+          onChanged: onChanged,
         ),
       ],
     );

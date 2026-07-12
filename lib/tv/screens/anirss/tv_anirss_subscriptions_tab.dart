@@ -16,6 +16,7 @@ import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_focusable.dart';
 import '../../widgets/tv_grid.dart';
 import '../../widgets/tv_panel.dart';
+import '../../widgets/tv_text_field.dart';
 import '../../widgets/tv_toast.dart';
 
 /// Ani-rss 订阅 Tab（TV）：添加订阅 / 刷新全部 + 按订阅聚合的下载进度监控。
@@ -660,30 +661,14 @@ class _AddSubscriptionPanelState extends State<_AddSubscriptionPanel> {
                 Row(
                   children: [
                     Expanded(
-                      child: Container(
-                        padding:
-                            EdgeInsets.symmetric(horizontal: m.spacingMd),
-                        decoration: BoxDecoration(
-                          color: TvDesignTokens.surfaceElevated,
-                          borderRadius: BorderRadius.circular(m.posterRadius),
-                        ),
-                        child: TextField(
-                          controller: _ctrl,
-                          autofocus: isBgm,
-                          style: TextStyle(
-                              fontSize: m.fontSizeMd,
-                              color: TvDesignTokens.textPrimary),
-                          textInputAction: TextInputAction.search,
-                          onSubmitted: (_) => _load(),
-                          decoration: InputDecoration(
-                            hintText: isBgm ? '输入番剧名（BGM 搜索）' : '在结果内筛选（可留空）',
-                            hintStyle: const TextStyle(
-                                color: TvDesignTokens.textDisabled),
-                            border: InputBorder.none,
-                            icon: const Icon(Icons.search,
-                                color: TvDesignTokens.textSecondary),
-                          ),
-                        ),
+                      child: TvTextField(
+                        controller: _ctrl,
+                        autofocus: isBgm,
+                        textInputAction: TextInputAction.search,
+                        onSubmitted: (_) => _load(),
+                        hint: isBgm ? '输入番剧名（BGM 搜索）' : '在结果内筛选（可留空）',
+                        prefixIcon: const Icon(Icons.search,
+                            color: TvDesignTokens.textSecondary),
                       ),
                     ),
                     SizedBox(width: m.spacingMd),

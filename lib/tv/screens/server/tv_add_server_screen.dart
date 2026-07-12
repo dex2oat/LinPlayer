@@ -10,6 +10,7 @@ import '../../../core/providers/media_providers.dart';
 import '../../theme/tv_design_tokens.dart';
 import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_button.dart';
+import '../../widgets/tv_text_field.dart';
 
 /// TV 添加服务器页 —— 真实连接 Emby（地址 + 账号 + 密码）。
 /// TV 上聚焦输入框即唤起系统输入法（leanback IME）。
@@ -298,50 +299,12 @@ class _TvAddServerScreenState extends ConsumerState<TvAddServerScreen> {
           ),
         ),
         SizedBox(height: m.spacingXs),
-        Focus(
-          child: Builder(
-            builder: (context) {
-              final focused = Focus.of(context).hasFocus;
-              return Container(
-                decoration: BoxDecoration(
-                  color: TvDesignTokens.surface,
-                  borderRadius:
-                      BorderRadius.circular(m.posterRadius),
-                  border: Border.all(
-                    color: focused
-                        ? TvDesignTokens.brand
-                        : TvDesignTokens.divider,
-                    width: focused ? 3 : 1.5,
-                  ),
-                ),
-                padding: EdgeInsets.symmetric(
-                  horizontal: m.spacingMd,
-                ),
-                child: TextField(
-                  controller: controller,
-                  autofocus: autofocus,
-                  obscureText: obscure,
-                  keyboardType: keyboardType,
-                  style: TextStyle(
-                    fontSize: m.fontSizeMd,
-                    color: TvDesignTokens.textPrimary,
-                  ),
-                  cursorColor: TvDesignTokens.brand,
-                  decoration: InputDecoration(
-                    border: InputBorder.none,
-                    hintText: hint,
-                    hintStyle: TextStyle(
-                      color: TvDesignTokens.textDisabled,
-                      fontSize: m.fontSizeSm,
-                    ),
-                    contentPadding: EdgeInsets.symmetric(
-                      vertical: m.spacingMd,
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
+        TvTextField(
+          controller: controller,
+          hint: hint,
+          obscureText: obscure,
+          autofocus: autofocus,
+          keyboardType: keyboardType,
         ),
       ],
     );

@@ -300,11 +300,32 @@ class _TvHomeScreenState extends ConsumerState<TvHomeScreen> {
               ),
             ),
             SizedBox(height: m.spacingXl),
-            TvButton(
-              text: '添加服务器',
-              icon: Icons.add,
-              autofocus: true,
-              onPressed: () => context.go('/tv/server'),
+            // 首启无服务器时，除了手动添加，还要能扫码导入配置、进设置——
+            // 否则遥控器只有一个按钮可去，批量导入无路可走。
+            Wrap(
+              spacing: m.spacingMd,
+              runSpacing: m.spacingMd,
+              alignment: WrapAlignment.center,
+              children: [
+                TvButton(
+                  text: '添加服务器',
+                  icon: Icons.add,
+                  autofocus: true,
+                  onPressed: () => context.go('/tv/server'),
+                ),
+                TvButton(
+                  text: '手机扫码导入',
+                  icon: Icons.qr_code_scanner,
+                  outlined: true,
+                  onPressed: () => context.go('/tv/scan'),
+                ),
+                TvButton(
+                  text: '设置',
+                  icon: Icons.settings,
+                  outlined: true,
+                  onPressed: () => context.go('/tv/settings'),
+                ),
+              ],
             ),
           ],
         ).animate().fadeIn(duration: TvDesignTokens.contentFadeDuration).moveY(

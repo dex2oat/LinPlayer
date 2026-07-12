@@ -26,6 +26,7 @@ import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_focusable.dart';
 import '../../widgets/tv_grid.dart';
 import '../../widgets/tv_panel.dart';
+import '../../widgets/tv_text_field.dart';
 import '../../widgets/tv_toast.dart';
 import 'tv_sync_settings.dart';
 import 'zashboard_screen.dart';
@@ -807,23 +808,15 @@ class _TvSettingsScreenState extends ConsumerState<TvSettingsScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
+            TvTextField(
               controller: nameController,
               autofocus: true,
-              style: const TextStyle(color: TvDesignTokens.textPrimary),
-              decoration: const InputDecoration(
-                labelText: '名称（可选）',
-                border: OutlineInputBorder(),
-              ),
+              hint: '名称（可选）',
             ),
             const SizedBox(height: 12),
-            TextField(
+            TvTextField(
               controller: urlController,
-              style: const TextStyle(color: TvDesignTokens.textPrimary),
-              decoration: const InputDecoration(
-                labelText: '订阅链接 (URL)',
-                border: OutlineInputBorder(),
-              ),
+              hint: '订阅链接 (URL)',
             ),
           ],
         ),
@@ -1027,12 +1020,10 @@ class _TvSettingsScreenState extends ConsumerState<TvSettingsScreen> {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: TvDesignTokens.surface,
         title: Text(title, style: const TextStyle(color: TvDesignTokens.textPrimary)),
-        content: TextField(
+        content: TvTextField(
           controller: controller,
           autofocus: true,
           obscureText: obscure,
-          style: const TextStyle(color: TvDesignTokens.textPrimary),
-          decoration: const InputDecoration(border: OutlineInputBorder()),
         ),
         actions: [
           TextButton(

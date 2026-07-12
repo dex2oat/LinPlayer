@@ -9,6 +9,7 @@ import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_focusable.dart';
 import '../../widgets/tv_grid.dart';
 import '../../widgets/tv_panel.dart';
+import '../../widgets/tv_text_field.dart';
 import '../../widgets/tv_toast.dart';
 
 /// TV 端「CF 优选反代」面板（D-pad/遥控器友好版）。
@@ -516,11 +517,9 @@ class _TvCfProxyScreenState extends ConsumerState<TvCfProxyScreen> {
         backgroundColor: TvDesignTokens.surface,
         title:
             Text(title, style: const TextStyle(color: TvDesignTokens.textPrimary)),
-        content: TextField(
+        content: TvTextField(
           controller: controller,
           autofocus: true,
-          style: const TextStyle(color: TvDesignTokens.textPrimary),
-          decoration: const InputDecoration(border: OutlineInputBorder()),
         ),
         actions: [
           TextButton(

@@ -7,6 +7,7 @@ import '../../theme/tv_design_tokens.dart';
 import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_focusable.dart';
 import '../../widgets/tv_grid.dart';
+import '../../widgets/tv_text_field.dart';
 
 /// TV 端「源类型选择器」：添加服务器第一步。观感对齐移动端
 /// [SourcePickerScreen]（搜索框 + 一列 accent 图标卡片），交互换成焦点驱动。
@@ -87,49 +88,11 @@ class _TvSourcePickerScreenState extends State<TvSourcePickerScreen> {
   }
 
   Widget _searchField(TvMetrics m) {
-    return Focus(
-      child: Builder(
-        builder: (context) {
-          final focused = Focus.of(context).hasFocus;
-          return Container(
-            decoration: BoxDecoration(
-              color: TvDesignTokens.surface,
-              borderRadius: BorderRadius.circular(m.posterRadius),
-              border: Border.all(
-                color: focused ? TvDesignTokens.brand : TvDesignTokens.divider,
-                width: focused ? 3 : 1.5,
-              ),
-            ),
-            padding: EdgeInsets.symmetric(horizontal: m.spacingMd),
-            child: Row(
-              children: [
-                Icon(Icons.search,
-                    color: TvDesignTokens.textSecondary, size: m.s(28)),
-                SizedBox(width: m.spacingSm),
-                Expanded(
-                  child: TextField(
-                    style: TextStyle(
-                      fontSize: m.fontSizeMd,
-                      color: TvDesignTokens.textPrimary,
-                    ),
-                    cursorColor: TvDesignTokens.brand,
-                    decoration: InputDecoration(
-                      border: InputBorder.none,
-                      hintText: '搜索源类型（Emby、OpenList…）',
-                      hintStyle: TextStyle(
-                        color: TvDesignTokens.textDisabled,
-                        fontSize: m.fontSizeSm,
-                      ),
-                      contentPadding: EdgeInsets.symmetric(vertical: m.spacingMd),
-                    ),
-                    onChanged: (v) => setState(() => _query = v),
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
+    return TvTextField(
+      hint: '搜索源类型（Emby、OpenList…）',
+      prefixIcon: Icon(Icons.search,
+          color: TvDesignTokens.textSecondary, size: m.s(28)),
+      onChanged: (v) => setState(() => _query = v),
     );
   }
 

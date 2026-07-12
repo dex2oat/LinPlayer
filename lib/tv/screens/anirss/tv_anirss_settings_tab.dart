@@ -15,6 +15,7 @@ import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_focusable.dart';
 import '../../widgets/tv_grid.dart';
 import '../../widgets/tv_panel.dart';
+import '../../widgets/tv_text_field.dart';
 import '../../widgets/tv_toast.dart';
 
 /// Ani-rss 设置 Tab（TV）：服务器管理 + 关于 + 服务端 Config 镜像。
@@ -996,25 +997,14 @@ class _TextInputDialogState extends State<_TextInputDialog> {
                   ),
                 )
               else ...[
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: m.spacingMd),
-                  decoration: BoxDecoration(
-                    color: TvDesignTokens.surfaceElevated,
-                    borderRadius: BorderRadius.circular(m.posterRadius),
-                  ),
-                  child: TextField(
-                    controller: _ctrl,
-                    autofocus: true,
-                    obscureText: widget.obscure,
-                    keyboardType: widget.isNumber
-                        ? TextInputType.number
-                        : TextInputType.text,
-                    style: TextStyle(
-                        fontSize: m.fontSizeMd,
-                        color: TvDesignTokens.textPrimary),
-                    onSubmitted: (v) => Navigator.of(context).pop(v),
-                    decoration: const InputDecoration(border: InputBorder.none),
-                  ),
+                TvTextField(
+                  controller: _ctrl,
+                  autofocus: true,
+                  obscureText: widget.obscure,
+                  keyboardType: widget.isNumber
+                      ? TextInputType.number
+                      : TextInputType.text,
+                  onSubmitted: (v) => Navigator.of(context).pop(v),
                 ),
                 SizedBox(height: m.spacingLg),
                 Row(

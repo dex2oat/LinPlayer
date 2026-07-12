@@ -9,6 +9,7 @@ import '../../../ui/widgets/common/media_widgets.dart';
 import '../../theme/tv_design_tokens.dart';
 import '../../theme/tv_metrics.dart';
 import '../../widgets/tv_focusable.dart';
+import '../../widgets/tv_text_field.dart';
 
 /// 默认网络图标库（与移动端 icon_select_screen 保持一致）。
 const String _defaultIconLibraryUrl =
@@ -152,17 +153,12 @@ class _TvIconPickerDialogState extends State<_TvIconPickerDialog> {
               ],
             ),
             SizedBox(height: m.spacingMd),
-            TextField(
+            TvTextField(
               controller: _searchCtrl,
               onChanged: (_) => setState(() {}),
-              style: TextStyle(
-                  fontSize: m.fontSizeMd, color: TvDesignTokens.textPrimary),
-              cursorColor: TvDesignTokens.brand,
-              decoration: InputDecoration(
-                hintText: '搜索图标名称…',
-                prefixIcon: Icon(Icons.search,
-                    color: TvDesignTokens.textSecondary, size: m.s(26)),
-              ),
+              hint: '搜索图标名称…',
+              prefixIcon: Icon(Icons.search,
+                  color: TvDesignTokens.textSecondary, size: m.s(26)),
             ),
             SizedBox(height: m.spacingLg),
             Expanded(child: _buildBody(m)),
