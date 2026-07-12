@@ -2382,6 +2382,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
                   data: SliderTheme.of(context).copyWith(
                     activeTrackColor: const Color(0xFF5B8DEF),
                     inactiveTrackColor: Colors.white.withValues(alpha: 0.3),
+                    // 已缓冲区间：介于「已播放」蓝与「未加载」淡灰之间的半透明白。
+                    secondaryActiveTrackColor:
+                        Colors.white.withValues(alpha: 0.5),
                     thumbColor: const Color(0xFF5B8DEF),
                     overlayColor:
                         const Color(0xFF5B8DEF).withValues(alpha: 0.2),
@@ -2391,6 +2394,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
                   ),
                   child: Slider(
                     value: effectiveProgress,
+                    secondaryTrackValue:
+                        _playerService.bufferedProgress.clamp(0.0, 1.0),
                     onChanged: (value) {
                       setState(() {
                         _isSliderDragging = true;

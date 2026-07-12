@@ -142,6 +142,17 @@ class VideoPlayerService extends ChangeNotifier {
   bool get isScrubbingPosition => _isScrubbingPosition;
   bool get isCompleted => _adapter?.isCompleted ?? false;
   double get progress => _adapter?.progress ?? 0.0;
+
+  /// 已缓冲到的位置（缓存进度）。不支持的内核返回 [Duration.zero]。
+  Duration get bufferedPosition => _adapter?.bufferedPosition ?? Duration.zero;
+
+  /// 缓存进度 0.0-1.0（进度条上「已缓冲」区间的宽度因子）。
+  double get bufferedProgress {
+    final d = duration.inMilliseconds;
+    if (d <= 0) return 0.0;
+    return (bufferedPosition.inMilliseconds / d).clamp(0.0, 1.0).toDouble();
+  }
+
   PlayerCoreType get coreType => _coreType;
   bool get lastInitializationUsedFallback => _lastInitializationUsedFallback;
   String? get lastFallbackReason => _lastFallbackReason;

@@ -77,6 +77,11 @@ class ExoPlayerAdapter implements PlayerAdapter {
     if (dur <= 0) return 0.0;
     return _position.inMilliseconds / dur;
   }
+  // ponytail: ExoPlayer 原生有 bufferedPosition，但取值要加 Kotlin
+  // getBufferedPosition 方法通道；暂返回零（进度条缓冲层隐藏，不显假进度），
+  // 待确认 exo 内核需要再补原生侧。media_kit/原生 mpv 已能显示缓存进度。
+  @override
+  Duration get bufferedPosition => Duration.zero;
   @override
   bool get hasError => _errorMessage != null;
   @override

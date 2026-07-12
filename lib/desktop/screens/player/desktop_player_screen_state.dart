@@ -3678,6 +3678,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
               data: SliderTheme.of(context).copyWith(
                 activeTrackColor: const Color(0xFF5B8DEF),
                 inactiveTrackColor: Colors.white.withValues(alpha: 0.3),
+                // 已缓冲区间：介于「已播放」蓝与「未加载」淡灰之间的半透明白。
+                secondaryActiveTrackColor: Colors.white.withValues(alpha: 0.5),
                 thumbColor: const Color(0xFF5B8DEF),
                 overlayColor: const Color(0xFF5B8DEF).withValues(alpha: 0.2),
                 trackHeight: 4,
@@ -3685,6 +3687,8 @@ class _DesktopPlayerScreenState extends ConsumerState<DesktopPlayerScreen>
               ),
               child: Slider(
                 value: effectiveProgress.clamp(0.0, 1.0),
+                secondaryTrackValue:
+                    _playerService.bufferedProgress.clamp(0.0, 1.0),
                 onChangeStart: (_) {
                   setState(() {
                     _isSeekingWithSlider = true;

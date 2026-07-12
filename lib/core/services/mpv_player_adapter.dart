@@ -103,6 +103,9 @@ class MpvPlayerAdapter implements PlayerAdapter {
   bool get isPlaying => _isPlaying;
   @override
   bool get isBuffering => _isBuffering;
+
+  @override
+  Duration get bufferedPosition => _player?.state.buffer ?? Duration.zero;
   @override
   bool get isCompleted => _isCompleted;
   @override

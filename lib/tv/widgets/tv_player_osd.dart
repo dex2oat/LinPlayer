@@ -710,7 +710,11 @@ class _TvPlayerOsdState extends ConsumerState<TvPlayerOsd> {
                   fontSize: m.fontSizeSm,
                   fontFeatures: const [FontFeature.tabularFigures()])),
           SizedBox(width: m.spacingLg),
-          Expanded(child: _TvSeekTrack(progress: p.clamp(0.0, 1.0), height: m.s(6))),
+          Expanded(
+              child: _TvSeekTrack(
+                  progress: p.clamp(0.0, 1.0),
+                  buffered: widget.service.bufferedProgress.clamp(0.0, 1.0),
+                  height: m.s(6))),
           SizedBox(width: m.spacingLg),
           Text(_fmt(widget.duration),
               style: TextStyle(
@@ -776,8 +780,10 @@ class _TvClockState extends State<_TvClock> {
 /// 进度条轨道（自绘，只读；键位在 OSD 层处理 ←→ 快退/快进）。
 class _TvSeekTrack extends StatelessWidget {
   final double progress;
+  final double buffered;
   final double height;
-  const _TvSeekTrack({required this.progress, required this.height});
+  const _TvSeekTrack(
+      {required this.progress, required this.buffered, required this.height});
 
   @override
   Widget build(BuildContext context) {
@@ -793,6 +799,17 @@ class _TvSeekTrack extends StatelessWidget {
               decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: 0.28),
                 borderRadius: BorderRadius.circular(height),
+              ),
+            ),
+            // 已缓冲区间（半透明白），叠在底轨之上、已播放之下，区分「缓存到哪」。
+            FractionallySizedBox(
+              widthFactor: buffered,
+              child: Container(
+                height: height,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(height),
+                ),
               ),
             ),
             FractionallySizedBox(

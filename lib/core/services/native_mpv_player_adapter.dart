@@ -40,6 +40,7 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
   bool _isBuffering = false;
   bool _isCompleted = false;
   Duration _position = Duration.zero;
+  Duration _bufferedPosition = Duration.zero;
   Duration _duration = Duration.zero;
   double _speed = 1.0;
   double _volume = 1.0;
@@ -75,6 +76,9 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
   bool get isCompleted => _isCompleted;
   @override
   Duration get position => _position;
+
+  @override
+  Duration get bufferedPosition => _bufferedPosition;
   @override
   Duration get duration => _duration;
   @override
@@ -850,6 +854,15 @@ class NativeMpvPlayerAdapter implements PlayerAdapter {
       final dur = await _channel.invokeMethod<int>('getDuration', {'playerId': _playerId});
       if (dur != null && dur > 0) {
         _duration = Duration(milliseconds: dur);
+      }
+      // 缓存进度：demuxer-cache-time = 已缓冲到的绝对时间戳（秒）。
+      final cacheStr = await _channel.invokeMethod<String>('getProperty', {
+        'playerId': _playerId,
+        'name': 'demuxer-cache-time',
+      });
+      final cacheSec = double.tryParse(cacheStr ?? '');
+      if (cacheSec != null && cacheSec > 0) {
+        _bufferedPosition = Duration(milliseconds: (cacheSec * 1000).round());
       }
       // 轮询播放状态作为 EventChannel 的兜底，确保 UI 状态同步
       final pauseStr = await _channel.invokeMethod<String>('getProperty', {

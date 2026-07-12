@@ -34,6 +34,10 @@ abstract class PlayerAdapter {
   /// 播放进度 0.0-1.0
   double get progress;
 
+  /// 已缓冲/缓存到的位置（缓存进度，绝对时间）。未知或不支持的内核返回
+  /// [Duration.zero]——UI 据此隐藏缓冲层，绝不显示假的缓存进度。
+  Duration get bufferedPosition => Duration.zero;
+
   /// 是否有错误
   bool get hasError;
 

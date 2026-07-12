@@ -1236,12 +1236,25 @@ class _TvPlayerScreenState extends ConsumerState<TvPlayerScreen> {
             Expanded(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(m.s(6)),
-                child: LinearProgressIndicator(
-                  value: p.clamp(0.0, 1.0),
-                  minHeight: m.s(12),
-                  backgroundColor: Colors.white.withValues(alpha: 0.28),
-                  valueColor:
-                      const AlwaysStoppedAnimation(TvDesignTokens.brand),
+                child: Stack(
+                  children: [
+                    // 已缓冲区间（半透明白）垫底。
+                    LinearProgressIndicator(
+                      value: _service.bufferedProgress.clamp(0.0, 1.0),
+                      minHeight: m.s(12),
+                      backgroundColor: Colors.white.withValues(alpha: 0.28),
+                      valueColor: AlwaysStoppedAnimation(
+                          Colors.white.withValues(alpha: 0.5)),
+                    ),
+                    // 已播放（品牌蓝）盖在上层，背景透明露出缓冲层。
+                    LinearProgressIndicator(
+                      value: p.clamp(0.0, 1.0),
+                      minHeight: m.s(12),
+                      backgroundColor: Colors.transparent,
+                      valueColor:
+                          const AlwaysStoppedAnimation(TvDesignTokens.brand),
+                    ),
+                  ],
                 ),
               ),
             ),
