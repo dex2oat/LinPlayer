@@ -143,8 +143,12 @@ rquickjs 重建引擎;JS 插件 API 保持兼容;**并借机重写实现形态**
   - 遗留:`getCredentials` 因 PoC 不存明文密码返 Err;cfproxy 重活未接(命令壳在)。
 
 ### Phase 8 · Linux + 安卓
-- Linux:Tauri 跨平台，多为免费；验 mpv GL 子窗口合成。
-- 安卓:Rust 核 → .so;定安卓 UI(留 Flutter 走 flutter_rust_bridge,或 webview 走 uniffi);TV 焦点方案另议。
+- **✅ 安卓:一份 Rust 核交叉编译通过(证死)**。`cargo ndk -t arm64-v8a build --release -p linplayer-core` 产出 `target/aarch64-linux-android/release/liblinplayer_core.rlib`(8.6MB,`llvm-readobj` 验为 `EM_AARCH64` ELF64);**整核含 reqwest/rustls、tokio、数据源、网络、QuickJS 插件引擎全套**都过。可复现脚本:**`native-poc/scripts/build-android.sh [arm64-v8a|armeabi-v7a|...]`**。Windows 宿主特有的 bindgen 坑及解法(脚本已封装):
+  - reqwest 从默认 native-tls **切 rustls-tls**(`default-features=false`),去掉 `openssl-sys`——安卓交叉编译免装 OpenSSL(桌面亦通用,`.resolve()`/`danger_accept_invalid_certs` 的 CF 钉 IP+SNI 在 rustls 下照常)。
+  - rquickjs-sys 不随包发 android 的 FFI bindings → core/Cargo.toml 的 `[target.'cfg(target_os="android")']` 开 `bindgen` 现生成;`bindgen` 经 proc-macro `rquickjs-macro`(永远编 host)传导,**host+android 两个 bindgen 都要喂**。
+  - 需一个**带 `libclang.dll` 的 NDK**(如 30.x;27.x 不带);libclang 当 DLL 加载 InstalledDir 为空 → 显式 `-resource-dir` 指 `lib/clang/<ver>`(补 stdbool.h);host(msvc)bindgen 还要从 `vcvars64.bat` 灌 `%INCLUDE%`(补 stdio.h);预置 `BINDGEN_EXTRA_CLANG_ARGS_<triple>` 后 cargo-ndk 不再补 sysroot,故自带 `--sysroot`。
+- **⬜ 安卓 UI 未定**:Rust 核已就绪不阻塞;留 Flutter 走 flutter_rust_bridge 或 webview 走 uniffi;真出 `.so` 需一个 cdylib 绑定壳(core 是 rlib);TV 焦点方案另议。
+- **⬜ Linux(需 Linux 机验)**:Tauri 跨平台;`.so`/GL 子窗口合成需 webkit2gtk + Linux target,Windows 宿主上无法验证,留到有 Linux 环境再证(风险低)。
 
 ---
 
