@@ -119,6 +119,9 @@ pub struct AppConfig {
     pub danmaku: DanmakuServer,
     #[serde(default)]
     pub proxy: ProxyConfig,
+    /// 已连接的 Trakt 账号(令牌);None=未连接。ponytail: 与其它 token 同为明文,加固待 keyring。
+    #[serde(default)]
+    pub sync_trakt: Option<crate::sync::SyncAccount>,
 }
 
 fn config_path() -> PathBuf {

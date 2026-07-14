@@ -761,6 +761,68 @@ fn download_set_threads(state: State<'_, AppState>, threads: usize) {
     state.download.set_threads(threads);
 }
 
+// ---------- Trakt 同步命令 ----------
+use linplayer_core::sync::trakt;
+
+/// 设备码登录第一步:申请设备码(展示 verification_url + user_code 给用户浏览器授权)。
+#[tauri::command]
+async fn trakt_device_code() -> Result<trakt::TraktDeviceCode, String> {
+    trakt::request_device_code().await
+}
+
+/// 轮询一次;授权成功则持久化账号。前端按 interval 反复调,直到非 pending/slowDown。
+#[tauri::command]
+async fn trakt_poll(
+    state: State<'_, AppState>,
+    device_code: String,
+) -> Result<trakt::TraktPollResult, String> {
+    let r = trakt::poll_once(&device_code).await;
+    if let Some(acc) = &r.account {
+        let mut cfg = state.config.lock().unwrap();
+        cfg.sync_trakt = Some(acc.clone());
+        cfg.save();
+    }
+    Ok(r)
+}
+
+/// 当前已连接的 Trakt 账号(None=未连接)。
+#[tauri::command]
+fn trakt_account(state: State<'_, AppState>) -> Option<linplayer_core::sync::SyncAccount> {
+    state.config.lock().unwrap().sync_trakt.clone()
+}
+
+#[tauri::command]
+fn trakt_logout(state: State<'_, AppState>) {
+    let mut cfg = state.config.lock().unwrap();
+    cfg.sync_trakt = None;
+    cfg.save();
+}
+
+/// Scrobble 一次(start/pause/stop);ids 如 {"imdb":"tt..","tmdb":123}。未连接返回 false。
+#[tauri::command]
+async fn trakt_scrobble(
+    state: State<'_, AppState>,
+    type_: String,
+    ids: serde_json::Value,
+    progress: f64,
+    action: String,
+) -> Result<bool, String> {
+    let acc = state.config.lock().unwrap().sync_trakt.clone();
+    let Some(acc) = acc else { return Ok(false) };
+    Ok(trakt::scrobble(&acc, &type_, ids, progress, &action).await)
+}
+
+/// 追剧日历(only_mine=只看我追的)。未连接返回空。
+#[tauri::command]
+async fn trakt_calendar(
+    state: State<'_, AppState>,
+    only_mine: Option<bool>,
+) -> Result<Vec<linplayer_core::sync::calendar::CalendarEntry>, String> {
+    let acc = state.config.lock().unwrap().sync_trakt.clone();
+    let Some(acc) = acc else { return Ok(vec![]) };
+    Ok(trakt::fetch_shows_calendar(&acc, 3, 21, only_mine.unwrap_or(true)).await)
+}
+
 // ---------- 付费(爱发电)命令 ----------
 /// 校验爱发电订单号(经已部署的 CF 代理,客户端不接触 afdian token)。软锁。
 #[tauri::command]
@@ -937,7 +999,13 @@ pub fn run() {
             set_proxy,
             ranking_categories,
             ranking_fetch,
-            afdian_verify
+            afdian_verify,
+            trakt_device_code,
+            trakt_poll,
+            trakt_account,
+            trakt_logout,
+            trakt_scrobble,
+            trakt_calendar
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

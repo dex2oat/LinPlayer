@@ -10,6 +10,9 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub mod calendar;
+pub mod trakt;
+
 // ---------- 代理配置 ----------
 pub const SYNC_PROXY_BASE: &str = "https://291277.xyz/api";
 pub const SYNC_PROXY_KEY: &str = "m4cfEohhuz4u142d3w";
