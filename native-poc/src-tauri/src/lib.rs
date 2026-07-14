@@ -823,6 +823,80 @@ async fn trakt_calendar(
     Ok(trakt::fetch_shows_calendar(&acc, 3, 21, only_mine.unwrap_or(true)).await)
 }
 
+// ---------- Bangumi 同步命令 ----------
+use linplayer_core::sync::bangumi;
+
+/// 构造 Bangumi 授权页 URL(前端用浏览器打开,用户授权后粘贴 code 回来)。
+#[tauri::command]
+fn bangumi_authorize_url(redirect_uri: Option<String>) -> String {
+    let uri = redirect_uri.unwrap_or_else(|| bangumi::DEFAULT_REDIRECT_URI.to_string());
+    bangumi::build_authorize_url(&uri)
+}
+
+/// 用粘贴回来的授权码换令牌并持久化。
+#[tauri::command]
+async fn bangumi_exchange(
+    state: State<'_, AppState>,
+    code: String,
+    redirect_uri: Option<String>,
+) -> Result<linplayer_core::sync::SyncAccount, String> {
+    let uri = redirect_uri.unwrap_or_else(|| bangumi::DEFAULT_REDIRECT_URI.to_string());
+    let acc = bangumi::exchange_code(&code, &uri).await?;
+    {
+        let mut cfg = state.config.lock().unwrap();
+        cfg.sync_bangumi = Some(acc.clone());
+        cfg.save();
+    }
+    Ok(acc)
+}
+
+#[tauri::command]
+fn bangumi_account(state: State<'_, AppState>) -> Option<linplayer_core::sync::SyncAccount> {
+    state.config.lock().unwrap().sync_bangumi.clone()
+}
+
+#[tauri::command]
+fn bangumi_logout(state: State<'_, AppState>) {
+    let mut cfg = state.config.lock().unwrap();
+    cfg.sync_bangumi = None;
+    cfg.save();
+}
+
+/// 设置条目收藏(type:1想看2看过3在看4搁置5抛弃)。更新单集前须先收藏。
+#[tauri::command]
+async fn bangumi_set_collection(
+    state: State<'_, AppState>,
+    subject_id: i64,
+    type_: i32,
+) -> Result<bool, String> {
+    let acc = state.config.lock().unwrap().sync_bangumi.clone();
+    let Some(acc) = acc else { return Ok(false) };
+    Ok(bangumi::set_collection_type(&acc, subject_id, type_).await)
+}
+
+/// 更新单集观看状态(type:2看过)。
+#[tauri::command]
+async fn bangumi_update_episode(
+    state: State<'_, AppState>,
+    subject_id: i64,
+    episode_id: i64,
+    type_: Option<i32>,
+) -> Result<bool, String> {
+    let acc = state.config.lock().unwrap().sync_bangumi.clone();
+    let Some(acc) = acc else { return Ok(false) };
+    Ok(bangumi::update_episode_status(&acc, subject_id, episode_id, type_.unwrap_or(2)).await)
+}
+
+#[tauri::command]
+async fn bangumi_calendar(
+    state: State<'_, AppState>,
+    only_mine: Option<bool>,
+) -> Result<Vec<linplayer_core::sync::calendar::CalendarEntry>, String> {
+    let acc = state.config.lock().unwrap().sync_bangumi.clone();
+    let Some(acc) = acc else { return Ok(vec![]) };
+    Ok(bangumi::fetch_anime_calendar(&acc, only_mine.unwrap_or(true)).await)
+}
+
 // ---------- 付费(爱发电)命令 ----------
 /// 校验爱发电订单号(经已部署的 CF 代理,客户端不接触 afdian token)。软锁。
 #[tauri::command]
@@ -1005,7 +1079,14 @@ pub fn run() {
             trakt_account,
             trakt_logout,
             trakt_scrobble,
-            trakt_calendar
+            trakt_calendar,
+            bangumi_authorize_url,
+            bangumi_exchange,
+            bangumi_account,
+            bangumi_logout,
+            bangumi_set_collection,
+            bangumi_update_episode,
+            bangumi_calendar
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
