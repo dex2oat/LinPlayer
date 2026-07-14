@@ -3,6 +3,7 @@
 // 列目录 /file/sort 分页;取流优先 /file/v2/play/project(转码多档),回退 /file/download 原文件直链。
 // 夸克经 Set-Cookie 轮换 __puus/__pus → 实时回写内存 Cookie。
 // ponytail: TV(扫码)模式(refresh_token/device_id + 开放 API)未接;走 Cookie 模式,扫码留后续增量。
+use super::quark_tv;
 use super::{
     is_video_file_name, MediaSourceBackend, PlayQuality, ResolvedPlay, SourceEntry, SourceError,
     SourceKind, SourceServer,
@@ -21,6 +22,8 @@ const MAX_PAGES: usize = 200;
 pub struct QuarkBackend {
     // 含轮换后 __puus 的最新 Cookie(serverId -> cookie)。
     cookie_cache: Mutex<HashMap<String, String>>,
+    // TV(扫码)模式:access_token 缓存(serverId -> access_token)。
+    tv_access: Mutex<HashMap<String, String>>,
 }
 
 fn replace_cookie(cookie: &str, key: &str, value: &str) -> String {
@@ -180,6 +183,44 @@ impl QuarkBackend {
             is_auth,
         })
     }
+
+    /// TV(扫码)模式:凭据里存了 refresh_token 即是。否则走 Cookie 网页 API。
+    fn is_tv(&self, server: &SourceServer) -> bool {
+        server
+            .extra
+            .get("refresh_token")
+            .map(|t| !t.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// 取 TV 模式 (access_token, device_id);force 或缓存空时用 refresh_token 刷新。
+    /// ponytail: 刷新后若 refresh_token 轮换,未回写持久化(会话内够用);长期用需回存。
+    async fn tv_auth(
+        &self,
+        http: &reqwest::Client,
+        server: &SourceServer,
+        force: bool,
+    ) -> Result<(String, String), SourceError> {
+        let device_id = server.extra.get("device_id").cloned().unwrap_or_default();
+        let refresh = server.extra.get("refresh_token").cloned().unwrap_or_default();
+        if device_id.is_empty() || refresh.is_empty() {
+            return Err(SourceError::auth("夸克未扫码登录，请重新扫码"));
+        }
+        if !force {
+            if let Some(a) = self.tv_access.lock().unwrap().get(&server.id).cloned() {
+                if !a.is_empty() {
+                    return Ok((a, device_id));
+                }
+            }
+        }
+        let (access, _new_refresh) =
+            quark_tv::exchange_token(http, &device_id, &refresh, true).await?;
+        self.tv_access
+            .lock()
+            .unwrap()
+            .insert(server.id.clone(), access.clone());
+        Ok((access, device_id))
+    }
 }
 
 #[async_trait::async_trait]
@@ -198,6 +239,17 @@ impl MediaSourceBackend for QuarkBackend {
             Some(d) if !d.is_empty() => d,
             _ => "0",
         };
+        // TV(扫码)模式走开放 API;失效自动刷新重试一次。
+        if self.is_tv(server) {
+            let (access, device_id) = self.tv_auth(http, server, false).await?;
+            return match quark_tv::list_files(http, &device_id, &access, fid).await {
+                Err(e) if e.is_auth => {
+                    let (access, device_id) = self.tv_auth(http, server, true).await?;
+                    quark_tv::list_files(http, &device_id, &access, fid).await
+                }
+                other => other,
+            };
+        }
         let mut entries = Vec::new();
         let mut page = 1;
         while page <= MAX_PAGES {
@@ -257,6 +309,27 @@ impl MediaSourceBackend for QuarkBackend {
         quality_id: Option<&str>,
     ) -> Result<ResolvedPlay, SourceError> {
         let fid = &entry.id;
+
+        // TV(扫码)模式:开放 API 取转码各档,失败回退原文件直链(URL 已签名,无需 headers)。
+        if self.is_tv(server) {
+            let (access, device_id) = self.tv_auth(http, server, false).await?;
+            if let Ok(infos) = quark_tv::streaming_infos(http, &device_id, &access, fid).await {
+                if let Some((url, qualities, selected)) = pick_quality(&infos, quality_id) {
+                    return Ok(ResolvedPlay {
+                        url,
+                        title: entry.name.clone(),
+                        http_headers: HashMap::new(),
+                        user_agent_override: None,
+                        subtitles: vec![],
+                        qualities,
+                        selected_quality_id: Some(selected),
+                    });
+                }
+            }
+            let url = quark_tv::download_link(http, &device_id, &access, fid).await?;
+            return Ok(ResolvedPlay::simple(url, entry.name.clone(), HashMap::new()));
+        }
+
         let cookie = self.cookie_of(server);
         let mut headers = HashMap::new();
         headers.insert("Cookie".to_string(), cookie);

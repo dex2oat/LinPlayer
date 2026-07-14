@@ -8,6 +8,7 @@ use linplayer_core::source::anirss::AniRssBackend;
 use linplayer_core::source::feiniu::FeiniuBackend;
 use linplayer_core::source::openlist::OpenListBackend;
 use linplayer_core::source::quark::QuarkBackend;
+use linplayer_core::source::quark_tv;
 use linplayer_core::source::{MediaSourceBackend, SourceEntry, SourceKind, SourceServer};
 use mpv::{Player, Status};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -442,6 +443,54 @@ async fn source_play(
     Ok(resume_secs)
 }
 
+// ---------- 夸克 TV 扫码登录 ----------
+#[derive(serde::Serialize)]
+struct QuarkScan {
+    device_id: String,
+    qr_data: String,
+    query_token: String,
+}
+
+/// 起扫码:生成 device_id,拿二维码内容 + query_token。
+#[tauri::command]
+async fn quark_scan_start(state: State<'_, AppState>) -> Result<QuarkScan, String> {
+    let device_id = quark_tv::gen_device_id();
+    let (qr_data, query_token) = quark_tv::get_login_code(&state.http, &device_id)
+        .await
+        .map_err(|e| e.message)?;
+    Ok(QuarkScan { device_id, qr_data, query_token })
+}
+
+/// 轮询扫码结果:用户确认后拿 code→换 refresh_token→建立夸克 TV 源为活跃源。
+/// 返回 true=登录成功;false=尚未确认(继续轮询)。
+#[tauri::command]
+async fn quark_scan_poll(
+    state: State<'_, AppState>,
+    device_id: String,
+    query_token: String,
+) -> Result<bool, String> {
+    let code = match quark_tv::get_code(&state.http, &device_id, &query_token).await {
+        Ok(c) if !c.is_empty() => c,
+        _ => return Ok(false), // 未确认/接口报错 -> 继续轮询
+    };
+    let (_access, refresh) = quark_tv::exchange_token(&state.http, &device_id, &code, false)
+        .await
+        .map_err(|e| e.message)?;
+    let mut extra = HashMap::new();
+    extra.insert("device_id".to_string(), device_id);
+    extra.insert("refresh_token".to_string(), refresh);
+    let server = SourceServer {
+        id: "quark-tv".to_string(),
+        base_url: String::new(),
+        username: None,
+        password: None,
+        token: None,
+        extra,
+    };
+    *state.source.lock().unwrap() = Some((SourceKind::Quark, server));
+    Ok(true)
+}
+
 /// 302 看门狗:探测直链是否失效(END_FILE=error),失效则重解析并从 pos 续播。返回是否重签了。
 /// 前端播放中每轮轮询调用;仅对网盘源播放生效(Emby 直链稳定,不重签)。
 #[tauri::command]
@@ -593,7 +642,9 @@ pub fn run() {
             source_login,
             source_list_dir,
             source_play,
-            source_watchdog
+            source_watchdog,
+            quark_scan_start,
+            quark_scan_poll
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

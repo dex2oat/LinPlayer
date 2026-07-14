@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import QRCode from "qrcode";
 import "./styles.css";
 
 type LoginResult = { server: string; token: string; user_id: string; user_name: string };
@@ -47,6 +48,8 @@ export default function App() {
   const [loginTab, setLoginTab] = useState<"emby" | "source">("emby");
   const [srcKind, setSrcKind] = useState("openlist");
   const [cookieText, setCookieText] = useState("");
+  const [scanQr, setScanQr] = useState<string | null>(null);
+  const scanTimer = useRef<number | null>(null);
   const [source, setSource] = useState<{ kind: string } | null>(null);
   const [srcItems, setSrcItems] = useState<SourceEntry[]>([]);
   const [srcCrumbs, setSrcCrumbs] = useState<Crumb[]>([]);
@@ -130,6 +133,30 @@ export default function App() {
       await invoke("set_active_server", { serverId: g.server_id }); // 切到该条目所在服
       await playItem(it);
     } catch (e) { setErr(String(e)); }
+  }
+
+  // ---------- 夸克扫码 ----------
+  async function doQuarkScan() {
+    setErr(""); setBusy(true);
+    try {
+      const s = await invoke<{ device_id: string; qr_data: string; query_token: string }>("quark_scan_start");
+      setScanQr(await QRCode.toDataURL(s.qr_data, { width: 220, margin: 1 }));
+      setBusy(false);
+      scanTimer.current = window.setInterval(async () => {
+        try {
+          const ok = await invoke<boolean>("quark_scan_poll", { deviceId: s.device_id, queryToken: s.query_token });
+          if (!ok) return;
+          if (scanTimer.current) window.clearInterval(scanTimer.current);
+          setScanQr(null); setSource({ kind: "quark" });
+          setSrcItems(await invoke<SourceEntry[]>("source_list_dir", { dirId: null }));
+          setSrcCrumbs([]);
+        } catch { /* 未确认，继续轮询 */ }
+      }, 2500);
+    } catch (e) { setErr(String(e)); setBusy(false); }
+  }
+  function cancelScan() {
+    if (scanTimer.current) window.clearInterval(scanTimer.current);
+    setScanQr(null);
   }
 
   // ---------- 网盘源 ----------
@@ -251,8 +278,19 @@ export default function App() {
             </select>
           )}
           {isSrc && srcKind === "quark" ? (
-            <textarea className="cookie-box" placeholder="粘贴夸克 Cookie（含 __puus）"
-                      value={cookieText} onChange={(e) => setCookieText(e.target.value)} />
+            scanQr ? (
+              <div className="scan-box">
+                <img src={scanQr} alt="夸克扫码" />
+                <div className="scan-hint">用夸克 App 扫码并确认…</div>
+                <button className="ghost" onClick={cancelScan}>取消扫码</button>
+              </div>
+            ) : (
+              <>
+                <textarea className="cookie-box" placeholder="粘贴夸克 Cookie（含 __puus）"
+                          value={cookieText} onChange={(e) => setCookieText(e.target.value)} />
+                <button className="ghost" onClick={doQuarkScan}>或 扫码登录</button>
+              </>
+            )
           ) : (
             <>
               <input placeholder={isSrc ? "服务器地址 http://ip:5244" : "服务器地址 http://ip:8096"}
@@ -262,9 +300,11 @@ export default function App() {
                      onKeyDown={(e) => e.key === "Enter" && (isSrc ? doSourceLogin() : doLogin())} />
             </>
           )}
-          <button disabled={busy} onClick={isSrc ? doSourceLogin : doLogin}>
-            {busy ? "登录中…" : isSrc ? "连接网盘" : "登录 Emby"}
-          </button>
+          {!scanQr && (
+            <button disabled={busy} onClick={isSrc ? doSourceLogin : doLogin}>
+              {busy ? "登录中…" : isSrc ? "连接网盘" : "登录 Emby"}
+            </button>
+          )}
           {addingServer && (
             <button className="ghost" onClick={() => setAddingServer(false)}>取消</button>
           )}

@@ -7,6 +7,7 @@ pub mod anirss;
 pub mod feiniu;
 pub mod openlist;
 pub mod quark;
+pub mod quark_tv;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[serde(rename_all = "lowercase")]

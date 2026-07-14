@@ -48,6 +48,9 @@ html, body, #root { height: 100%; background: transparent; }
   outline: none; font-family: ui-monospace, monospace; line-height: 1.4;
 }
 .cookie-box:focus { border-color: var(--accent); }
+.scan-box { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 6px 0; }
+.scan-box img { width: 200px; height: 200px; border-radius: 10px; background: #fff; padding: 8px; }
+.scan-hint { font-size: 13px; opacity: .7; }
 .login-card input:focus { border-color: var(--accent); background: rgba(79,124,255,.08); }
 .login-card button {
   background: linear-gradient(135deg, #4f7cff, #6b5cff); border: none; font-weight: 600;
