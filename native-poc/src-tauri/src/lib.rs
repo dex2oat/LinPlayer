@@ -5,6 +5,7 @@ use linplayer_core::emby::{self, Item, LoginResult, PlaybackTarget, Session};
 use linplayer_core::http;
 use linplayer_core::media::{pick_tracks, Track};
 use linplayer_core::source::anirss::AniRssBackend;
+use linplayer_core::source::feiniu::FeiniuBackend;
 use linplayer_core::source::openlist::OpenListBackend;
 use linplayer_core::source::{MediaSourceBackend, SourceEntry, SourceKind, SourceServer};
 use mpv::{Player, Status};
@@ -342,6 +343,7 @@ pub fn run() {
     let mut source_backends: HashMap<SourceKind, Arc<dyn MediaSourceBackend>> = HashMap::new();
     source_backends.insert(SourceKind::Openlist, Arc::new(OpenListBackend::new()));
     source_backends.insert(SourceKind::Anirss, Arc::new(AniRssBackend::new()));
+    source_backends.insert(SourceKind::Feiniu, Arc::new(FeiniuBackend::new()));
 
     // 有活跃账号 -> 用存盘凭据重建会话(重启免登)
     let session = config.active_account().map(|a| Session {
