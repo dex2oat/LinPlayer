@@ -1,9 +1,10 @@
 mod mpv;
 
-use linplayer_core::config::{Account, AppConfig};
-use linplayer_core::emby::{self, Item, LoginResult, Session};
+use linplayer_core::config::{Account, AppConfig, Prefs};
+use linplayer_core::emby::{self, Item, LoginResult, PlaybackTarget, Session};
 use linplayer_core::http;
-use mpv::{Player, Status, Track};
+use linplayer_core::media::{pick_tracks, Track};
+use mpv::{Player, Status};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::sync::Mutex;
 use tauri::{Manager, State, WindowEvent};
@@ -13,6 +14,7 @@ struct AppState {
     config: Mutex<AppConfig>,
     session: Mutex<Option<Session>>,
     player: Mutex<Option<Player>>,
+    playback: Mutex<Option<PlaybackTarget>>, // 当前播放会话(上报三件套共享)
 }
 
 fn poclog(msg: &str) {
@@ -106,27 +108,66 @@ fn image_url(state: State<'_, AppState>, item_id: String) -> Result<String, Stri
 }
 
 // ---------- 播放命令 ----------
+/// 播放:解析流 -> 从 resume_secs 起播 -> 上报 start;返回起播秒数供前端定位进度条。
 #[tauri::command]
-async fn play(state: State<'_, AppState>, item_id: String) -> Result<String, String> {
+async fn play(
+    state: State<'_, AppState>,
+    item_id: String,
+    resume_secs: f64,
+) -> Result<f64, String> {
     let s = session_of(&state)?;
-    let url = emby::resolve_stream(&state.http, &s, &item_id).await?;
-    poclog(&format!("PLAY item={item_id} url={url}"));
-    let guard = state.player.lock().unwrap();
-    let p = guard.as_ref().ok_or_else(|| {
-        poclog("PLAY 失败: 播放器未就绪(mpv 初始化没成功)");
-        "播放器未就绪".to_string()
-    })?;
-    match p.load(&url) {
-        Ok(_) => {
-            p.set_pause(false);
-            poclog("load OK");
-            Ok(url)
-        }
-        Err(e) => {
-            poclog(&format!("load ERR: {e}"));
-            Err(e)
+    let target = emby::resolve_stream(&state.http, &s, &item_id).await?;
+    poclog(&format!(
+        "PLAY item={item_id} resume={resume_secs} psid={} url={}",
+        target.play_session_id, target.url
+    ));
+    // 加载(不跨 await 持锁)
+    {
+        let guard = state.player.lock().unwrap();
+        let p = guard.as_ref().ok_or_else(|| {
+            poclog("PLAY 失败: 播放器未就绪(mpv 初始化没成功)");
+            "播放器未就绪".to_string()
+        })?;
+        p.load_at(&target.url, resume_secs)?;
+        p.set_pause(false);
+    }
+    // 上报 start(失败不阻断播放)
+    if let Err(e) = emby::report_start(&state.http, &s, &target, resume_secs).await {
+        poclog(&format!("report_start ERR: {e}"));
+    }
+    *state.playback.lock().unwrap() = Some(target);
+    poclog("load OK");
+    Ok(resume_secs)
+}
+
+/// 周期/暂停切换时上报进度(前端每 ~5s 及暂停切换时调)。
+#[tauri::command]
+async fn report_progress(state: State<'_, AppState>, pos: f64, paused: bool) -> Result<(), String> {
+    let s = session_of(&state)?;
+    let target = state.playback.lock().unwrap().clone();
+    if let Some(t) = target {
+        let _ = emby::report_progress(&state.http, &s, &t, pos, paused).await;
+    }
+    Ok(())
+}
+
+/// 停止播放:暂停 mpv + 上报 stopped(写回最终进度 -> 续播落地)+ 清会话。
+#[tauri::command]
+async fn stop_playback(state: State<'_, AppState>, pos: f64) -> Result<(), String> {
+    {
+        let guard = state.player.lock().unwrap();
+        if let Some(p) = guard.as_ref() {
+            p.set_pause(true);
         }
     }
+    let s = session_of(&state)?;
+    let target = state.playback.lock().unwrap().take();
+    if let Some(t) = target {
+        if let Err(e) = emby::report_stopped(&state.http, &s, &t, pos).await {
+            poclog(&format!("report_stopped ERR: {e}"));
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -161,6 +202,42 @@ fn set_track(state: State<'_, AppState>, kind: String, id: String) -> Result<(),
     Ok(())
 }
 
+/// 按已存偏好自动选轨(起播后前端调一次)。返回实际选中的 (aid, sid)。
+#[tauri::command]
+fn apply_prefs(state: State<'_, AppState>) -> Result<(Option<String>, Option<String>), String> {
+    let prefs = state.config.lock().unwrap().prefs.clone();
+    let guard = state.player.lock().unwrap();
+    let p = guard.as_ref().ok_or("播放器未就绪")?;
+    let tracks = p.tracks();
+    let (aid, sid) = pick_tracks(
+        &tracks,
+        prefs.audio_lang.as_deref(),
+        prefs.sub_lang.as_deref(),
+        prefs.sub_enabled,
+    );
+    p.apply_tracks(aid.clone(), sid.clone());
+    Ok((aid, sid))
+}
+
+#[tauri::command]
+fn get_prefs(state: State<'_, AppState>) -> Prefs {
+    state.config.lock().unwrap().prefs.clone()
+}
+
+/// 记住偏好(用户手动切轨时持久化,下次同语言自动命中)。
+#[tauri::command]
+fn set_prefs(
+    state: State<'_, AppState>,
+    audio_lang: Option<String>,
+    sub_lang: Option<String>,
+    sub_enabled: bool,
+) -> Result<(), String> {
+    let mut cfg = state.config.lock().unwrap();
+    cfg.prefs = Prefs { audio_lang, sub_lang, sub_enabled };
+    cfg.save();
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config = AppConfig::load();
@@ -185,6 +262,7 @@ pub fn run() {
             config: Mutex::new(config),
             session: Mutex::new(session),
             player: Mutex::new(None),
+            playback: Mutex::new(None),
         })
         .setup(|app| {
             let window = app.get_webview_window("main").expect("main window");
@@ -231,11 +309,16 @@ pub fn run() {
             list_items,
             image_url,
             play,
+            report_progress,
+            stop_playback,
             set_pause,
             seek,
             status,
             tracks,
-            set_track
+            set_track,
+            apply_prefs,
+            get_prefs,
+            set_prefs
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -177,6 +177,8 @@ async fn fetch_items(http: &reqwest::Client, s: &Session, url: &str) -> Result<V
 struct PlaybackInfoResp {
     #[serde(rename = "MediaSources")]
     media_sources: Vec<MediaSource>,
+    #[serde(rename = "PlaySessionId")]
+    play_session_id: Option<String>,
 }
 #[derive(Deserialize)]
 struct MediaSource {
@@ -188,6 +190,21 @@ struct MediaSource {
     direct_stream_url: Option<String>,
     #[serde(rename = "TranscodingUrl")]
     transcoding_url: Option<String>,
+}
+
+/// 一次播放会话的目标 + 上报三件套共享的 id。
+/// ★ PlaySessionId 必须贯穿 start/progress/stopped 三次上报(续播落地老坑)。
+#[derive(Clone, Serialize)]
+pub struct PlaybackTarget {
+    pub url: String,
+    pub item_id: String,
+    pub media_source_id: String,
+    pub play_session_id: String,
+    pub play_method: String, // "DirectStream" | "Transcode"
+}
+
+fn secs_to_ticks(secs: f64) -> i64 {
+    (secs.max(0.0) * 1e7) as i64
 }
 
 /// 补全 server 前缀与 api_key。
@@ -205,11 +222,12 @@ fn abs_url(s: &Session, path: &str) -> String {
 }
 
 /// 正确解析播放地址:POST PlaybackInfo -> 用服务器给的 DirectStreamUrl/TranscodingUrl。
+/// 返回 PlaybackTarget(含 PlaySessionId,供上报三件套贯穿使用)。
 pub async fn resolve_stream(
     http: &reqwest::Client,
     s: &Session,
     item_id: &str,
-) -> Result<String, String> {
+) -> Result<PlaybackTarget, String> {
     let url = format!(
         "{}/Items/{}/PlaybackInfo?UserId={}",
         s.server, item_id, s.user_id
@@ -241,28 +259,121 @@ pub async fn resolve_stream(
         .json()
         .await
         .map_err(|e| format!("PlaybackInfo 解析失败: {e}"))?;
+    // 服务器发的 PlaySessionId 优先;缺则本地兜底生成(但同一次播放内保持一致)。
+    let play_session_id = info
+        .play_session_id
+        .filter(|x| !x.is_empty())
+        .unwrap_or_else(|| format!("{}-{}", s.device_id, item_id));
     let ms = info
         .media_sources
         .into_iter()
         .next()
         .ok_or("该条目无可播放源")?;
-    if let Some(d) = ms.direct_stream_url.filter(|x| !x.is_empty()) {
-        return Ok(abs_url(s, &d));
-    }
-    if let Some(t) = ms.transcoding_url.filter(|x| !x.is_empty()) {
-        return Ok(abs_url(s, &t));
-    }
-    // 兜底:用真实 mediaSourceId + container 直拼
-    let container = ms.container.unwrap_or_default();
-    let ext = if container.is_empty() {
-        String::new()
+    let media_source_id = ms.id.clone();
+
+    let (url, play_method) = if let Some(d) = ms.direct_stream_url.filter(|x| !x.is_empty()) {
+        (abs_url(s, &d), "DirectStream")
+    } else if let Some(t) = ms.transcoding_url.filter(|x| !x.is_empty()) {
+        (abs_url(s, &t), "Transcode")
     } else {
-        format!(".{container}")
+        // 兜底:用真实 mediaSourceId + container 直拼
+        let container = ms.container.unwrap_or_default();
+        let ext = if container.is_empty() {
+            String::new()
+        } else {
+            format!(".{container}")
+        };
+        (
+            format!(
+                "{}/Videos/{}/stream{}?static=true&mediaSourceId={}&api_key={}",
+                s.server, item_id, ext, media_source_id, s.token
+            ),
+            "DirectStream",
+        )
     };
-    Ok(format!(
-        "{}/Videos/{}/stream{}?static=true&mediaSourceId={}&api_key={}",
-        s.server, item_id, ext, ms.id, s.token
-    ))
+
+    Ok(PlaybackTarget {
+        url,
+        item_id: item_id.to_string(),
+        media_source_id,
+        play_session_id,
+        play_method: play_method.to_string(),
+    })
+}
+
+// ---------- 播放上报三件套(start / progress / stopped,同 PlaySessionId)----------
+
+async fn post_report(
+    http: &reqwest::Client,
+    s: &Session,
+    endpoint: &str,
+    body: serde_json::Value,
+) -> Result<(), String> {
+    let url = format!("{}/Sessions/Playing{}", s.server, endpoint);
+    let resp = http
+        .post(&url)
+        .header("X-Emby-Token", &s.token)
+        .header("X-Emby-Authorization", auth_header(&s.device_id))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("上报网络错误: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("上报失败: HTTP {}", resp.status()));
+    }
+    Ok(())
+}
+
+pub async fn report_start(
+    http: &reqwest::Client,
+    s: &Session,
+    t: &PlaybackTarget,
+    position_secs: f64,
+) -> Result<(), String> {
+    let body = serde_json::json!({
+        "ItemId": t.item_id,
+        "MediaSourceId": t.media_source_id,
+        "PlaySessionId": t.play_session_id,
+        "PlayMethod": t.play_method,
+        "PositionTicks": secs_to_ticks(position_secs),
+        "CanSeek": true,
+        "IsPaused": false,
+    });
+    post_report(http, s, "", body).await
+}
+
+pub async fn report_progress(
+    http: &reqwest::Client,
+    s: &Session,
+    t: &PlaybackTarget,
+    position_secs: f64,
+    paused: bool,
+) -> Result<(), String> {
+    let body = serde_json::json!({
+        "ItemId": t.item_id,
+        "MediaSourceId": t.media_source_id,
+        "PlaySessionId": t.play_session_id,
+        "PlayMethod": t.play_method,
+        "PositionTicks": secs_to_ticks(position_secs),
+        "IsPaused": paused,
+        "EventName": "timeupdate",
+    });
+    post_report(http, s, "/Progress", body).await
+}
+
+pub async fn report_stopped(
+    http: &reqwest::Client,
+    s: &Session,
+    t: &PlaybackTarget,
+    position_secs: f64,
+) -> Result<(), String> {
+    let body = serde_json::json!({
+        "ItemId": t.item_id,
+        "MediaSourceId": t.media_source_id,
+        "PlaySessionId": t.play_session_id,
+        "PositionTicks": secs_to_ticks(position_secs),
+    });
+    post_report(http, s, "/Stopped", body).await
 }
 
 /// 海报地址(前端展示用)。

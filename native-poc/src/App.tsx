@@ -14,6 +14,7 @@ type Item = {
 };
 type Status = { time: number; duration: number; paused: boolean; buffered: number };
 type Track = { kind: string; id: string; title: string; lang: string; selected: boolean };
+type Prefs = { audio_lang: string | null; sub_lang: string | null; sub_enabled: boolean };
 type Crumb = { id: string; name: string };
 
 function fmt(t: number) {
@@ -38,8 +39,21 @@ export default function App() {
   const [playing, setPlaying] = useState<Item | null>(null);
   const [status, setStatus] = useState<Status>({ time: 0, duration: 0, paused: false, buffered: 0 });
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [prefs, setPrefs] = useState<Prefs>({ audio_lang: null, sub_lang: null, sub_enabled: true });
   const [seeking, setSeeking] = useState<number | null>(null);
   const timer = useRef<number | null>(null);
+  const tick = useRef(0);
+
+  // 载入已存播放偏好
+  useEffect(() => { invoke<Prefs>("get_prefs").then(setPrefs).catch(() => {}); }, []);
+
+  const trackLang = (list: Track[], id: string) => list.find((t) => t.id === id)?.lang || "";
+  async function persistPrefs(next: Prefs) {
+    setPrefs(next);
+    await invoke("set_prefs", {
+      audioLang: next.audio_lang, subLang: next.sub_lang, subEnabled: next.sub_enabled,
+    }).catch(() => {});
+  }
 
   // 启动时:若有已存账号,跳过登录页直接进库(重启免登)
   useEffect(() => {
@@ -88,9 +102,14 @@ export default function App() {
   async function playItem(it: Item) {
     setErr("");
     try {
-      await invoke<string>("play", { itemId: it.id });
+      // 从上次进度续播;返回实际起播秒数,进度条直接定位
+      const resume = await invoke<number>("play", { itemId: it.id, resumeSecs: it.resume_secs });
       setPlaying(it);
-      setTimeout(async () => setTracks(await invoke<Track[]>("tracks")), 1200);
+      setStatus({ time: resume, duration: it.runtime_secs, paused: false, buffered: 0 });
+      setTimeout(async () => {
+        try { await invoke("apply_prefs"); } catch {}           // 按语言偏好自动选轨
+        setTracks(await invoke<Track[]>("tracks"));
+      }, 1200);
     } catch (e) { setErr(String(e)); }
   }
 
@@ -98,18 +117,28 @@ export default function App() {
     const p = !status.paused;
     await invoke("set_pause", { paused: p });
     setStatus((s) => ({ ...s, paused: p }));
+    invoke("report_progress", { pos: status.time, paused: p }).catch(() => {});
   }
 
   async function closePlayer() {
-    await invoke("set_pause", { paused: true });
+    // 上报 stopped 写回最终进度(续播落地),再退出播放层
+    await invoke("stop_playback", { pos: status.time }).catch(() => {});
     setPlaying(null); setTracks([]);
   }
 
-  // 播放中轮询状态
+  // 播放中轮询状态 + 每 ~5s 上报一次进度(存活于崩溃/直接关窗)
   useEffect(() => {
     if (!playing) { if (timer.current) window.clearInterval(timer.current); return; }
+    tick.current = 0;
     timer.current = window.setInterval(async () => {
-      try { setStatus(await invoke<Status>("status")); } catch {}
+      try {
+        const st = await invoke<Status>("status");
+        setStatus(st);
+        tick.current++;
+        if (tick.current % 10 === 0) {
+          invoke("report_progress", { pos: st.time, paused: st.paused }).catch(() => {});
+        }
+      } catch {}
     }, 500);
     return () => { if (timer.current) window.clearInterval(timer.current); };
   }, [playing]);
@@ -192,12 +221,21 @@ export default function App() {
             <span className="p-time">{fmt(status.duration)}</span>
 
             {audio.length > 1 && (
-              <select onChange={(e) => invoke("set_track", { kind: "audio", id: e.target.value })}
+              <select onChange={(e) => {
+                        const id = e.target.value;
+                        invoke("set_track", { kind: "audio", id });
+                        persistPrefs({ ...prefs, audio_lang: trackLang(audio, id) || prefs.audio_lang });
+                      }}
                       defaultValue={audio.find((t) => t.selected)?.id}>
                 {audio.map((t) => <option key={t.id} value={t.id}>音轨 {t.id} {t.lang || t.title}</option>)}
               </select>
             )}
-            <select onChange={(e) => invoke("set_track", { kind: "sub", id: e.target.value })}
+            <select onChange={(e) => {
+                      const id = e.target.value;
+                      invoke("set_track", { kind: "sub", id });
+                      if (id === "no") persistPrefs({ ...prefs, sub_enabled: false });
+                      else persistPrefs({ ...prefs, sub_enabled: true, sub_lang: trackLang(subs, id) || prefs.sub_lang });
+                    }}
                     defaultValue={subs.find((t) => t.selected)?.id ?? "no"}>
               <option value="no">字幕关</option>
               {subs.map((t) => <option key={t.id} value={t.id}>字幕 {t.id} {t.lang || t.title}</option>)}

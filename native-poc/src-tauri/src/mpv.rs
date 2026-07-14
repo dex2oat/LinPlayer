@@ -3,6 +3,7 @@
 // 顶层↔顶层 DWM 能正常合成(子窗口无法进逐像素透明窗口,故不能用子窗口)。
 #![allow(non_camel_case_types)]
 
+use linplayer_core::media::Track;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::sync::Once;
 
@@ -179,7 +180,12 @@ impl Player {
         out
     }
 
-    pub fn load(&self, url: &str) -> Result<(), String> {
+    /// 带续播起点加载:用 mpv 的 `start` 选项(下一次 loadfile 生效),避免 seek 早于解码就绪失败。
+    pub fn load_at(&self, url: &str, start_secs: f64) -> Result<(), String> {
+        self.set_str(
+            "start",
+            &if start_secs > 1.0 { start_secs.to_string() } else { "none".to_string() },
+        );
         self.cmd(&["loadfile", url])
     }
     pub fn set_pause(&self, paused: bool) {
@@ -216,6 +222,15 @@ impl Player {
         let prop = if kind == "audio" { "aid" } else { "sid" };
         self.set_str(prop, id);
     }
+    /// 按偏好一次性应用音轨/字幕(None=不动)。
+    pub fn apply_tracks(&self, aid: Option<String>, sid: Option<String>) {
+        if let Some(a) = aid {
+            self.set_str("aid", &a);
+        }
+        if let Some(s) = sid {
+            self.set_str("sid", &s);
+        }
+    }
 }
 
 impl Drop for Player {
@@ -232,11 +247,3 @@ pub struct Status {
     pub buffered: f64,
 }
 
-#[derive(serde::Serialize)]
-pub struct Track {
-    pub kind: String,
-    pub id: String,
-    pub title: String,
-    pub lang: String,
-    pub selected: bool,
-}

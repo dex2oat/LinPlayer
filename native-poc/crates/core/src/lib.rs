@@ -3,6 +3,8 @@
 pub mod config;
 pub mod emby;
 pub mod http;
+pub mod media;
 
-pub use config::{Account, AppConfig};
-pub use emby::{Item, LoginResult, Session};
+pub use config::{Account, AppConfig, Prefs};
+pub use emby::{Item, LoginResult, PlaybackTarget, Session};
+pub use media::Track;

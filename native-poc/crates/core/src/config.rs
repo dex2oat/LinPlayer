@@ -13,6 +13,19 @@ pub struct Account {
     pub user_name: String,
 }
 
+/// 播放偏好(语言选轨)。
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Prefs {
+    pub audio_lang: Option<String>,
+    pub sub_lang: Option<String>,
+    pub sub_enabled: bool,
+}
+impl Default for Prefs {
+    fn default() -> Self {
+        Self { audio_lang: None, sub_lang: None, sub_enabled: true }
+    }
+}
+
 #[derive(Serialize, Deserialize, Default)]
 pub struct AppConfig {
     /// 每安装稳定不变的设备 ID(Emby DeviceId 用,影响会话/上报归属)。
@@ -20,6 +33,9 @@ pub struct AppConfig {
     pub accounts: Vec<Account>,
     /// 当前活跃账号在 accounts 中的下标。
     pub active: Option<usize>,
+    /// 播放偏好;serde(default) 兼容旧配置文件。
+    #[serde(default)]
+    pub prefs: Prefs,
 }
 
 fn config_path() -> PathBuf {
