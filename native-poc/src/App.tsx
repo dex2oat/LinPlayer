@@ -16,7 +16,7 @@ type Status = { time: number; duration: number; paused: boolean; buffered: numbe
 type Track = { kind: string; id: string; title: string; lang: string; selected: boolean };
 type Prefs = { audio_lang: string | null; sub_lang: string | null; sub_enabled: boolean };
 type Crumb = { id: string; name: string };
-type SourceEntry = { id: string; name: string; is_dir: boolean; is_video: boolean; size: number | null; thumb_url: string | null };
+type SourceEntry = { id: string; name: string; is_dir: boolean; is_video: boolean; size: number | null; thumb_url: string | null; raw?: unknown };
 type ServerGroup = { server_id: string; server_name: string; items: Item[] };
 
 function fmt(t: number) {
@@ -169,7 +169,7 @@ export default function App() {
   async function playSrc(e: SourceEntry) {
     setErr("");
     try {
-      const resume = await invoke<number>("source_play", { entryId: e.id, entryName: e.name, resumeSecs: 0 });
+      const resume = await invoke<number>("source_play", { entryId: e.id, entryName: e.name, resumeSecs: 0, raw: e.raw ?? null });
       setPlaying({ id: e.id, name: e.name, type_: "", is_folder: false, has_primary: false, runtime_secs: 0, resume_secs: 0 });
       setStatus({ time: resume, duration: 0, paused: false, buffered: 0 });
       setTimeout(async () => {

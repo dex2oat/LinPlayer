@@ -4,7 +4,7 @@
 // 浏览映射:根=列番剧(当文件夹) → 番剧=playList 列剧集 → 点文件取流。
 use super::{
     normalize_base_url, MediaSourceBackend, ResolvedPlay, SourceEntry, SourceError, SourceKind,
-    SourceServer,
+    SourceServer, SourceSubtitle,
 };
 use base64::Engine;
 use md5::{Digest, Md5};
@@ -227,7 +227,9 @@ impl MediaSourceBackend for AniRssBackend {
                             is_video: true,
                             size: None,
                             thumb_url: None,
-                            raw: Some(json!({ "filename": b64, "episode": p["episode"] })),
+                            raw: Some(
+                                json!({ "filename": b64, "episode": p["episode"], "subtitles": p["subtitles"] }),
+                            ),
                         }
                     })
                     .collect();
@@ -269,9 +271,42 @@ impl MediaSourceBackend for AniRssBackend {
         )
         .map_err(|e| SourceError::msg(format!("URL 构造失败: {e}")))?
         .to_string();
-        // ponytail: 外挂字幕(playList.subtitles + getSubtitles 兜底)未接;内封字幕 mpv 原生读,需外挂时补。
+        // 外挂字幕:playList.subtitles(URL 自带 ?s=token 自鉴权,mpv 可直接挂)。
+        // ponytail: getSubtitles 异步兜底未接;内封字幕 mpv 原生读。
+        let subtitles: Vec<SourceSubtitle> = entry
+            .raw
+            .as_ref()
+            .and_then(|r| r["subtitles"].as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| {
+                        let u = s["url"].as_str().filter(|u| !u.is_empty())?;
+                        let full = if u.starts_with("http") {
+                            u.to_string()
+                        } else {
+                            format!("{base}{}{u}", if u.starts_with('/') { "" } else { "/" })
+                        };
+                        let sep = if full.contains('?') { "&" } else { "?" };
+                        Some(SourceSubtitle {
+                            url: format!("{full}{sep}s={}", urlencoding::encode(&token)),
+                            title: s["name"].as_str().map(String::from),
+                            language: None,
+                            http_headers: HashMap::new(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), token);
-        Ok(ResolvedPlay::simple(url, entry.name.clone(), headers))
+        Ok(ResolvedPlay {
+            url,
+            title: entry.name.clone(),
+            http_headers: headers,
+            user_agent_override: None,
+            subtitles,
+            qualities: vec![],
+            selected_quality_id: None,
+        })
     }
 }

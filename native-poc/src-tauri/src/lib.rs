@@ -402,6 +402,7 @@ async fn source_play(
     entry_id: String,
     entry_name: String,
     resume_secs: f64,
+    raw: Option<serde_json::Value>,
 ) -> Result<f64, String> {
     let (kind, server) = state.source.lock().unwrap().clone().ok_or("未登录源")?;
     let backend = source_backend(&state, kind)?;
@@ -412,7 +413,7 @@ async fn source_play(
         is_video: true,
         size: None,
         thumb_url: None,
-        raw: None,
+        raw, // 透传源原始数据(ani-rss 外挂字幕等靠它)
     };
     let resolved = backend
         .resolve_play(&state.http, &server, &entry, None)
@@ -430,6 +431,10 @@ async fn source_play(
             resolved.user_agent_override.as_deref(),
         )?;
         p.set_pause(false);
+        // 挂外挂字幕(URL 自鉴权的源,如 ani-rss ?s=token)
+        for sub in &resolved.subtitles {
+            p.add_subtitle(&sub.url, sub.title.as_deref().unwrap_or("字幕"));
+        }
     }
     *state.playback.lock().unwrap() = None; // 网盘源不走 Emby 上报
     *state.source_play_entry.lock().unwrap() = Some((entry.id.clone(), entry.name.clone()));

@@ -268,6 +268,11 @@ impl Player {
     pub fn set_pause(&self, paused: bool) {
         self.set_str("pause", if paused { "yes" } else { "no" });
     }
+    /// 挂一条外挂字幕(URL 自鉴权的源用;当前文件加载后调用)。
+    pub fn add_subtitle(&self, url: &str, title: &str) {
+        // sub-add <url> [<flags> [<title>]];flags=auto 不自动切,让用户/偏好选。
+        let _ = self.cmd(&["sub-add", url, "auto", title]);
+    }
     pub fn seek_abs(&self, secs: f64) -> Result<(), String> {
         self.cmd(&["seek", &secs.to_string(), "absolute"])
     }
