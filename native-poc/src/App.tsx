@@ -194,6 +194,8 @@ export default function App() {
         if (tick.current % 10 === 0) {
           invoke("report_progress", { pos: st.time, paused: st.paused }).catch(() => {});
         }
+        // 302 看门狗:网盘直链失效时自动重签续播(对 Emby 无副作用)
+        invoke("source_watchdog", { pos: st.time }).catch(() => {});
       } catch {}
     }, 500);
     return () => { if (timer.current) window.clearInterval(timer.current); };

@@ -12,6 +12,7 @@ use linplayer_core::source::{MediaSourceBackend, SourceEntry, SourceKind, Source
 use mpv::{Player, Status};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{Manager, State, WindowEvent};
 
@@ -24,6 +25,10 @@ struct AppState {
     // 文件浏览型源:后端注册表(长驻,持 token 缓存)+ 当前活跃源
     source_backends: HashMap<SourceKind, Arc<dyn MediaSourceBackend>>,
     source: Mutex<Option<(SourceKind, SourceServer)>>,
+    // 当前正在播放的源条目(entry_id, entry_name),供 302 重签重解析;None=非源播放
+    source_play_entry: Mutex<Option<(String, String)>>,
+    // 连续 302 重签次数(防死循环:文件本身放不了时不无限重签),每次新播放清零
+    resign_count: AtomicU32,
 }
 
 fn poclog(msg: &str) {
@@ -137,9 +142,11 @@ async fn play(
             poclog("PLAY 失败: 播放器未就绪(mpv 初始化没成功)");
             "播放器未就绪".to_string()
         })?;
+        let _ = p.take_error_eof();
         p.load_at(&target.url, resume_secs)?;
         p.set_pause(false);
     }
+    *state.source_play_entry.lock().unwrap() = None; // Emby 播放,非源
     // 上报 start(失败不阻断播放)
     if let Err(e) = emby::report_start(&state.http, &s, &target, resume_secs).await {
         poclog(&format!("report_start ERR: {e}"));
@@ -168,6 +175,7 @@ async fn stop_playback(state: State<'_, AppState>, pos: f64) -> Result<(), Strin
             p.set_pause(true);
         }
     }
+    *state.source_play_entry.lock().unwrap() = None; // 退出播放,停止 302 看门狗
     let target = state.playback.lock().unwrap().take();
     if let (Some(t), Ok(s)) = (target, session_of(&state)) {
         if let Err(e) = emby::report_stopped(&state.http, &s, &t, pos).await {
@@ -330,6 +338,7 @@ async fn source_play(
     {
         let guard = state.player.lock().unwrap();
         let p = guard.as_ref().ok_or("播放器未就绪")?;
+        let _ = p.take_error_eof(); // 清历史失效标志
         p.load_with_headers(
             &resolved.url,
             resume_secs,
@@ -339,7 +348,63 @@ async fn source_play(
         p.set_pause(false);
     }
     *state.playback.lock().unwrap() = None; // 网盘源不走 Emby 上报
+    *state.source_play_entry.lock().unwrap() = Some((entry.id.clone(), entry.name.clone()));
+    state.resign_count.store(0, Ordering::Relaxed);
     Ok(resume_secs)
+}
+
+/// 302 看门狗:探测直链是否失效(END_FILE=error),失效则重解析并从 pos 续播。返回是否重签了。
+/// 前端播放中每轮轮询调用;仅对网盘源播放生效(Emby 直链稳定,不重签)。
+#[tauri::command]
+async fn source_watchdog(state: State<'_, AppState>, pos: f64) -> Result<bool, String> {
+    // 无失效信号 or 非源播放 -> 什么都不做
+    let errored = {
+        let guard = state.player.lock().unwrap();
+        match guard.as_ref() {
+            Some(p) => p.take_error_eof(),
+            None => return Ok(false),
+        }
+    };
+    let entry = state.source_play_entry.lock().unwrap().clone();
+    let (Some((entry_id, entry_name)), true) = (entry, errored) else {
+        return Ok(false);
+    };
+    let Some((kind, server)) = state.source.lock().unwrap().clone() else {
+        return Ok(false);
+    };
+    // 连续重签超上限:文件本身放不了(非过期),放弃以免死循环。
+    if state.resign_count.load(Ordering::Relaxed) >= 3 {
+        *state.source_play_entry.lock().unwrap() = None;
+        poclog("302 重签连续 3 次仍失败,放弃");
+        return Ok(false);
+    }
+    state.resign_count.fetch_add(1, Ordering::Relaxed);
+    let backend = source_backend(&state, kind)?;
+    let entry = SourceEntry {
+        id: entry_id,
+        name: entry_name,
+        is_dir: false,
+        is_video: true,
+        size: None,
+        thumb_url: None,
+        raw: None,
+    };
+    // 重解析拿新直链,从原位置续播。
+    let resolved = backend
+        .resolve_play(&state.http, &server, &entry, None)
+        .await
+        .map_err(|e| e.message)?;
+    poclog(&format!("302 重签 -> {}", resolved.url));
+    let guard = state.player.lock().unwrap();
+    let p = guard.as_ref().ok_or("播放器未就绪")?;
+    p.load_with_headers(
+        &resolved.url,
+        pos,
+        &resolved.http_headers,
+        resolved.user_agent_override.as_deref(),
+    )?;
+    p.set_pause(false);
+    Ok(true)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -376,6 +441,8 @@ pub fn run() {
             playback: Mutex::new(None),
             source_backends,
             source: Mutex::new(None),
+            source_play_entry: Mutex::new(None),
+            resign_count: AtomicU32::new(0),
         })
         .setup(|app| {
             let window = app.get_webview_window("main").expect("main window");
@@ -434,7 +501,8 @@ pub fn run() {
             set_prefs,
             source_login,
             source_list_dir,
-            source_play
+            source_play,
+            source_watchdog
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -6,7 +6,9 @@
 use linplayer_core::media::Track;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
-use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Once};
+use std::thread::JoinHandle;
 
 // ---------- libmpv FFI ----------
 #[repr(C)]
@@ -15,6 +17,23 @@ pub struct mpv_handle {
 }
 
 const MPV_FORMAT_DOUBLE: c_int = 5;
+
+// 事件循环:检测直链失效(网盘短链过期)以触发 302 重签。
+const MPV_EVENT_END_FILE: c_int = 7;
+const MPV_END_FILE_REASON_ERROR: c_int = 4;
+
+#[repr(C)]
+struct mpv_event {
+    event_id: c_int,
+    error: c_int,
+    reply_userdata: u64,
+    data: *mut c_void,
+}
+#[repr(C)]
+struct mpv_event_end_file {
+    reason: c_int,
+    error: c_int,
+}
 
 #[link(name = "mpv")]
 extern "C" {
@@ -28,6 +47,7 @@ extern "C" {
     fn mpv_free(data: *mut c_void);
     fn mpv_command(ctx: *mut mpv_handle, args: *const *const c_char) -> c_int;
     fn mpv_error_string(error: c_int) -> *const c_char;
+    fn mpv_wait_event(ctx: *mut mpv_handle, timeout: f64) -> *mut mpv_event;
 }
 
 fn err_str(code: c_int) -> String {
@@ -109,6 +129,9 @@ pub fn sync_overlay(video: isize, tauri: isize, x: i32, y: i32, w: i32, h: i32) 
 pub struct Player {
     ctx: *mut mpv_handle,
     pub video_hwnd: isize,
+    error_eof: Arc<AtomicBool>, // 直链失效标志(END_FILE=error),供 302 重签探测
+    running: Arc<AtomicBool>,
+    event_thread: Option<JoinHandle<()>>,
 }
 unsafe impl Send for Player {}
 
@@ -143,8 +166,41 @@ impl Player {
                 mpv_terminate_destroy(ctx);
                 return Err(format!("mpv_initialize 失败: {e}"));
             }
-            Ok(Player { ctx, video_hwnd: video })
+
+            // 事件循环线程:排空 mpv 事件,捕获 END_FILE=error(直链失效)。
+            let error_eof = Arc::new(AtomicBool::new(false));
+            let running = Arc::new(AtomicBool::new(true));
+            let ctx_addr = ctx as usize;
+            let (e2, r2) = (error_eof.clone(), running.clone());
+            let event_thread = std::thread::spawn(move || {
+                let ctx = ctx_addr as *mut mpv_handle;
+                while r2.load(Ordering::Relaxed) {
+                    let ev = mpv_wait_event(ctx, 0.5);
+                    if ev.is_null() {
+                        continue;
+                    }
+                    if (*ev).event_id == MPV_EVENT_END_FILE {
+                        let ef = (*ev).data as *const mpv_event_end_file;
+                        if !ef.is_null() && (*ef).reason == MPV_END_FILE_REASON_ERROR {
+                            e2.store(true, Ordering::Relaxed);
+                        }
+                    }
+                }
+            });
+
+            Ok(Player {
+                ctx,
+                video_hwnd: video,
+                error_eof,
+                running,
+                event_thread: Some(event_thread),
+            })
         }
+    }
+
+    /// 取并清「直链失效」标志(网盘短链过期 → 触发 302 重签)。
+    pub fn take_error_eof(&self) -> bool {
+        self.error_eof.swap(false, Ordering::Relaxed)
     }
 
     fn cmd(&self, args: &[&str]) -> Result<(), String> {
@@ -256,6 +312,11 @@ impl Player {
 
 impl Drop for Player {
     fn drop(&mut self) {
+        // 先停事件线程并 join,避免它在 ctx 销毁后仍访问(悬垂)。
+        self.running.store(false, Ordering::Relaxed);
+        if let Some(h) = self.event_thread.take() {
+            let _ = h.join();
+        }
         unsafe { mpv_terminate_destroy(self.ctx); }
     }
 }
