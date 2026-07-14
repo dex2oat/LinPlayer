@@ -114,26 +114,33 @@
 - 同一份 Rust 核 `cargo build --target aarch64-linux-android` **编成 .so**(证明安卓可复用)
 - ✅ 三条全过 → 继续;❌ 合成缝过不了 → 回头重估壳(Qt WebEngine 兜底)
 
-### Phase 1 · 可播地基(Emby 打通)
+### ✅ Phase 1 · 可播地基(Emby 打通)
 Rust:HTTP+UA、Emby client、凭据存储、配置。React:服务器列表/登录/首页。**能登录并用 mpv 播一条 Emby 流。**
 
-### Phase 2 · 播放完整度
+### ✅ Phase 2 · 播放完整度
 轨道/字幕偏好匹配、ASS→SRT、片头跳、缓冲进度、**PlaySessionId 上报**、续播。React 播放页成型。
 
-### Phase 3 · 数据源铺开
+### ✅ Phase 3 · 数据源铺开
 OpenList → ani-rss → 飞牛(authx)→ 夸克(Cookie+扫码)→ 聚合 + 302 重签。
 
-### Phase 4 · 弹幕
+### ✅ Phase 4 · 弹幕
 Rust:签名/匹配/解析/缓存/过滤。React:canvas/WebGL 渲染(描边/轨道/密度/显示区域)。
 
-### Phase 5 · 网络重活(Rust 主场)
+### ✅ Phase 5 · 网络重活(Rust 主场)
 多线程下载、**CF 反代(钉 IP+SNI)**、预取本地 server、SOCKS5。
 
-### Phase 6 · 同步/周边
-Trakt/Bangumi、排行双源、追剧日历、爱发电、备份加密、配置迁移扫码。
+### ✅ Phase 6 · 同步/周边
+Trakt/Bangumi、排行双源、追剧日历、爱发电、配置迁移扫码。(备份加密 GCM 刻意不港:Dart 标注 legacy 仅向后兼容导入,新端无历史可导。)
 
 ### Phase 7 · 插件系统
-rquickjs 重建引擎 + 权限 + 8s 超时 + 8 通道桥;JS 插件 API 保持兼容。
+rquickjs 重建引擎;JS 插件 API 保持兼容;**并借机重写实现形态**(不再走 Dart 的 `__lp_host` 字符串编组,改 Rust async 函数原生绑进 `ctx` 返回真 Promise,引导脚本 227 行→1 行)。
+
+- **✅ Rust 引擎 + 命令(已证死)**:`crates/core/src/plugins/`——manifest/permission/storage(5MB)/extensions(注册表)/host(平台缝 trait,单一 `call(channel,method,args)`)/convert/state(权限门控+HTTPS 白名单+**30s 空转看门狗**:interrupt 只在 JS 真跑时触发,等宿主 await 期不触发)/ctx(原生绑 log/http/storage/player/ui/emby/extensions/cfproxy/sleep 九通道)/engine(AsyncRuntime+内存限 64MB+Drop 清 Persistent)/**worker(专用线程 actor:QuickJS 单线程,引擎钉线程永不跨线程)**/manager(Send+Sync 门面)。只支持 `runtime:js`(data/addon 是 iOS 合规专用,无 Apple 已砍)。src-tauri:`DesktopPluginHost` + 10 个 `plugin_*` 命令 + play/stop 钩 onPlay/onPlayEnd。单测 39 过(真 hello 插件逐字不改跑通全生命周期 + 权限拒绝),app release 绿。
+- **⬜ React 宿主 UI(待接)**。对接契约已铺好:
+  - **ctx.ui 渲染**:监听 Tauri 事件 `plugin://ui-request`(载荷 `{id,pluginId,method,args}`);`showForm/showDialog/showList/showProgress` 渲染后调命令 `plugin_ui_respond(id, value)` 回填(`value=null` 视为取消);`showToast/updateProgress/closeProgress/openPage` 是即发即忘(`id=0`)。
+  - **扩展点渲染**:命令 `plugin_extensions(type_id)` 取某类型全部扩展(homeStats/sidebarItems/settingsPages…);触发 handler 用 `plugin_trigger(pluginId,type_id,ext_id,args?)`,具名字段(设置页 load/submit)用 `plugin_invoke_field(...,field,args?)`;注册表变化会发 `plugin://extensions-changed` 事件。
+  - **管理页**:`plugin_list` / `plugin_install(path)` / `plugin_enable(id)` / `plugin_disable(id)` / `plugin_uninstall(id)`;启用前须自行弹权限同意弹窗(`plugin_list` 项含 `permissions`)。
+  - 遗留:`getCredentials` 因 PoC 不存明文密码返 Err;cfproxy 重活未接(命令壳在)。
 
 ### Phase 8 · Linux + 安卓
 - Linux:Tauri 跨平台，多为免费；验 mpv GL 子窗口合成。
@@ -148,7 +155,7 @@ rquickjs 重建引擎 + 权限 + 8s 超时 + 8 通道桥;JS 插件 API 保持兼
 | webview↔mpv 合成缝(位置/层级/缩放同步) | 🔴 | Phase 0 先验;兜底 Qt WebEngine(Jellyfin MP 架构) |
 | Dart→Rust 是重写,工期以季度计 | 🟠 | 逻辑已知;按 Phase 切,先出可播 MVP |
 | Rust 团队熟练度 | 🟠 | 核心只写一次,学习成本摊到各端;UI 仍是熟悉的 TS |
-| 插件系统重写(QuickJS 宿主桥) | 🟠 | rquickjs 保住 JS 侧;宿主桥逐通道移植 |
+| 插件系统重写(QuickJS 宿主桥) | ✅ | Rust 引擎+宿主桥已落并证死(rquickjs 原生绑定,39 测过);剩 React 宿主 UI |
 | 安卓 UI 未定 + TV 焦点 | 🟡 | Phase 8 再决;Rust 核先就绪不阻塞 |
 | 夸克双鉴权/扫码 | 🟡 | 放 Phase 3 末;cookie store + 设备码 |
 
