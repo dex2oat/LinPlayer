@@ -33,6 +33,8 @@ struct AppState {
     resign_count: AtomicU32,
     // 多线程加载:本地预取代理句柄(仅 Emby 直传流);Drop 即停服。None=直连。
     prefetch: Mutex<Option<linplayer_core::net::prefetch::ProxyHandle>>,
+    // CF 优选:本地钉 IP 反代句柄;Drop 即停服。None=不走反代。
+    cf_proxy: Mutex<Option<linplayer_core::net::cf::CfProxyHandle>>,
 }
 
 fn poclog(msg: &str) {
@@ -644,6 +646,65 @@ async fn source_watchdog(state: State<'_, AppState>, pos: f64) -> Result<bool, S
     Ok(true)
 }
 
+// ---------- CF 优选反代命令 ----------
+/// 跑 CF 优选测速,返回排好序的候选 IP(最优在前)。validate_host 传 Emby 域名可剔除
+/// 「TCP 通但 HTTP 死」的边缘;传 None/空则跳过 HTTP 校验。
+#[tauri::command]
+async fn cf_speed_test(
+    validate_host: Option<String>,
+    test_url: Option<String>,
+) -> Result<Vec<linplayer_core::net::cf::CfTestResult>, String> {
+    let mut o = linplayer_core::net::cf::CfSpeedTestOptions::default();
+    if let Some(h) = validate_host {
+        o.validate_host = h;
+    }
+    if let Some(u) = test_url.filter(|s| !s.is_empty()) {
+        o.test_url = u;
+    }
+    Ok(linplayer_core::net::cf::speed_test(o).await)
+}
+
+/// 为 host 起本地钉 IP 反代,返回本地基址 http://127.0.0.1:<port>;调用方把它当 Emby 基址用
+/// (SNI/Host 仍是真实域名,DNS 钉到优选 ip)。allow_insecure 放行自签名。
+#[tauri::command]
+async fn cf_proxy_start(
+    state: State<'_, AppState>,
+    host: String,
+    ip: String,
+    port: Option<u16>,
+    allow_insecure: Option<bool>,
+) -> Result<String, String> {
+    let handle = linplayer_core::net::cf::start_proxy(
+        "https".to_string(),
+        host,
+        port.unwrap_or(443),
+        ip,
+        allow_insecure.unwrap_or(true),
+    )
+    .await
+    .ok_or("CF 反代起服失败(IP 非法?)")?;
+    let base = format!("http://127.0.0.1:{}", handle.port);
+    *state.cf_proxy.lock().unwrap() = Some(handle); // 替换旧句柄即 Drop 停旧服
+    Ok(base)
+}
+
+/// 切换反代优选 IP(端口不变)。
+#[tauri::command]
+async fn cf_proxy_update_ip(state: State<'_, AppState>, ip: String) -> Result<(), String> {
+    let handle = state.cf_proxy.lock().unwrap().take();
+    if let Some(h) = handle {
+        h.update_ip(ip).await;
+        *state.cf_proxy.lock().unwrap() = Some(h);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn cf_proxy_stop(state: State<'_, AppState>) -> Result<(), String> {
+    *state.cf_proxy.lock().unwrap() = None; // Drop 停服
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config = AppConfig::load();
@@ -681,6 +742,7 @@ pub fn run() {
             source_play_entry: Mutex::new(None),
             resign_count: AtomicU32::new(0),
             prefetch: Mutex::new(None),
+            cf_proxy: Mutex::new(None),
         })
         .setup(|app| {
             let window = app.get_webview_window("main").expect("main window");
@@ -748,7 +810,11 @@ pub fn run() {
             get_danmaku_config,
             set_danmaku_config,
             danmaku_search,
-            danmaku_load
+            danmaku_load,
+            cf_speed_test,
+            cf_proxy_start,
+            cf_proxy_update_ip,
+            cf_proxy_stop
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
