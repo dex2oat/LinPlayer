@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import QRCode from "qrcode";
+import { DanmakuLayer, type DanmakuComment, type TimeSync } from "./Danmaku";
 import "./styles.css";
 
 type LoginResult = { server: string; token: string; user_id: string; user_name: string };
@@ -19,6 +20,9 @@ type Prefs = { audio_lang: string | null; sub_lang: string | null; sub_enabled: 
 type Crumb = { id: string; name: string };
 type SourceEntry = { id: string; name: string; is_dir: boolean; is_video: boolean; size: number | null; thumb_url: string | null; raw?: unknown };
 type ServerGroup = { server_id: string; server_name: string; items: Item[] };
+type DmEpisode = { episode_id: string; episode_title: string; episode_number: string | null };
+type DmAnime = { anime_id: string; anime_title: string; episodes: DmEpisode[] };
+type DmConfig = { api_url: string; auth_type: string; token: string };
 
 function fmt(t: number) {
   if (!isFinite(t) || t < 0) t = 0;
@@ -61,6 +65,34 @@ export default function App() {
   const [seeking, setSeeking] = useState<number | null>(null);
   const timer = useRef<number | null>(null);
   const tick = useRef(0);
+
+  // 弹幕
+  const [dmComments, setDmComments] = useState<DanmakuComment[]>([]);
+  const [dmOn, setDmOn] = useState(false);
+  const [dmPanel, setDmPanel] = useState(false);
+  const [dmResults, setDmResults] = useState<DmAnime[] | null>(null);
+  const [dmKw, setDmKw] = useState("");
+  const [dmCfg, setDmCfg] = useState<DmConfig>({ api_url: "", auth_type: "none", token: "" });
+  const timeSync = useRef<TimeSync>({ base: 0, stamp: performance.now(), paused: false });
+
+  useEffect(() => { invoke<DmConfig>("get_danmaku_config").then(setDmCfg).catch(() => {}); }, []);
+
+  async function saveDmCfg() {
+    await invoke("set_danmaku_config", { apiUrl: dmCfg.api_url, authType: dmCfg.auth_type, token: dmCfg.token }).catch(() => {});
+  }
+  async function doDmSearch() {
+    const q = dmKw.trim(); if (!q) return;
+    setErr("");
+    try { setDmResults(await invoke<DmAnime[]>("danmaku_search", { keyword: q })); }
+    catch (e) { setErr(String(e)); }
+  }
+  async function loadDmEpisode(ep: DmEpisode) {
+    setErr("");
+    try {
+      const cs = await invoke<DanmakuComment[]>("danmaku_load", { episodeId: ep.episode_id });
+      setDmComments(cs); setDmOn(true); setDmPanel(false); setDmResults(null);
+    } catch (e) { setErr(String(e)); }
+  }
 
   // 载入已存播放偏好
   useEffect(() => { invoke<Prefs>("get_prefs").then(setPrefs).catch(() => {}); }, []);
@@ -241,6 +273,7 @@ export default function App() {
       try {
         const st = await invoke<Status>("status");
         setStatus(st);
+        timeSync.current = { base: st.time, stamp: performance.now(), paused: st.paused };
         tick.current++;
         if (tick.current % 10 === 0) {
           invoke("report_progress", { pos: st.time, paused: st.paused }).catch(() => {});
@@ -250,6 +283,11 @@ export default function App() {
       } catch {}
     }, 500);
     return () => { if (timer.current) window.clearInterval(timer.current); };
+  }, [playing]);
+
+  // 换视频:重置弹幕,搜索框预填标题
+  useEffect(() => {
+    if (playing) { setDmComments([]); setDmOn(false); setDmKw(playing.name); }
   }, [playing]);
 
   const posterUrl = (it: Item) =>
@@ -318,6 +356,11 @@ export default function App() {
   const audio = tracks.filter((t) => t.kind === "audio");
   const subs = tracks.filter((t) => t.kind === "sub");
 
+  // 弹幕 canvas 层(在控制条之下,pointer-events none)
+  const danmakuLayer = playing && (
+    <DanmakuLayer comments={dmComments} timeSync={timeSync} enabled={dmOn} />
+  );
+
   // 播放层(透明,露出底下 mpv)—— Emby 与网盘源共用
   const playerLayer = playing && (
     <div className="player-layer">
@@ -325,6 +368,46 @@ export default function App() {
         <span className="p-title">{playing.name}</span>
         <button className="p-close" onClick={closePlayer}>✕</button>
       </div>
+
+      {dmPanel && (
+        <div className="dm-panel">
+          <div className="dm-row">
+            <input placeholder="弹幕服务器 http://host（自建 /api/v2）" value={dmCfg.api_url}
+                   onChange={(e) => setDmCfg({ ...dmCfg, api_url: e.target.value })} />
+            <select value={dmCfg.auth_type} onChange={(e) => setDmCfg({ ...dmCfg, auth_type: e.target.value })}>
+              <option value="none">无鉴权</option>
+              <option value="pathToken">路径 token</option>
+              <option value="headerToken">Header token</option>
+              <option value="queryToken">Query token</option>
+            </select>
+            <input placeholder="token（可选）" value={dmCfg.token}
+                   onChange={(e) => setDmCfg({ ...dmCfg, token: e.target.value })} />
+            <button className="ghost" onClick={saveDmCfg}>保存源</button>
+          </div>
+          <div className="dm-row">
+            <input placeholder="搜索番剧标题" value={dmKw} onChange={(e) => setDmKw(e.target.value)}
+                   onKeyDown={(e) => e.key === "Enter" && doDmSearch()} />
+            <button className="ghost" onClick={doDmSearch}>搜索</button>
+            <button className="ghost" onClick={() => { setDmPanel(false); setDmResults(null); }}>关闭</button>
+          </div>
+          <div className="dm-results">
+            {dmResults?.map((a) => (
+              <div key={a.anime_id} className="dm-anime">
+                <div className="dm-anime-title">{a.anime_title}</div>
+                <div className="dm-eps">
+                  {a.episodes.map((ep) => (
+                    <button key={ep.episode_id} className="dm-ep" onClick={() => loadDmEpisode(ep)}>
+                      {ep.episode_title || ep.episode_number || "?"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {dmResults && !dmResults.length && <div className="empty">没有找到弹幕</div>}
+          </div>
+        </div>
+      )}
+
       <div className="p-controls">
         <button className="p-play" onClick={togglePause}>{status.paused ? "▶" : "⏸"}</button>
         <span className="p-time">{fmt(seeking ?? status.time)}</span>
@@ -335,6 +418,9 @@ export default function App() {
           onMouseUp={async () => { if (seeking != null) { await invoke("seek", { pos: seeking }); setSeeking(null); } }}
         />
         <span className="p-time">{fmt(status.duration)}</span>
+        <button className={`p-dm${dmOn ? " on" : ""}`} title="弹幕开关"
+                onClick={() => setDmOn((v) => !v)}>弹</button>
+        <button className="p-dm" title="弹幕源/搜索" onClick={() => setDmPanel((v) => !v)}>≡</button>
         {audio.length > 1 && (
           <select onChange={(e) => {
                     const id = e.target.value;
@@ -387,6 +473,7 @@ export default function App() {
           {!srcItems.length && !busy && <div className="empty">这里没有内容</div>}
         </div>
         {err && <div className="toast">{err}</div>}
+        {danmakuLayer}
         {playerLayer}
       </div>
     );
@@ -449,6 +536,7 @@ export default function App() {
       )}
 
       {err && <div className="toast">{err}</div>}
+      {danmakuLayer}
       {playerLayer}
     </div>
   );

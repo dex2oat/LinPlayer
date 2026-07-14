@@ -1,6 +1,7 @@
 mod mpv;
 
-use linplayer_core::config::{Account, AppConfig, Prefs};
+use linplayer_core::config::{Account, AppConfig, DanmakuServer, Prefs};
+use linplayer_core::danmaku::{self, DanmakuAnime, DanmakuAuthType, DanmakuComment, DanmakuSourceConfig};
 use linplayer_core::emby::{self, Item, LoginResult, PlaybackTarget, Session};
 use linplayer_core::http;
 use linplayer_core::media::{pick_tracks, Track};
@@ -338,6 +339,67 @@ fn set_prefs(
     Ok(())
 }
 
+// ---------- 弹幕 ----------
+fn danmaku_cfg(s: &DanmakuServer) -> DanmakuSourceConfig {
+    let auth_type = match s.auth_type.as_str() {
+        "pathToken" => DanmakuAuthType::PathToken,
+        "headerToken" => DanmakuAuthType::HeaderToken,
+        "queryToken" => DanmakuAuthType::QueryToken,
+        _ => DanmakuAuthType::None,
+    };
+    DanmakuSourceConfig {
+        id: "custom".into(),
+        name: "弹幕".into(),
+        api_url: s.api_url.clone(),
+        official: false,
+        auth_type: Some(auth_type),
+        token: (!s.token.is_empty()).then(|| s.token.clone()),
+        app_id: None,
+        app_secret: None,
+    }
+}
+
+#[tauri::command]
+fn get_danmaku_config(state: State<'_, AppState>) -> DanmakuServer {
+    state.config.lock().unwrap().danmaku.clone()
+}
+
+#[tauri::command]
+fn set_danmaku_config(
+    state: State<'_, AppState>,
+    api_url: String,
+    auth_type: String,
+    token: String,
+) -> Result<(), String> {
+    let mut cfg = state.config.lock().unwrap();
+    cfg.danmaku = DanmakuServer { api_url, auth_type, token };
+    cfg.save();
+    Ok(())
+}
+
+/// 按标题搜弹幕番剧(带剧集列表供挑集)。
+#[tauri::command]
+async fn danmaku_search(
+    state: State<'_, AppState>,
+    keyword: String,
+) -> Result<Vec<DanmakuAnime>, String> {
+    let server = state.config.lock().unwrap().danmaku.clone();
+    if server.api_url.trim().is_empty() {
+        return Err("未配置弹幕服务器".into());
+    }
+    danmaku::search_episodes(&state.http, &danmaku_cfg(&server), Some(&keyword), None).await
+}
+
+/// 取某集弹幕评论。
+#[tauri::command]
+async fn danmaku_load(
+    state: State<'_, AppState>,
+    episode_id: String,
+) -> Result<Vec<DanmakuComment>, String> {
+    let server = state.config.lock().unwrap().danmaku.clone();
+    danmaku::get_comments(&state.http, &danmaku_cfg(&server), &episode_id, 0).await
+}
+
 // ---------- 文件浏览型源命令(网盘/追番)----------
 fn source_backend(
     state: &State<'_, AppState>,
@@ -644,7 +706,11 @@ pub fn run() {
             source_play,
             source_watchdog,
             quark_scan_start,
-            quark_scan_poll
+            quark_scan_poll,
+            get_danmaku_config,
+            set_danmaku_config,
+            danmaku_search,
+            danmaku_load
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

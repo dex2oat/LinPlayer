@@ -26,6 +26,14 @@ impl Default for Prefs {
     }
 }
 
+/// 自建弹幕服务器(兼容弹弹Play /api/v2 接口)。
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct DanmakuServer {
+    pub api_url: String,
+    pub auth_type: String, // none | pathToken | headerToken | queryToken
+    pub token: String,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 pub struct AppConfig {
     /// 每安装稳定不变的设备 ID(Emby DeviceId 用,影响会话/上报归属)。
@@ -36,6 +44,8 @@ pub struct AppConfig {
     /// 播放偏好;serde(default) 兼容旧配置文件。
     #[serde(default)]
     pub prefs: Prefs,
+    #[serde(default)]
+    pub danmaku: DanmakuServer,
 }
 
 fn config_path() -> PathBuf {
