@@ -6,6 +6,7 @@ use std::collections::HashMap;
 pub mod anirss;
 pub mod feiniu;
 pub mod openlist;
+pub mod quark;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[serde(rename_all = "lowercase")]

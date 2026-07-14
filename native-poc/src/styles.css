@@ -42,6 +42,12 @@ html, body, #root { height: 100%; background: transparent; }
   border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.05); color: #cfd4e2;
 }
 .tabs button.on { background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; }
+.cookie-box {
+  min-height: 90px; resize: vertical; border-radius: 10px; padding: 10px 12px; font-size: 12px;
+  border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.05); color: #fff;
+  outline: none; font-family: ui-monospace, monospace; line-height: 1.4;
+}
+.cookie-box:focus { border-color: var(--accent); }
 .login-card input:focus { border-color: var(--accent); background: rgba(79,124,255,.08); }
 .login-card button {
   background: linear-gradient(135deg, #4f7cff, #6b5cff); border: none; font-weight: 600;

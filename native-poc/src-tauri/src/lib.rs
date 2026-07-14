@@ -7,6 +7,7 @@ use linplayer_core::media::{pick_tracks, Track};
 use linplayer_core::source::anirss::AniRssBackend;
 use linplayer_core::source::feiniu::FeiniuBackend;
 use linplayer_core::source::openlist::OpenListBackend;
+use linplayer_core::source::quark::QuarkBackend;
 use linplayer_core::source::{MediaSourceBackend, SourceEntry, SourceKind, SourceServer};
 use mpv::{Player, Status};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -263,13 +264,20 @@ async fn source_login(
     base_url: String,
     username: String,
     password: String,
+    cookie: Option<String>,
 ) -> Result<(), String> {
+    // 夸克 Cookie 模式无 base_url(固定云端 API),用 kind 名做稳定 id。
+    let id = if base_url.trim().is_empty() {
+        format!("{kind:?}")
+    } else {
+        base_url.clone()
+    };
     let server = SourceServer {
-        id: base_url.clone(),
+        id,
         base_url,
-        username: Some(username),
-        password: Some(password),
-        token: None,
+        username: (!username.is_empty()).then_some(username),
+        password: (!password.is_empty()).then_some(password),
+        token: cookie.filter(|c| !c.is_empty()),
         extra: HashMap::new(),
     };
     let backend = source_backend(&state, kind)?;
@@ -344,6 +352,7 @@ pub fn run() {
     source_backends.insert(SourceKind::Openlist, Arc::new(OpenListBackend::new()));
     source_backends.insert(SourceKind::Anirss, Arc::new(AniRssBackend::new()));
     source_backends.insert(SourceKind::Feiniu, Arc::new(FeiniuBackend::new()));
+    source_backends.insert(SourceKind::Quark, Arc::new(QuarkBackend::new()));
 
     // 有活跃账号 -> 用存盘凭据重建会话(重启免登)
     let session = config.active_account().map(|a| Session {

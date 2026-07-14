@@ -40,6 +40,7 @@ export default function App() {
   // 文件浏览型源(网盘)
   const [loginTab, setLoginTab] = useState<"emby" | "source">("emby");
   const [srcKind, setSrcKind] = useState("openlist");
+  const [cookieText, setCookieText] = useState("");
   const [source, setSource] = useState<{ kind: string } | null>(null);
   const [srcItems, setSrcItems] = useState<SourceEntry[]>([]);
   const [srcCrumbs, setSrcCrumbs] = useState<Crumb[]>([]);
@@ -111,7 +112,10 @@ export default function App() {
   async function doSourceLogin() {
     setErr(""); setBusy(true);
     try {
-      await invoke("source_login", { kind: srcKind, baseUrl: server, username, password });
+      await invoke("source_login", {
+        kind: srcKind, baseUrl: server, username, password,
+        cookie: srcKind === "quark" ? cookieText : null,
+      });
       setSource({ kind: srcKind });
       setSrcItems(await invoke<SourceEntry[]>("source_list_dir", { dirId: null }));
       setSrcCrumbs([]);
@@ -217,13 +221,21 @@ export default function App() {
               <option value="openlist">OpenList / AList</option>
               <option value="anirss">Ani-rss</option>
               <option value="feiniu">飞牛影视</option>
+              <option value="quark">夸克网盘(Cookie)</option>
             </select>
           )}
-          <input placeholder={isSrc ? "服务器地址 http://ip:5244" : "服务器地址 http://ip:8096"}
-                 value={server} onChange={(e) => setServer(e.target.value)} />
-          <input placeholder="用户名" value={username} onChange={(e) => setUsername(e.target.value)} />
-          <input placeholder="密码" type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-                 onKeyDown={(e) => e.key === "Enter" && (isSrc ? doSourceLogin() : doLogin())} />
+          {isSrc && srcKind === "quark" ? (
+            <textarea className="cookie-box" placeholder="粘贴夸克 Cookie（含 __puus）"
+                      value={cookieText} onChange={(e) => setCookieText(e.target.value)} />
+          ) : (
+            <>
+              <input placeholder={isSrc ? "服务器地址 http://ip:5244" : "服务器地址 http://ip:8096"}
+                     value={server} onChange={(e) => setServer(e.target.value)} />
+              <input placeholder="用户名" value={username} onChange={(e) => setUsername(e.target.value)} />
+              <input placeholder="密码" type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                     onKeyDown={(e) => e.key === "Enter" && (isSrc ? doSourceLogin() : doLogin())} />
+            </>
+          )}
           <button disabled={busy} onClick={isSrc ? doSourceLogin : doLogin}>
             {busy ? "登录中…" : isSrc ? "连接网盘" : "登录 Emby"}
           </button>
