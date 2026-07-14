@@ -7,6 +7,7 @@ pub mod emby;
 pub mod http;
 pub mod media;
 pub mod net;
+pub mod ranking;
 pub mod source;
 
 pub use config::{Account, AppConfig, Prefs, ProxyConfig};

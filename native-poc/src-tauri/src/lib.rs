@@ -761,6 +761,22 @@ fn download_set_threads(state: State<'_, AppState>, threads: usize) {
     state.download.set_threads(threads);
 }
 
+// ---------- 排行榜命令 ----------
+/// 当前构建可用的榜单分类(动漫需弹弹凭据、影视需 TMDB 密钥,均编译期注入)。
+#[tauri::command]
+fn ranking_categories() -> Vec<linplayer_core::ranking::RankingCategory> {
+    linplayer_core::ranking::available_categories()
+}
+
+/// 拉取某分类榜单(默认命中 6h 缓存)。
+#[tauri::command]
+async fn ranking_fetch(
+    category_id: String,
+    force_refresh: Option<bool>,
+) -> Result<Vec<linplayer_core::ranking::RankingEntry>, String> {
+    Ok(linplayer_core::ranking::fetch(&category_id, force_refresh.unwrap_or(false)).await)
+}
+
 // ---------- 自定义代理命令 ----------
 #[tauri::command]
 fn get_proxy(state: State<'_, AppState>) -> linplayer_core::ProxyConfig {
@@ -909,7 +925,9 @@ pub fn run() {
             download_remove,
             download_set_threads,
             get_proxy,
-            set_proxy
+            set_proxy,
+            ranking_categories,
+            ranking_fetch
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

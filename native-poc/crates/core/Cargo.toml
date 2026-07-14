@@ -13,6 +13,8 @@ dirs = "5"
 async-trait = "0.1"
 md-5 = "0.10"
 sha2 = "0.10"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
 base64 = "0.22"
 urlencoding = "2"
 # tokio 已由 reqwest 传递引入,这里直连是为了自持本地预取代理的 TcpListener/worker,不增体积。

@@ -70,7 +70,7 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-fn signature(app_id: &str, path: &str, ts: i64, secret: &str) -> String {
+pub fn signature(app_id: &str, path: &str, ts: i64, secret: &str) -> String {
     let mut h = Sha256::new();
     h.update(format!("{app_id}{ts}{path}{secret}").as_bytes());
     base64::engine::general_purpose::STANDARD.encode(h.finalize())
