@@ -159,6 +159,58 @@ pub async fn items(
     fetch_items(http, s, &url).await
 }
 
+/// Trakt scrobble 所需的条目信息:媒体类型 + 外部 ID 映射 + 时长。
+#[derive(serde::Serialize, Clone)]
+pub struct ScrobbleInfo {
+    pub media_type: String,     // "movie" | "episode"
+    pub ids: serde_json::Value, // {imdb, tmdb, tvdb}(小写键,Trakt 认这套)
+    pub runtime_secs: f64,
+}
+
+/// 取条目的 ProviderIds + 类型 + 时长,组装成 Trakt scrobble 用信息。
+/// 仅 Movie/Episode 返回 Some;其它类型(如 Series/文件夹)返回 None(不 scrobble)。
+pub async fn fetch_scrobble_info(
+    http: &reqwest::Client,
+    s: &Session,
+    item_id: &str,
+) -> Option<ScrobbleInfo> {
+    let url = format!("{}/Users/{}/Items/{item_id}?Fields=ProviderIds", s.server, s.user_id);
+    let resp = http.get(&url).header("X-Emby-Token", &s.token).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let j: serde_json::Value = resp.json().await.ok()?;
+    let media_type = match j["Type"].as_str()? {
+        "Movie" => "movie",
+        "Episode" => "episode",
+        _ => return None,
+    };
+    // ProviderIds 键名大小写不一(Imdb/Tmdb/Tvdb),归一小写;tmdb/tvdb 转数字(Trakt 要 int)。
+    let mut ids = serde_json::Map::new();
+    if let Some(obj) = j["ProviderIds"].as_object() {
+        for (k, v) in obj {
+            let key = k.to_lowercase();
+            if !matches!(key.as_str(), "imdb" | "tmdb" | "tvdb") {
+                continue;
+            }
+            let sv = v.as_str().unwrap_or("").trim().to_string();
+            if sv.is_empty() {
+                continue;
+            }
+            if key == "imdb" {
+                ids.insert(key, serde_json::Value::String(sv));
+            } else if let Ok(n) = sv.parse::<i64>() {
+                ids.insert(key, serde_json::Value::from(n));
+            }
+        }
+    }
+    if ids.is_empty() {
+        return None; // 无任何外部 ID,Trakt 无法定位,跳过
+    }
+    let runtime_secs = j["RunTimeTicks"].as_i64().unwrap_or(0) as f64 / 1e7;
+    Some(ScrobbleInfo { media_type: media_type.to_string(), ids: serde_json::Value::Object(ids), runtime_secs })
+}
+
 /// 跨服聚合搜索用:按关键词搜电影/剧集。
 pub async fn search(
     http: &reqwest::Client,

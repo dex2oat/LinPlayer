@@ -78,26 +78,14 @@ pub const CATEGORIES: &[RankingCategory] = &[
     cat("tv_on_the_air", Tv, Tmdb, "正在播出", None, Some("/tv/on_the_air")),
 ];
 
-// ---------- 凭据(编译期注入) ----------
-fn dandan_creds() -> Option<(String, String)> {
-    let id = option_env!("DANDANPLAY_APP_ID").unwrap_or("").trim();
-    let secret = option_env!("DANDANPLAY_APP_SECRET").unwrap_or("").trim();
-    if id.is_empty() || secret.is_empty() {
-        None
-    } else {
-        Some((id.to_string(), secret.to_string()))
-    }
-}
-
-fn tmdb_enc() -> &'static str {
-    option_env!("TMDB_API_KEY_ENC").unwrap_or("")
-}
+// ---------- 凭据(编译期加密注入,见 crate::secrets / build.rs) ----------
+use crate::secrets::{dandan_creds, tmdb_configured, tmdb_key};
 
 pub fn anime_configured() -> bool {
     dandan_creds().is_some()
 }
 pub fn video_configured() -> bool {
-    !tmdb_enc().trim().is_empty()
+    tmdb_configured()
 }
 
 /// 当前构建可用的分类(动漫需弹弹凭据,影视需 TMDB 密钥)。
@@ -114,26 +102,6 @@ pub fn available_categories() -> Vec<RankingCategory> {
 
 fn category_by_id(id: &str) -> Option<&'static RankingCategory> {
     CATEGORIES.iter().find(|c| c.id == id)
-}
-
-// ---------- TMDB 密钥解密(AES-256-CBC/PKCS7,口令混淆级) ----------
-fn tmdb_key() -> String {
-    let enc = tmdb_enc().trim();
-    if enc.is_empty() {
-        return String::new();
-    }
-    use aes::cipher::{BlockDecryptMut, KeyIvInit};
-    use base64::Engine;
-    type Dec = cbc::Decryptor<aes::Aes256>;
-    const KEY: &[u8; 32] = b"LinPlayer-tmdb-ranking-key-v1!!!";
-    let Ok(ct) = base64::engine::general_purpose::STANDARD.decode(enc) else {
-        return String::new();
-    };
-    let dec = Dec::new(KEY.into(), KEY[..16].into());
-    match dec.decrypt_padded_vec_mut::<aes::cipher::block_padding::Pkcs7>(&ct) {
-        Ok(pt) => String::from_utf8_lossy(&pt).trim().to_string(),
-        Err(_) => String::new(),
-    }
 }
 
 // ---------- 拉取 ----------

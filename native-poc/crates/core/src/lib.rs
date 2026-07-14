@@ -8,6 +8,7 @@ pub mod http;
 pub mod media;
 pub mod net;
 pub mod ranking;
+pub mod secrets;
 pub mod source;
 pub mod sync;
 

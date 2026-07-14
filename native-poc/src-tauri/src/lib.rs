@@ -37,6 +37,8 @@ struct AppState {
     cf_proxy: Mutex<Option<linplayer_core::net::cf::CfProxyHandle>>,
     // 多线程下载管理器(长驻,持久化索引)。
     download: linplayer_core::download::DownloadManager,
+    // 当前 Emby 播放的 Trakt scrobble 上下文(play 时抓取,stop 时用于收尾上报)。
+    scrobble_ctx: Mutex<Option<emby::ScrobbleInfo>>,
 }
 
 fn poclog(msg: &str) {
@@ -281,6 +283,24 @@ async fn play(
         poclog(&format!("report_start ERR: {e}"));
     }
     *state.playback.lock().unwrap() = Some(target);
+
+    // Trakt 自动 scrobble:已连接则抓 ProviderIds 上报「开始观看」,存上下文供 stop 收尾。
+    *state.scrobble_ctx.lock().unwrap() = None;
+    let trakt_acc = state.config.lock().unwrap().sync_trakt.clone();
+    if let Some(acc) = trakt_acc {
+        if let Some(info) = emby::fetch_scrobble_info(&state.http, &s, &item_id).await {
+            let progress = if info.runtime_secs > 0.0 {
+                (resume_secs / info.runtime_secs * 100.0).clamp(0.0, 100.0)
+            } else {
+                0.0
+            };
+            *state.scrobble_ctx.lock().unwrap() = Some(info.clone());
+            // 不阻塞播放:后台上报 start(Trakt 慢/失败都不影响起播)。
+            tauri::async_runtime::spawn(async move {
+                trakt::scrobble(&acc, &info.media_type, info.ids, progress, "start").await;
+            });
+        }
+    }
     poclog("load OK");
     Ok(resume_secs)
 }
@@ -306,6 +326,19 @@ async fn stop_playback(state: State<'_, AppState>, pos: f64) -> Result<(), Strin
     }
     *state.source_play_entry.lock().unwrap() = None; // 退出播放,停止 302 看门狗
     *state.prefetch.lock().unwrap() = None; // 停预取代理(Drop 关服)
+
+    // Trakt scrobble stop:按最终进度收尾(Trakt 在 ≥80% 时自动标记看过并写历史)。
+    let ctx = state.scrobble_ctx.lock().unwrap().take();
+    let trakt_acc = state.config.lock().unwrap().sync_trakt.clone();
+    if let (Some(info), Some(acc)) = (ctx, trakt_acc) {
+        let progress = if info.runtime_secs > 0.0 {
+            (pos / info.runtime_secs * 100.0).clamp(0.0, 100.0)
+        } else {
+            0.0
+        };
+        trakt::scrobble(&acc, &info.media_type, info.ids, progress, "stop").await;
+    }
+
     let target = state.playback.lock().unwrap().take();
     if let (Some(t), Ok(s)) = (target, session_of(&state)) {
         if let Err(e) = emby::report_stopped(&state.http, &s, &t, pos).await {
@@ -403,6 +436,30 @@ fn danmaku_cfg(s: &DanmakuServer) -> DanmakuSourceConfig {
     }
 }
 
+/// 弹弹Play 官方源配置(编译期加密注入凭据齐才有);无凭据返回 None。
+fn official_danmaku_cfg() -> Option<DanmakuSourceConfig> {
+    let (app_id, app_secret) = linplayer_core::secrets::dandan_creds()?;
+    Some(DanmakuSourceConfig {
+        id: "official".into(),
+        name: "弹弹Play".into(),
+        api_url: String::new(), // official=true 走固定 OFFICIAL_BASE
+        official: true,
+        auth_type: Some(DanmakuAuthType::None),
+        token: None,
+        app_id: Some(app_id),
+        app_secret: Some(app_secret),
+    })
+}
+
+/// 选弹幕源:自建源优先(用户配了 api_url),否则回落官方弹弹Play(需编译期凭据)。
+fn resolve_danmaku_cfg(server: &DanmakuServer) -> Option<DanmakuSourceConfig> {
+    if !server.api_url.trim().is_empty() {
+        Some(danmaku_cfg(server))
+    } else {
+        official_danmaku_cfg()
+    }
+}
+
 #[tauri::command]
 fn get_danmaku_config(state: State<'_, AppState>) -> DanmakuServer {
     state.config.lock().unwrap().danmaku.clone()
@@ -428,10 +485,9 @@ async fn danmaku_search(
     keyword: String,
 ) -> Result<Vec<DanmakuAnime>, String> {
     let server = state.config.lock().unwrap().danmaku.clone();
-    if server.api_url.trim().is_empty() {
-        return Err("未配置弹幕服务器".into());
-    }
-    danmaku::search_episodes(&state.http, &danmaku_cfg(&server), Some(&keyword), None).await
+    let cfg = resolve_danmaku_cfg(&server)
+        .ok_or("未配置弹幕服务器(且无官方弹弹Play凭据)")?;
+    danmaku::search_episodes(&state.http, &cfg, Some(&keyword), None).await
 }
 
 /// 取某集弹幕评论。
@@ -441,7 +497,9 @@ async fn danmaku_load(
     episode_id: String,
 ) -> Result<Vec<DanmakuComment>, String> {
     let server = state.config.lock().unwrap().danmaku.clone();
-    danmaku::get_comments(&state.http, &danmaku_cfg(&server), &episode_id, 0).await
+    let cfg = resolve_danmaku_cfg(&server)
+        .ok_or("未配置弹幕服务器(且无官方弹弹Play凭据)")?;
+    danmaku::get_comments(&state.http, &cfg, &episode_id, 0).await
 }
 
 // ---------- 文件浏览型源命令(网盘/追番)----------
@@ -511,6 +569,7 @@ async fn source_play(
     resume_secs: f64,
     raw: Option<serde_json::Value>,
 ) -> Result<f64, String> {
+    *state.scrobble_ctx.lock().unwrap() = None; // 源播放非 Emby,清 Trakt scrobble 上下文
     let (kind, server) = state.source.lock().unwrap().clone().ok_or("未登录源")?;
     let backend = source_backend(&state, kind)?;
     let entry = SourceEntry {
@@ -991,6 +1050,7 @@ pub fn run() {
             prefetch: Mutex::new(None),
             cf_proxy: Mutex::new(None),
             download,
+            scrobble_ctx: Mutex::new(None),
         })
         .setup(|app| {
             let window = app.get_webview_window("main").expect("main window");
