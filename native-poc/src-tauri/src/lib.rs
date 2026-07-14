@@ -31,6 +31,8 @@ struct AppState {
     source_play_entry: Mutex<Option<(String, String)>>,
     // 连续 302 重签次数(防死循环:文件本身放不了时不无限重签),每次新播放清零
     resign_count: AtomicU32,
+    // 多线程加载:本地预取代理句柄(仅 Emby 直传流);Drop 即停服。None=直连。
+    prefetch: Mutex<Option<linplayer_core::net::prefetch::ProxyHandle>>,
 }
 
 fn poclog(msg: &str) {
@@ -218,9 +220,43 @@ async fn play(
     let s = session_of(&state)?;
     let target = emby::resolve_stream(&state.http, &s, &item_id).await?;
     poclog(&format!(
-        "PLAY item={item_id} resume={resume_secs} psid={} url={}",
-        target.play_session_id, target.url
+        "PLAY item={item_id} resume={resume_secs} psid={} url={} method={}",
+        target.play_session_id, target.url, target.play_method
     ));
+
+    // 多线程加载:仅直传流走本地预取代理(转码 URL 是分段流,跳过直连)。
+    // 起服失败/非直传 → 回退直连;旧句柄被替换即 Drop 停服。
+    let play_url = if target.play_method == "DirectStream" {
+        let resign: linplayer_core::net::prefetch::ResignFn = {
+            let http = state.http.clone();
+            let sess = s.clone();
+            let iid = item_id.clone();
+            Arc::new(move || {
+                let (http, sess, iid) = (http.clone(), sess.clone(), iid.clone());
+                Box::pin(async move {
+                    emby::resolve_stream(&http, &sess, &iid).await.ok().map(|t| t.url)
+                })
+            })
+        };
+        // 读前缓冲上限跟随视频缓存档位;PoC 暂固定 3 线程 / 1GB 封顶。
+        // ponytail: 线程数与缓存上限接 Prefs 后再放开,现值覆盖弱网聚合已够验证。
+        match linplayer_core::net::prefetch::start(target.url.clone(), 3, 1024 * 1024 * 1024, Some(resign)).await {
+            Some(h) => {
+                let u = h.url.clone();
+                *state.prefetch.lock().unwrap() = Some(h);
+                poclog(&format!("prefetch 代理起服 {u}"));
+                u
+            }
+            None => {
+                *state.prefetch.lock().unwrap() = None;
+                target.url.clone()
+            }
+        }
+    } else {
+        *state.prefetch.lock().unwrap() = None; // 转码/非直传:停旧代理走直连
+        target.url.clone()
+    };
+
     // 加载(不跨 await 持锁)
     {
         let guard = state.player.lock().unwrap();
@@ -229,7 +265,7 @@ async fn play(
             "播放器未就绪".to_string()
         })?;
         let _ = p.take_error_eof();
-        p.load_at(&target.url, resume_secs)?;
+        p.load_at(&play_url, resume_secs)?;
         p.set_pause(false);
     }
     *state.source_play_entry.lock().unwrap() = None; // Emby 播放,非源
@@ -262,6 +298,7 @@ async fn stop_playback(state: State<'_, AppState>, pos: f64) -> Result<(), Strin
         }
     }
     *state.source_play_entry.lock().unwrap() = None; // 退出播放,停止 302 看门狗
+    *state.prefetch.lock().unwrap() = None; // 停预取代理(Drop 关服)
     let target = state.playback.lock().unwrap().take();
     if let (Some(t), Ok(s)) = (target, session_of(&state)) {
         if let Err(e) = emby::report_stopped(&state.http, &s, &t, pos).await {
@@ -643,6 +680,7 @@ pub fn run() {
             source: Mutex::new(None),
             source_play_entry: Mutex::new(None),
             resign_count: AtomicU32::new(0),
+            prefetch: Mutex::new(None),
         })
         .setup(|app| {
             let window = app.get_webview_window("main").expect("main window");
