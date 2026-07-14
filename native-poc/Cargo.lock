@@ -2077,6 +2077,7 @@ dependencies = [
  "base64 0.22.1",
  "cbc",
  "dirs 5.0.1",
+ "flate2",
  "md-5",
  "regex",
  "reqwest 0.12.28",

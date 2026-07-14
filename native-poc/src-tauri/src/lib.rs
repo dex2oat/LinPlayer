@@ -999,6 +999,34 @@ async fn bangumi_calendar(
     Ok(bangumi::fetch_anime_calendar(&acc, only_mine.unwrap_or(true)).await)
 }
 
+// ---------- 配置迁移(扫码搬服务器)命令 ----------
+/// 导出当前所有账号为二维码载荷字符串(LPSYNC1:...);前端渲染成二维码,他机扫码导入。
+/// 全程离线,载荷内账号凭据 AES 加密 + gzip。
+#[tauri::command]
+fn config_export_qr(state: State<'_, AppState>) -> String {
+    let accounts = state.config.lock().unwrap().accounts.clone();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    linplayer_core::config_transfer::encode(&accounts, now)
+}
+
+/// 导入扫到的载荷:解码 → 按 server 合并进现有账号 → 落盘。返回导入的账号数。
+#[tauri::command]
+fn config_import_qr(state: State<'_, AppState>, payload: String) -> Result<usize, String> {
+    let incoming = linplayer_core::config_transfer::decode(&payload)?;
+    let count = incoming.len();
+    let mut cfg = state.config.lock().unwrap();
+    let merged = linplayer_core::config_transfer::merge(&cfg.accounts, incoming);
+    cfg.accounts = merged;
+    if cfg.active.is_none() && !cfg.accounts.is_empty() {
+        cfg.active = Some(0);
+    }
+    cfg.save();
+    Ok(count)
+}
+
 // ---------- 付费(爱发电)命令 ----------
 /// 校验爱发电订单号(经已部署的 CF 代理,客户端不接触 afdian token)。软锁。
 #[tauri::command]
@@ -1189,7 +1217,9 @@ pub fn run() {
             bangumi_logout,
             bangumi_set_collection,
             bangumi_update_episode,
-            bangumi_calendar
+            bangumi_calendar,
+            config_export_qr,
+            config_import_qr
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

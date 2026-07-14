@@ -18,6 +18,7 @@ cbc = { version = "0.1", features = ["alloc"] }
 base64 = "0.22"
 urlencoding = "2"
 regex = "1"
+flate2 = "1"
 # tokio 已由 reqwest 传递引入,这里直连是为了自持本地预取代理的 TcpListener/worker,不增体积。
 tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time", "macros", "fs"] }
 
