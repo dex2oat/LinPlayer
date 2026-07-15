@@ -1,0 +1,204 @@
+/* ============================================================
+   服务器页(管理网格 + 右键菜单) —— 严格对照草稿 PAGE 05。
+   全走 tokens.css 变量,无硬编码色。类名统一 .sv- 前缀。
+   通用件(cbar/crumb/count/push/searchbox/ibtn/btn/scroll/
+   ctxmenu/scrim/dlg/fld/field/seg/dot/toast)复用 ui.css,不在此重定义。
+   ============================================================ */
+
+/* cbar 内搜索框里的裸输入(套在 .searchbox 里)。 */
+.sv-search-inp {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  font-size: 12px;
+  width: 150px;
+}
+.sv-search-inp::placeholder { color: var(--ink-3); }
+
+/* ---------- 卡片网格(草稿 .srvgrid) ---------- */
+/* 封顶居中:grid 模式原本无封顶,2560px 下卡片摊成一长排。 */
+.sv-srvgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: 14px;
+  padding: 8px 18px 8px;
+  align-content: start;
+  max-width: var(--content-max);
+  margin-inline: auto;
+}
+/* list 模式保留原有 680px(.sv-srvgrid.list 特异性更高,压得住上面的封顶);
+   只是跟着上面的 margin-inline:auto 变成居中 —— 原来左对齐时右边空 1880px,
+   正是「右半大半空着」的那个毛病。 */
+.sv-srvgrid.list { grid-template-columns: 1fr; max-width: 680px; }
+
+/* ---------- 服务器卡(草稿 .srvcard) ---------- */
+.sv-srvcard {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 14px 15px;
+  border-radius: var(--r-md);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--card-shadow);
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.sv-srvcard:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-3px);
+  box-shadow: 0 22px 42px -22px rgba(0, 0, 0, 0.55);
+}
+.sv-srvcard.cur {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: linear-gradient(180deg, var(--accent-soft), transparent 78%), var(--panel);
+  cursor: default;
+}
+
+/* 图标框(草稿 .sic) */
+.sv-sic {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  overflow: hidden;
+}
+.sv-sic.lg { width: 54px; height: 54px; }
+.sv-sic-img { width: 100%; height: 100%; object-fit: cover; }
+.sv-glyph { line-height: 1; }
+
+.sv-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.sv-nm {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 640;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sv-nm .dot { border: 2px solid var(--panel); }
+.sv-rm {
+  font-size: 12px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 右上类型徽标(草稿 .badge) */
+.sv-type {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+  background: color-mix(in srgb, var(--panel-2) 70%, var(--bg));
+  border: 1px solid var(--line-strong);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+/* 「当前」角标 */
+.sv-cur-tag {
+  position: absolute;
+  right: 12px;
+  bottom: 11px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+
+/* ---------- 弹窗内小件 ---------- */
+.sv-note {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  margin-top: 10px;
+  line-height: 1.5;
+}
+
+/* 服务器线路(草稿 .linerow) */
+.sv-linebar { display: flex; gap: 9px; margin-bottom: 14px; }
+.sv-linerow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 50%, var(--bg));
+}
+.sv-linerow.cur { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft); }
+.sv-linerow .sv-u {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sv-linerow .sv-lat { font-family: var(--mono); font-size: 11px; color: var(--accent); flex: 0 0 auto; }
+
+/* 图标网格(草稿 .iconpick) */
+.sv-iconpick {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+}
+.sv-icell {
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  color: var(--ink-2);
+  font-size: 18px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.sv-icell:hover { border-color: var(--ink-3); color: var(--ink); }
+.sv-icell.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+.sv-upload {
+  display: grid;
+  place-items: center;
+  height: 88px;
+  border-radius: var(--r-md);
+  border: 1px dashed var(--line-strong);
+  color: var(--ink-2);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.sv-upload:hover { border-color: var(--accent); color: var(--ink); }
+
+.sv-icon-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+/* 删除确认主按钮染成 danger。 */
+.sv-danger-btn { background: var(--danger); }
+.sv-danger-btn:hover { background: var(--danger); filter: brightness(1.06); }

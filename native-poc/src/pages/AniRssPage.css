@@ -1,0 +1,151 @@
+/* ============================================================
+   Ani-RSS 页(草稿 PAGE 13)。cbar/crumb/push/seg/btn/ibtn/ph/empty/
+   spinner/toast/ctxmenu/mi/scroll/cbody/scrim/dlg/mdpane 全部复用 ui.css,
+   这里只写草稿里 .subrow/.epdot 那套本页独有的样式。
+   草稿的 --line-2 在本项目里叫 --line-strong。
+   ============================================================ */
+
+/* ---------- 订阅段:一部番一行(草稿 .subrow) ---------- */
+.ar-subrow {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  gap: 12px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  margin-bottom: 8px;
+}
+
+.ar-cv {
+  aspect-ratio: 2 / 3;
+  border-radius: 6px;
+  width: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ar-mid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ar-tt {
+  font-size: 13px;
+  font-weight: 560;
+  color: var(--ink);
+}
+.ar-on {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--good);
+}
+.ar-offlbl {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ink-3);
+}
+
+/* ---------- 逐集下载进度格(草稿 .eps / .epdot) ---------- */
+.ar-eps {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.ar-epdot {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--ink-3);
+}
+.ar-epdot.done {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--ink);
+}
+/* 下载中态。样式照草稿留着,等 /api/torrentsInfos 接上才有数据能点亮。 */
+.ar-epdot.dl {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.ar-epmore {
+  display: grid;
+  place-items: center;
+  height: 22px;
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--ink-3);
+}
+
+.ar-sub {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+/* ---------- 首页段:番剧海报墙 ---------- */
+.ar-wall {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 14px;
+}
+
+.ar-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+/* 未启用的订阅压暗,一眼能从墙上分出来。 */
+.ar-tile.off {
+  opacity: 0.45;
+}
+
+.ar-tile-cv {
+  aspect-ratio: 2 / 3;
+  border-radius: 9px;
+  width: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ar-tile-cap {
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- 状态/占位 ---------- */
+.ar-center {
+  display: grid;
+  place-items: center;
+}
+.ar-empty-act {
+  margin-top: 14px;
+}
+.ar-empty-err {
+  margin-top: 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  word-break: break-all;
+}
+.ar-pane .empty {
+  padding: 32px 0;
+}
+.ar-dbd {
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.6;
+}

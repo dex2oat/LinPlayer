@@ -1,0 +1,116 @@
+/* ============================================================
+   媒体库页 —— 照 docs/desktop-drafts.html 第 02 页(PAGE 2 · LIBRARY)。
+   两级:库列表(横向不裁剪封面卡) → 库内(密集海报网格 + 顶栏排序/筛选/视图/刷新)。
+   全部走 tokens 变量,双主题自动;前缀 .lib- 避免与全局词汇冲突。
+   ============================================================ */
+
+/* ---------- 库列表:横向封面卡(用户要求:16/9 + contain 不裁剪) ---------- */
+/* 封顶居中(库列表:.dense-grid 管的是库内海报网格,这个是库封面网格,得单独封)。 */
+.lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 18px;
+  padding: 6px 18px 30px;
+  align-content: start;
+  max-width: var(--content-max);
+  margin-inline: auto;
+}
+.lib-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.lib-cover {
+  aspect-ratio: 16 / 9;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+  transition: transform var(--dur-med) var(--ease), box-shadow var(--dur-med) var(--ease),
+    border-color var(--dur-med) var(--ease);
+}
+/* 不裁剪:整幅塞进 16/9 框内,留边(letterbox) */
+.lib-cover img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.lib-card:hover .lib-cover {
+  transform: translateY(-4px);
+  box-shadow: 0 24px 44px -22px rgba(0, 0, 0, 0.6);
+  border-color: var(--line-strong);
+}
+.lib-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lib-card:hover .lib-name { color: var(--accent); }
+.lib-skel { animation-duration: 1.3s; }
+
+/* ---------- 顶栏锚定下拉(排序/筛选,复用全局 .dd/.li) ---------- */
+.lib-ddwrap { position: relative; display: inline-flex; }
+.lib-dd { top: calc(100% + 6px); right: 0; left: auto; }
+.lib-dd .lib-dd-note {
+  padding: 8px 9px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+/* 关下拉的透明背板,置于 .dd(z 30) 之下 */
+.lib-ddscrim { position: fixed; inset: 0; z-index: 29; }
+
+/* ---------- 列表视图(网格/列表切换的另一半) ---------- */
+/* 列表模式同样封顶,否则每行名称拉满 2560px。收藏页复用这套类(见 FavoritesPage)。 */
+.lib-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 18px 30px;
+  max-width: var(--content-max);
+  margin-inline: auto;
+}
+.lib-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 10px;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease);
+}
+.lib-row:hover { background: var(--panel-2); }
+.lib-row-thumb {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 60px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+}
+.lib-row-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lib-row-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lib-row-cv { flex: 0 0 auto; color: var(--ink-3); }

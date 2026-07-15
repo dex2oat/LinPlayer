@@ -1,0 +1,58 @@
+/* 追剧日历 · PAGE 14 周视图。数值照抄草稿 desktop-drafts.html 470-485。 */
+
+.cal-lock-tag { color: var(--warn); font-size: 11px; }
+
+.cal-weekgrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
+
+.cal-daycol {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.cal-daycol.today { border-color: var(--accent); }
+
+.cal-dayhd { padding: 8px; text-align: center; border-bottom: 1px solid var(--line); }
+.cal-dayhd.today { background: var(--accent-soft); }
+.cal-wd { font-size: 10px; color: var(--ink-3); font-family: var(--mono); }
+.cal-d { font-size: 15px; font-weight: 640; }
+
+.cal-dbody {
+  padding: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-height: 150px;
+}
+
+.cal-evt {
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+.cal-evt:hover { border-color: var(--line-strong); }
+
+/* img 与 .ph 占位共用同一类,保证有图/无图的槽位尺寸一致。 */
+.cal-th { aspect-ratio: 16 / 9; display: block; width: 100%; object-fit: cover; border-radius: 0; }
+
+.cal-in { padding: 5px 7px; display: flex; flex-direction: column; gap: 2px; }
+.cal-t1 { font-size: 10.5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cal-t2 { font-size: 9.5px; color: var(--accent); font-family: var(--mono); }
+
+/* 付费门(草稿标注 43):居中卡片,观感对齐 .panel。 */
+.cal-gate {
+  max-width: 420px;
+  margin: 60px auto;
+  padding: 26px 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  text-align: center;
+}
+.cal-gate-h { font-size: 16px; font-weight: 640; color: var(--ink); }
+.cal-gate-p { margin-top: 8px; font-size: 12.5px; color: var(--ink-2); line-height: 1.6; }
+.cal-gate-row { margin-top: 18px; display: flex; gap: 8px; }
+.cal-gate-row .field { flex: 1; }
+.cal-gate-note { padding: 0; text-align: left; }

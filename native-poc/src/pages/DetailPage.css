@@ -1,0 +1,171 @@
+/* 详情页(草稿 PAGE 3 · 722-910):Hero → 播放 → 简介 → 选择器 → 分集 → 演职人员 → 媒体信息。
+   全局类(.cbody/.rowlab/.rail/.genre/.chipbar/.btn/.sel/.dd/.li/.rad/.rt/.caption-note/.ctxmenu/.toast)
+   直接复用 ui.css,这里只写 .dt- 前缀的增量。色值一律走 token。 */
+
+/* ---------- ① Hero(草稿 741-755):全宽出血,不进正文 max-width ---------- */
+.dt-hero {
+  position: relative;
+  margin: 0 -18px;
+  aspect-ratio: 24 / 8;
+  max-height: 380px;
+  border-radius: 0;
+  overflow: hidden;
+  background: var(--panel-2);
+  isolation: isolate;
+}
+.dt-hero-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -2; }
+.dt-hero-grad {
+  position: absolute; inset: 0; z-index: -1;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--bg) 92%, transparent) 0 34%, transparent 68%),
+    linear-gradient(0deg, var(--bg), transparent 55%);
+}
+.dt-hero-body { position: absolute; left: 20px; bottom: 22px; max-width: 52%; }
+.dt-hero-title { font-size: clamp(26px, 3.4vw, 40px); font-weight: 720; letter-spacing: -0.02em; color: var(--ink); line-height: 1.06; text-wrap: balance; }
+.dt-hero-chips { margin-top: 10px; }
+.dt-hero-back {
+  position: absolute; left: 16px; top: 14px; z-index: 2;
+  width: 34px; height: 34px; border-radius: 8px;
+  border: 1px solid var(--line-strong); background: rgba(20, 25, 34, 0.55);
+  color: var(--ink); display: grid; place-items: center; cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+.dt-hero-back:hover { color: var(--accent); }
+.dt-hero-actions { position: absolute; right: 16px; top: 14px; z-index: 2; display: flex; gap: 8px; }
+
+/* ---------- 正文封顶:4K 全屏下不把每段拉成一条线、右边不死白 ---------- */
+.dt-body { max-width: 1560px; margin: 0 auto; padding: 0 4px; }
+
+/* ---------- ② 播放条(草稿 758-763) ---------- */
+.dt-playbar { display: flex; gap: 10px; align-items: center; margin: 18px 0 6px; flex-wrap: wrap; }
+.dt-ghost {
+  width: 40px; height: 40px; border-radius: 10px;
+  border: 1px solid var(--line-strong); background: var(--panel);
+  color: var(--ink-2); display: grid; place-items: center; cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.dt-ghost.sm { width: 34px; height: 34px; border-radius: 8px; background: rgba(20, 25, 34, 0.55); backdrop-filter: blur(6px); }
+.dt-ghost:hover { background: var(--panel-2); color: var(--ink); }
+.dt-ghost:disabled { opacity: 0.4; cursor: default; }
+.dt-ghost.on { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, var(--line)); }
+.dt-ghost.on svg { fill: var(--danger); }
+
+/* 「⋯」:草稿是 emoji,这里用 CSS 画三点(不动 icons.tsx) */
+.dt-dots { display: flex; gap: 3px; align-items: center; }
+.dt-dots i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; }
+
+/* ---------- ③ 简介(草稿 .ov 249 行) ---------- */
+.dt-overview { font-size: 13.5px; color: var(--ink-2); line-height: 1.7; max-width: 78ch; }
+.dt-overview.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.dt-expand {
+  background: none; border: none; color: var(--ink-3); font-size: 12px; cursor: pointer;
+  margin-top: 6px; padding: 0; display: inline-flex; align-items: center; gap: 4px;
+}
+.dt-expand:hover { color: var(--accent); }
+
+/* ---------- ④ 选择器(草稿 .selrow 169 行) ---------- */
+.dt-selrow { display: flex; gap: 8px; flex-wrap: wrap; }
+/* 每个 sel 自带定位上下文,全局 .dd(absolute)就锚在它自己底下 */
+.dt-selwrap { position: relative; display: inline-flex; }
+.dt-selwrap .dd { left: 0; top: 36px; }
+.dt-selwrap .sel svg { color: var(--ink-3); }
+
+/* ---------- ⑤ 分集(草稿 .epgrid/.ep 175-181 行) ---------- */
+/* 草稿是 repeat(3,1fr);这里改自适应 + 正文封顶,超宽屏不会排成一长条 */
+.dt-epgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; padding-top: 4px; }
+.dt-epgrid.list { grid-template-columns: 1fr; gap: 6px; }
+.dt-epgrid.list .dt-ep { grid-template-columns: 64px 1fr; padding: 6px; }
+.dt-viewtoggle { display: inline-flex; gap: 4px; align-items: center; }
+.dt-viewtoggle button {
+  width: 26px; height: 26px; border-radius: 7px;
+  border: 1px solid var(--line-strong); background: var(--panel);
+  color: var(--ink-3); display: grid; place-items: center; cursor: pointer;
+}
+.dt-viewtoggle button:hover { color: var(--ink); }
+.dt-viewtoggle button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+/* 「▦」:CSS 画 2×2 方块(不动 icons.tsx) */
+.dt-gridic { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; width: 12px; height: 12px; }
+.dt-gridic i { background: currentColor; border-radius: 1px; }
+
+.dt-ep {
+  display: grid; grid-template-columns: 96px 1fr; gap: 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 8px;
+  cursor: pointer; text-align: left;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.dt-ep:hover { background: var(--panel-2); border-color: var(--line-strong); }
+.dt-ep .th { position: relative; aspect-ratio: 16 / 9; border-radius: 6px; overflow: hidden; background: var(--panel-2); display: grid; place-items: center; color: var(--ink-3); }
+.dt-ep .th img { width: 100%; height: 100%; object-fit: cover; }
+.dt-ep .th .progress { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0, 0, 0, 0.5); z-index: 1; }
+.dt-ep .th .progress i { display: block; height: 100%; background: var(--accent); }
+/* 标注 16:悬停显现播放 */
+.dt-ep-play {
+  position: absolute; inset: 0; margin: auto;
+  width: 26px; height: 26px; border-radius: 50%; border: none;
+  background: var(--accent); color: var(--accent-ink);
+  display: grid; place-items: center; cursor: pointer;
+  opacity: 0; transition: opacity var(--dur-fast) var(--ease);
+}
+.dt-ep:hover .dt-ep-play { opacity: 1; }
+.dt-ep .lines { display: flex; flex-direction: column; gap: 5px; padding-top: 3px; min-width: 0; }
+.dt-ep .en { font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dt-ep .em { font-size: 10px; color: var(--ink-3); font-family: var(--mono); }
+
+/* ---------- ⑥ 演职人员(草稿 804-813:64px 圆头像 + 右端箭头) ---------- */
+.dt-castwrap { position: relative; }
+.dt-castrail { padding: 4px 34px 12px 0; }
+.dt-cast { flex: 0 0 auto; width: 64px; text-align: center; }
+.dt-cast .av {
+  width: 64px; height: 64px; aspect-ratio: 1; border-radius: 50%;
+  overflow: hidden; background: var(--panel-2); border: 1px solid var(--line);
+  margin: 0 auto 6px; display: grid; place-items: center;
+}
+.dt-cast .av img { width: 100%; height: 100%; object-fit: cover; }
+.dt-cast .av .ini { font-size: 20px; color: var(--ink-3); font-weight: 600; }
+.dt-cast .cn { font-size: 11px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dt-cast .cr { font-size: 10px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dt-railarrow {
+  position: absolute; right: 0; top: 34px; transform: translateY(-50%);
+  width: 28px; height: 44px; border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 70%, var(--bg));
+  border: 1px solid var(--line-strong); color: var(--ink-2);
+  display: grid; place-items: center; cursor: pointer;
+  opacity: 0; transition: opacity var(--dur-fast) var(--ease);
+}
+.dt-castwrap:hover .dt-railarrow { opacity: 1; }
+.dt-railarrow:hover { color: var(--ink); }
+
+/* ---------- ⑦ 媒体信息(草稿 .ver-block/.ver-cards/.mi/.kv 236-277 行) ---------- */
+.dt-ver-block {
+  margin-top: 12px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 45%, transparent);
+  padding: 14px;
+}
+.dt-ver-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.dt-ver-head .nm { font-size: 14px; font-weight: 640; color: var(--ink); }
+.dt-ver-cards { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; cursor: grab; }
+.dt-ver-cards.grabbing { cursor: grabbing; user-select: none; }
+.dt-ver-cards::-webkit-scrollbar { height: 9px; }
+.dt-ver-cards::-webkit-scrollbar-track { background: var(--line); border-radius: 5px; }
+.dt-ver-cards::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 5px; }
+.dt-ver-cards::-webkit-scrollbar-thumb:hover { background: var(--ink-3); }
+
+/* 草稿叫 .mi,ui.css 里 .mi 已经是右键菜单项 → 这里改名 .dt-mi 避免撞车 */
+.dt-mi {
+  flex: none; width: 184px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 11px;
+  padding: 13px 15px;
+}
+.dt-mi .cap {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 9px; display: flex; align-items: center; gap: 8px;
+}
+.dt-mi .cap .tag {
+  margin-left: auto; font-size: 10px; color: var(--ink-3); letter-spacing: 0; text-transform: none;
+  border: 1px solid var(--line-strong); border-radius: 5px; padding: 1px 6px;
+}
+.dt-kv { display: flex; justify-content: space-between; gap: 14px; font-size: 12.5px; padding: 5px 0; border-top: 1px solid var(--line); }
+.dt-kv:first-of-type { border-top: 0; }
+.dt-kv .k { color: var(--ink-3); }
+.dt-kv .val { color: var(--ink); font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }

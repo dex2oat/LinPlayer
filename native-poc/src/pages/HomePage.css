@@ -1,0 +1,75 @@
+/* 首页专属排版。全局类(.rail / .r-wide / .hero 系 / .rowlab / .pcard / .pcap /
+   .ctxmenu / .mi)都在 theme/ui.css,这里不重定义,只补草稿 PAGE 1 里 ui.css 还没有的
+   三样:轨道翻页箭头、Hero 左右热区、媒体库封面卡(不裁剪)。 */
+
+/* 超宽/4K 全屏下正文限宽居中:不限宽的话轨道会被拉成一条线、右边一大片死白。
+   Hero 不放进这个容器 —— 大幅剧照要全宽出血。 */
+.hm-body { max-width: 1560px; margin: 0 auto; }
+
+/* ---------- 轨道翻页箭头(草稿 .rail .arrow,数值照抄 114-116 行) ---------- */
+/* .rail 自己就是滚动容器,箭头挂在它里面会跟着内容一起滚走 → 必须挂外层定位容器。 */
+.hm-rail { position: relative; }
+.hm-arrow {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 28px; height: 44px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  border: 1px solid var(--line-strong);
+  color: var(--ink-2);
+  display: grid; place-items: center;
+  cursor: pointer;
+  z-index: 3;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  backdrop-filter: blur(6px);
+}
+.hm-arrow.left { left: 6px; }
+.hm-arrow.right { right: 6px; }
+/* 草稿注:轨道右端「悬停显现」翻页箭头,不常驻。 */
+.hm-rail:hover .hm-arrow { opacity: 1; }
+.hm-arrow:hover { color: var(--ink); border-color: var(--accent); }
+
+/* ---------- Hero 左右热区翻页(标注 6) ---------- */
+.hm-hot {
+  position: absolute; top: 0; bottom: 0;
+  width: 68px;
+  border: none; padding: 0;
+  background: none;
+  color: var(--ink-2);
+  cursor: pointer;
+  z-index: 1;
+  display: grid; place-items: center;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.hm-hot.left { left: 0; }
+.hm-hot.right { right: 0; }
+.hm-hero:hover .hm-hot { opacity: 1; }
+.hm-hot:hover { color: var(--ink); background: color-mix(in srgb, var(--bg) 30%, transparent); }
+
+/* 热区铺满 Hero 整个高度,和标题/按钮/圆点有重叠。热区在 z1,所以这两个必须压在它上面,
+   否则「播放」按钮和圆点会被热区吃掉点击。 */
+.hm-hero .hero-body { z-index: 2; }
+.hm-hero .hero-dots { z-index: 3; }
+
+/* ---------- 媒体库封面卡(继续观看下面那条轨道) ---------- */
+.hm-lib {
+  display: block;
+  border: none; padding: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.hm-libimg {
+  aspect-ratio: 16 / 9;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  overflow: hidden;
+  display: grid; place-items: center;
+  transition: transform var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+/* contain 不是 cover:媒体库封面比例杂,cover 会把两边切掉,用户明确说过裁了很丑。 */
+.hm-libimg img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.hm-libfb { color: var(--ink-3); }
+.hm-lib:hover .hm-libimg { transform: translateY(-4px); border-color: var(--accent); }

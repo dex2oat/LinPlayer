@@ -1,0 +1,64 @@
+/* 全局搜索浮层(草稿 PAGE 9)。 */
+.ovl-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(6, 9, 13, 0.55);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 8vh 24px 24px;
+  animation: enter var(--dur-fast) var(--ease);
+}
+.ovl {
+  width: min(760px, 92vw);
+  max-height: 76vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--panel-2);
+  box-shadow: 0 30px 80px -30px #000;
+  overflow: hidden;
+}
+.ovl-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 15px;
+  border-bottom: 1px solid var(--line);
+}
+.ovl-input {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 9px;
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--panel) 50%, var(--bg));
+  color: var(--ink-3);
+}
+.ovl-input input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--ink);
+  font-size: 14px;
+}
+.ovl .pill.on-pill { border-color: var(--accent); color: var(--ink); background: var(--accent-soft); }
+.ovl-body {
+  padding: 12px 14px 16px;
+  overflow-y: auto;
+}
+.ovl-grouplab {
+  font-size: 10.5px;
+  font-family: var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 8px 2px;
+}
+.ovl-body .rail { padding: 4px 0 8px; }

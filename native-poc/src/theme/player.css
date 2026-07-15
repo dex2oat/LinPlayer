@@ -1,0 +1,196 @@
+/* 播放层(透明露出 mpv)+ OSD,严格照草稿 PAGE 4:顶栏[超分/线路/版本/更多|全屏]+底栏三段+右侧滑出面板。
+   控制条常在深色视频上,故固定深色底(不随主题)。 */
+
+.player-layer {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+  z-index: 2;
+  color: #eef1f6;
+}
+.player-layer.idle { opacity: 0; }
+.player-layer { transition: opacity 0.4s ease; }
+.player-layer > *, .player-layer .p-slide { pointer-events: auto; }
+
+/* 顶栏 */
+.p-top {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 18px;
+  background: linear-gradient(180deg, rgba(6, 9, 13, 0.85), transparent);
+}
+.p-back {
+  width: 30px; height: 30px; border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16); background: rgba(0, 0, 0, 0.35);
+  color: #fff; display: grid; place-items: center; cursor: pointer;
+}
+/* 标题:剧名 · S1E4 · 集名。溢出才跑马灯(.run 由 JS 量 scrollWidth 决定,短标题不晃)。 */
+.p-title { font-size: 14px; font-weight: 600; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8); overflow: hidden; white-space: nowrap; max-width: 38vw; }
+.p-title b { display: inline-block; font-weight: 600; }
+.p-title.run b { animation: p-marquee 14s linear infinite; padding-right: 56px; }
+@keyframes p-marquee { 0%, 8% { transform: translateX(0); } 92%, 100% { transform: translateX(calc(-100% + 38vw)); } }
+.p-top-r { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.p-sep { width: 1px; height: 24px; background: rgba(255, 255, 255, 0.18); margin: 0 4px; }
+
+/* 画面区:接右键菜单 + 点空白收起弹出层。mpv 在网页层之下,这层不挡画面。 */
+.p-stage { position: absolute; inset: 0; }
+
+/* 亮度遮罩:核层无亮度命令,盖黑就是真调光(在 player-layer 外,不随 OSD 淡出)。 */
+.p-dim { position: fixed; inset: 0; background: #000; pointer-events: none; z-index: 1; }
+
+/* 弹幕外包层:不透明度/显示区域纯 CSS 生效。自身 fixed+inset:0,
+   即便 clip-path 让它成为定位包含块,内部 canvas 的 inset:0 仍等于整屏。 */
+.p-dmwrap { position: fixed; inset: 0; pointer-events: none; z-index: 1; transition: opacity var(--dur-med) var(--ease); }
+
+/* 一个功能键(草稿 .pb):图标在上、小字在下 */
+.pb {
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 3px;
+  min-width: 44px; padding: 4px 6px;
+  border: none; background: transparent; cursor: pointer;
+  color: rgba(255, 255, 255, 0.72); font-size: 10px; line-height: 1;
+  border-radius: 8px;
+}
+.pb:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+.pb .i { height: 18px; display: grid; place-items: center; }
+.pb.on { color: var(--accent); }
+.pb.hot { color: #fff; }
+.pb.big .i { transform: scale(1.15); }
+
+/* 底栏 */
+.p-bot {
+  padding: 16px 18px 14px;
+  background: linear-gradient(0deg, rgba(6, 9, 13, 0.9), transparent);
+}
+.p-scrubrow { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.p-tc { font-family: var(--mono); font-size: 12px; color: #fff; min-width: 46px; }
+.p-tc.l { text-align: right; }
+.p-scrub {
+  position: relative; flex: 1; height: 5px; border-radius: 3px;
+  background: rgba(255, 255, 255, 0.16); cursor: pointer;
+}
+.p-scrub .buf { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(255, 255, 255, 0.22); border-radius: 3px; }
+.p-scrub .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; }
+.p-scrub .knob { position: absolute; top: 50%; width: 13px; height: 13px; border-radius: 50%; background: #fff; transform: translate(-50%, -50%); box-shadow: 0 0 8px rgba(0, 0, 0, 0.5); }
+.p-scrub input { position: absolute; inset: -6px 0; width: 100%; opacity: 0; cursor: pointer; }
+
+.p-ctrls { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.p-grp { display: flex; align-items: center; gap: 6px; }
+
+/* 滑出面板的暗化背板(草稿 .dim):点空白收起,左侧画面仍看得见 */
+.p-scrim { position: fixed; inset: 0; z-index: 3; background: rgba(6, 9, 13, 0.38); animation: p-fade var(--dur-med) var(--ease); }
+@keyframes p-fade { from { opacity: 0; } }
+
+/* 右侧滑出面板(草稿 .p-panel / slide) */
+.p-slide {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 260px; z-index: 4;
+  background: rgba(12, 15, 20, 0.95); border-left: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  display: flex; flex-direction: column;
+  animation: slidein var(--dur-med) var(--ease);
+  color: #eef1f6;
+}
+@keyframes slidein { from { transform: translateX(100%); } }
+.p-slide .hd { display: flex; align-items: center; gap: 8px; padding: 14px 15px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); font-size: 13px; font-weight: 600; }
+.p-slide .hd .x { margin-left: auto; background: none; border: none; color: rgba(255, 255, 255, 0.6); cursor: pointer; }
+/* 草稿里字幕/弹幕/更多是 span 2 的双栏面板,故加宽 */
+.p-slide.wide { width: 440px; }
+.p-slide .bd { padding: 8px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.p-slide .bd.two { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; align-content: start; }
+.p-slide .bd.two > .col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.p-slide .bd.two > .span2, .p-slide .bd.two > .p-note.span2 { grid-column: span 2; }
+.p-slide .grp-lab { font-size: 10.5px; font-family: var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255, 255, 255, 0.4); padding: 10px 8px 4px; }
+.p-li {
+  display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 8px;
+  font-size: 12.5px; color: rgba(255, 255, 255, 0.75); cursor: pointer; border: none; background: transparent; text-align: left; width: 100%;
+}
+.p-li:hover { background: rgba(255, 255, 255, 0.07); color: #fff; }
+.p-li.on { background: var(--accent-soft); color: #fff; }
+.p-li .rad { width: 13px; height: 13px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.28); flex: none; }
+.p-li.on .rad { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 2px #0c0f14; }
+.p-li .rt { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: rgba(255, 255, 255, 0.5); }
+/* 「… ▾」这类真能点开档位列表的 rt:给手型 + hover,免得看着像纯文字 */
+.p-li .rt.sel { cursor: pointer; color: rgba(255, 255, 255, 0.78); }
+.p-li .rt.sel:hover { color: var(--accent); }
+/* 由 ▾ 展开的档位行:缩进一级,和上面那行分出主从 */
+.p-li.sub { padding-left: 22px; font-size: 12px; }
+.p-li .i { width: 16px; display: grid; place-items: center; flex: none; }
+/* 非可点行(承载 stepper/开关/分段器):不给 hover 手型,免得以为整行能点 */
+.p-li.static { cursor: default; }
+.p-li.static:hover { background: transparent; color: rgba(255, 255, 255, 0.75); }
+/* 但 static 行也可能是「已开启」态(如定时播放):hover 不能把高亮擦掉,
+   .p-li.static:hover 比 .p-li.on 特异性高,故要显式补回来 */
+.p-li.static.on, .p-li.static.on:hover { background: var(--accent-soft); color: #fff; }
+.p-li.center { justify-content: center; padding: 9px 8px; }
+.p-li.add { color: var(--accent); }
+/* 选集行:缩略图 + 两行文字(草稿 E1 序章 / 2160p · 45M · 18.4G) */
+.p-li .thumb { width: 52px; aspect-ratio: 16 / 9; border-radius: 5px; background: rgba(255, 255, 255, 0.1); flex: none; overflow: hidden; }
+.p-li .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.p-li .col { display: flex; flex-direction: column; gap: 2px; min-width: 0; text-align: left; }
+.p-li .col .t1 { font-size: 12.5px; color: inherit; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.p-li .col .t2 { font-family: var(--mono); font-size: 10px; color: rgba(255, 255, 255, 0.42); }
+
+/* 草稿 stepper:−/＋ 夹一个值 */
+.p-stepper { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.p-stepper .b {
+  width: 20px; height: 20px; border-radius: 6px; flex: none;
+  border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.06);
+  color: #fff; cursor: pointer; display: grid; place-items: center; font-size: 12px; line-height: 1; padding: 0;
+}
+.p-stepper .b:hover { background: rgba(255, 255, 255, 0.14); }
+.p-stepper b { font-family: var(--mono); font-size: 11px; color: #fff; min-width: 46px; text-align: center; font-weight: 500; }
+.p-stepper b.big { font-size: 15px; min-width: 62px; }
+
+/* 草稿开关 */
+.p-sw {
+  margin-left: auto; width: 32px; height: 18px; border-radius: 10px; flex: none; padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.08); cursor: pointer; position: relative;
+  transition: background var(--dur-fast) ease;
+}
+.p-sw i { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: rgba(255, 255, 255, 0.7); transition: transform 0.16s ease; }
+.p-sw.on { background: var(--accent); border-color: var(--accent); }
+.p-sw.on i { transform: translateX(14px); background: #fff; }
+
+/* 草稿分段器(硬解/软解) */
+.p-seg { margin-left: auto; display: flex; border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 7px; overflow: hidden; }
+.p-seg button { border: none; background: transparent; color: rgba(255, 255, 255, 0.6); font-size: 11px; padding: 3px 9px; cursor: pointer; }
+.p-seg button.on { background: var(--accent); color: #fff; }
+
+.p-note { padding: 10px 12px; font-size: 11.5px; color: rgba(255, 255, 255, 0.45); line-height: 1.5; }
+/* 播放信息:标题 + 键值对(纯前端真数据) */
+.p-note .ttl { display: flex; align-items: center; gap: 6px; color: rgba(255, 255, 255, 0.75); font-size: 11.5px; margin-bottom: 6px; }
+.p-note .kv { display: flex; gap: 8px; font-family: var(--mono); font-size: 11px; color: rgba(255, 255, 255, 0.72); padding: 2px 0; }
+.p-note .kv i { width: 58px; flex: none; font-style: normal; color: rgba(255, 255, 255, 0.4); }
+.p-note .kv.note { display: block; font-family: inherit; color: rgba(255, 255, 255, 0.4); margin-top: 6px; }
+.p-slide input.dmq {
+  margin: 4px 8px 8px; height: 32px; border-radius: 8px; padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14); background: rgba(255, 255, 255, 0.06); color: #fff; outline: none; font-size: 12.5px;
+}
+
+/* 音量/亮度竖条(点击弹出,草稿 21)。left 由 JS 按按钮中心定,故这里只钉 bottom。 */
+.p-vbar {
+  position: fixed; bottom: 96px; z-index: 5;
+  width: 44px; display: flex; flex-direction: column; align-items: center; gap: 8px;
+  background: rgba(12, 15, 20, 0.95); border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px; padding: 12px 0;
+  animation: p-fade var(--dur-fast) var(--ease);
+}
+.p-vbar .ic { color: rgba(255, 255, 255, 0.7); display: grid; place-items: center; }
+/* 音量条图标兼作静音键(M 键同此):静音时点亮成 accent */
+.p-vbar button.ic { border: none; background: transparent; padding: 0; cursor: pointer; }
+.p-vbar button.ic:hover { color: #fff; }
+.p-vbar button.ic.on { color: var(--accent); }
+.p-vbar .track { width: 5px; height: 90px; border-radius: 3px; background: rgba(255, 255, 255, 0.18); position: relative; cursor: pointer; }
+.p-vbar .track i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--accent); border-radius: 3px; }
+.p-vbar .track .knob { position: absolute; left: 50%; width: 11px; height: 11px; border-radius: 50%; background: #fff; transform: translate(-50%, 50%); box-shadow: 0 0 6px rgba(0, 0, 0, 0.6); pointer-events: none; }
+/* 静音时显示「静音」二字,比数字宽,给够位免得换行 */
+.p-vbar .v { font-family: var(--mono); font-size: 10px; color: #fff; white-space: nowrap; }
+
+/* 右键菜单:铺满的透明捕获层,点/右键任意处收起 */
+.p-ctxmask { position: fixed; inset: 0; z-index: 69; }
+.ctxmenu .mi .i { width: 16px; display: grid; place-items: center; flex: none; }
+.ctxmenu .mi .k { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+
+/* 弹幕画布 */
+.danmaku-canvas { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }

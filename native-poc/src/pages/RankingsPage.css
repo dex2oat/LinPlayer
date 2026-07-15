@@ -1,0 +1,141 @@
+/* ============================================================
+   排行榜页专属样式(前缀 .rk-;含草稿 .rkwrap/.rkrail/.rankgrid/
+   .rankcell/.rk(.g1/.g2/.g3)/.rate 对应样式)。
+   全部走 tokens.css 变量,无硬编码色值;金银铜为语义高亮金属色。
+   ============================================================ */
+
+.rk-spin {
+  animation: spin 0.7s linear infinite;
+}
+
+/* ---------- 左右分栏 ---------- */
+/* 封顶居中:不封的话左栏 180px 贴最左、右侧榜单网格摊满剩下的 2300px。 */
+.rkwrap {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+  padding: 6px 22px 0;
+  max-width: var(--content-max);
+  margin-inline: auto;
+}
+
+/* 左栏:榜单分组 + 分类。 */
+.rkrail {
+  flex: 0 0 180px;
+  position: sticky;
+  top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.rkrail > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.grp-lab {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 4px 9px;
+  margin-top: 10px;
+}
+.rkrail > div:first-child .grp-lab {
+  margin-top: 0;
+}
+
+/* 右栏:海报网格(6 列自适应)。 */
+.rankgrid {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 16px;
+}
+
+/* ---------- 榜单卡片(非可播放,取消手型,悬停轻浮起) ---------- */
+.rankcell {
+  position: relative;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  cursor: default;
+  transition: transform var(--dur-med) var(--ease),
+    box-shadow var(--dur-med) var(--ease);
+}
+.rankcell.poster {
+  aspect-ratio: 2 / 3;
+}
+.rankcell:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 16px 30px -14px rgba(0, 0, 0, 0.55);
+}
+.rk-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.rk-ph {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+}
+
+/* 名次角标:左上角。前三金银铜。 */
+.rk {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: var(--r-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(6px);
+}
+/* 金银铜:语义高亮固定金属色。 */
+.rk.g1 {
+  color: #1a1408;
+  background: #caa24a;
+  border-color: transparent;
+}
+.rk.g2 {
+  color: #16181c;
+  background: #b8bcc6;
+  border-color: transparent;
+}
+.rk.g3 {
+  color: #1c130c;
+  background: #c08457;
+  border-color: transparent;
+}
+
+/* 评分:右下角。 */
+.rate {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 2px 7px;
+  border-radius: var(--r-sm);
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(6px);
+}

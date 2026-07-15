@@ -1,0 +1,28 @@
+/* 添加服务器页局部样式(前缀 .as-)。主体复用 ui.css 的
+   .md/.mdnav/.mdpane/.fld/.field/.btn/.pill/.toast,这里只补两栏表单排版。 */
+
+.as-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.as-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+/* 诚实披露:未接/占位说明。 */
+.as-warn {
+  font-size: 12px;
+  color: var(--ink-3);
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 11px;
+  margin: 0 0 14px;
+  line-height: 1.5;
+}

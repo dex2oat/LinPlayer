@@ -1,0 +1,82 @@
+/* 轻量描边图标集(currentColor，无第三方依赖、不用 emoji)。 */
+import type { ReactNode } from "react";
+type P = { size?: number; className?: string };
+const svg = (size: number, className: string | undefined, d: ReactNode) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.7}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden
+  >
+    {d}
+  </svg>
+);
+
+export const IconHome = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V21h14V9.5" /></>);
+export const IconLibrary = ({ size = 20, className }: P) =>
+  svg(size, className, <><rect x="3" y="4" width="7" height="16" rx="1.4" /><rect x="12" y="4" width="4" height="16" rx="1.2" /><path d="M18 5.4l3 .8-2.4 14L16 19" /></>);
+export const IconHeart = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="M12 20s-7-4.6-9.2-9C1.3 7.7 3 5 5.8 5c1.9 0 3.1 1.1 4.2 2.4C11.1 6.1 12.3 5 14.2 5 17 5 18.7 7.7 21.2 11 19 15.4 12 20 12 20Z" />);
+export const IconDownload = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="M12 3v12" /><path d="m7 11 5 5 5-5" /><path d="M4 21h16" /></>);
+export const IconServer = ({ size = 20, className }: P) =>
+  svg(size, className, <><rect x="3" y="4" width="18" height="7" rx="1.6" /><rect x="3" y="13" width="18" height="7" rx="1.6" /><path d="M7 7.5h.01M7 16.5h.01" /></>);
+export const IconSettings = ({ size = 20, className }: P) =>
+  svg(size, className, <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-2.7-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H3a2 2 0 1 1 0-4h.2a1.6 1.6 0 0 0 1.1-2.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 2.7-1.1V3a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-1.1 2.7V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.4.9Z" /></>);
+export const IconRanking = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="M6 20V10" /><path d="M12 20V4" /><path d="M18 20v-7" /></>);
+export const IconSearch = ({ size = 20, className }: P) =>
+  svg(size, className, <><circle cx="11" cy="11" r="7" /><path d="m20 20-3.2-3.2" /></>);
+export const IconRefresh = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 4v5h-5" /></>);
+export const IconPlay = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="M7 4.5v15l13-7.5-13-7.5Z" fill="currentColor" stroke="none" />);
+export const IconChevronRight = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="m9 5 7 7-7 7" />);
+export const IconChevronLeft = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="m15 5-7 7 7 7" />);
+export const IconChevronDown = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="m6 9 6 6 6-6" />);
+export const IconUnfold = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="m8 9 4-4 4 4" /><path d="m16 15-4 4-4-4" /></>);
+export const IconClose = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="m6 6 12 12" /><path d="m18 6-12 12" /></>);
+export const IconSun = ({ size = 20, className }: P) =>
+  svg(size, className, <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>);
+export const IconMoon = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.6 6.6 0 0 0 9.8 9.8Z" />);
+export const IconCloud = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="M6.5 19a4.5 4.5 0 0 1-.5-8.97A6 6 0 0 1 17.7 9.4 4.3 4.3 0 0 1 17.5 19H6.5Z" />);
+export const IconInfo = ({ size = 20, className }: P) =>
+  svg(size, className, <><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 7.5h.01" /></>);
+export const IconPlus = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="M12 5v14M5 12h14" />);
+export const IconPause = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="M8 5v14M16 5v14" /></>);
+export const IconTrash = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" /></>);
+export const IconFolder = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4l2 2.5H19a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 19H4.5A1.5 1.5 0 0 1 3 17.5Z" />);
+export const IconFile = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="M6 3h8l4 4v14H6Z" /><path d="M14 3v4h4" /></>);
+export const IconPrev = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="M18 5.5v13L9 12l9-6.5ZM7 5v14" fill="currentColor" stroke="currentColor" strokeWidth={1.4} strokeLinejoin="round" />);
+export const IconNext = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="M6 5.5v13L15 12 6 5.5ZM17 5v14" fill="currentColor" stroke="currentColor" strokeWidth={1.4} strokeLinejoin="round" />);
+export const IconRewind = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="M11 5.5v13L2.5 12 11 5.5Z" fill="currentColor" stroke="none" /><path d="M21 5.5v13L12.5 12 21 5.5Z" fill="currentColor" stroke="none" /></>);
+export const IconForward = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="M3 5.5v13L11.5 12 3 5.5Z" fill="currentColor" stroke="none" /><path d="M13 5.5v13L21.5 12 13 5.5Z" fill="currentColor" stroke="none" /></>);
+export const IconFullscreen = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />);
+export const IconVolume = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="M4 9v6h3l5 4V5L7 9H4Z" /><path d="M16 8.5a4 4 0 0 1 0 7" /></>);
+export const IconList = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" />);
