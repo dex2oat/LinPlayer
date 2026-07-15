@@ -1880,9 +1880,10 @@ fn screenshot(state: State<'_, AppState>, dir: Option<String>) -> Result<String,
     Ok(s)
 }
 
-/// 超分档位清单(id, 显示名)。
+/// 超分档位清单 `(id, 显示名, 窗口模式是否也生效)`。
+/// 第三个字段让 UI 在**点之前**就标出「需放大」—— 用户不该点完看不出变化再去猜。
 #[tauri::command]
-fn shader_levels() -> Vec<(&'static str, &'static str)> {
+fn shader_levels() -> Vec<(&'static str, &'static str, bool)> {
     shaders::levels()
 }
 
@@ -1921,16 +1922,14 @@ fn set_shader_level(state: State<'_, AppState>, level: String) -> Result<ShaderA
     }
 
     let (video, output) = (p.video_size(), p.output_size());
-    let will_run = shaders::will_run(video, output);
+    let will_run = shaders::will_run(&level, video, output);
     let note = match (will_run, video, output) {
         (Some(false), Some((vw, vh)), Some((ow, oh))) => Some(format!(
-            "shader 已挂载,但当前尺寸下不会生效:Anime4K 是放大器,要求画面区大于源的 {:.1} 倍才工作。\
+            "这档是**放大**滤镜,当前尺寸下不会生效:要求画面区大于源的 {:.1} 倍才工作。\
              现在源 {vw:.0}×{vh:.0}、画面区只有 {ow:.0}×{oh:.0}({:.2}×)—— 你在缩小画面,没有可放大的。\
-             按 F 全屏(或把窗口拉大到超过 {:.0}×{:.0})即可生效。",
+             按 F 全屏即可生效;想在窗口里就见效,请选「锐化」「去噪」「锐化+去噪」这三档。",
             shaders::WHEN_RATIO,
             ow / vw,
-            vw * shaders::WHEN_RATIO,
-            vh * shaders::WHEN_RATIO,
         )),
         _ => None,
     };

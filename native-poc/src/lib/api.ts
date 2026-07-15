@@ -454,7 +454,11 @@ export const addSubtitle = (url: string, title?: string, secondary?: boolean) =>
 export const screenshot = (dir?: string) => invoke<string>("screenshot", { dir });
 
 /** 超分档位清单 [id, 显示名][]。 */
-export const shaderLevels = () => invoke<[string, string][]>("shader_levels");
+/** 画质档位 `[id, 显示名, 窗口模式是否也生效]`。
+ *  ★ 第三个字段别丢:放大类滤镜(FSR EASU / Anime4K CNN)只有画面区大于源才跑,
+ *  窗口里播 1080p 点了毫无变化。要在**点之前**就标出来,别让用户点完自己猜。 */
+export type ShaderLevel = [id: string, name: string, worksInWindow: boolean];
+export const shaderLevels = () => invoke<ShaderLevel[]>("shader_levels");
 /** 应用超分档位,返回实际挂上的 shader 数;非 off 却返 0 会直接报错(超分没生效)。 */
 /** 挂超分的结果。★ count>0 只说明 mpv 收下了路径,**不代表 shader 会跑** ——
  *  Anime4K 每个 pass 都带「输出 > 源 ×1.2」的门槛,窗口没比源大就整条链空转。

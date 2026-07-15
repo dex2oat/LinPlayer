@@ -56,6 +56,7 @@ import {
   setTrack,
   setVolume as setVolumeApi,
   shaderLevels,
+  type ShaderLevel,
   sourcePlay,
   sourceWatchdog,
   status as statusApi,
@@ -160,7 +161,7 @@ export default function App() {
   const [aspect, setAspect] = useState("");
   const [arOpen, setArOpen] = useState(false);
   // 超分:档位清单来自核层 shader_levels(),不再前端写死
-  const [shaderList, setShaderList] = useState<[string, string][]>([]);
+  const [shaderList, setShaderList] = useState<ShaderLevel[]>([]);
   const [shaderLv, setShaderLv] = useState("off");
   // 字幕样式:核层无回读命令,故记前端态;初值取 mpv 自身默认(sub-font-size 55 / sub-pos 100)
   const [subFont, setSubFont] = useState("sans-serif");
@@ -1178,17 +1179,26 @@ export default function App() {
                           <span className="rad" /> {name}
                         </button>
                       ))}
-                      <div className="grp-lab">Anime4K({shaderList.length - 1} 档)</div>
-                      {shaderList.slice(1).map(([id, name]) => (
+                      {/* 分成「窗口也生效」和「需放大」两组:后者在窗口里点了毫无变化,
+                          必须点之前就说清楚,别让用户自己猜(worksInWindow 由核层按 shader
+                          源里的 //!WHEN 现算,不是前端写死的名单)。 */}
+                      <div className="grp-lab">窗口 / 全屏都生效</div>
+                      {shaderList.slice(1).filter(([, , w]) => w).map(([id, name]) => (
                         <button key={id} className={`p-li${shaderLv === id ? " on" : ""}`} onClick={() => applyShader(id)}>
                           <span className="rad" /> {name}
                         </button>
                       ))}
-                      {/* 这段必须在点之前就说清楚:Anime4K 是**放大器**,不放大时它什么都不做,
-                          而且它自己不会吭声 —— 用户只会看到「点了没反应」。 */}
+                      <div className="grp-lab">需要放大才生效(全屏)</div>
+                      {shaderList.slice(1).filter(([, , w]) => !w).map(([id, name]) => (
+                        <button key={id} className={`p-li${shaderLv === id ? " on" : ""}`} onClick={() => applyShader(id)}>
+                          <span className="rad" /> {name}
+                          <span className="rt">需放大</span>
+                        </button>
+                      ))}
                       <div className="p-note">
-                        Anime4K 是放大器:只有画面区大于源画面 1.2 倍才工作。窗口播 1080p 通常不满足 —— 按 F 全屏。
-                        档位越靠后越清晰也越吃显卡;挂载后回读 glsl-shaders 与画面尺寸双重校验,不会假装开了。
+                        锐化/去噪(CAS + Anime4K Denoise)在源分辨率就跑,窗口里也立刻见效。
+                        放大类(FSR1 / Anime4K CNN)是放大器,只有画面区大于源画面 1.2 倍才工作 —— 按 F 全屏。
+                        挂载后回读 glsl-shaders 与画面尺寸双重校验,不会假装开了。
                       </div>
                     </>
                   )
