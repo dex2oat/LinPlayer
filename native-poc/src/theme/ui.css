@@ -281,7 +281,13 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
 .pcard.poster-ar { aspect-ratio: 2 / 3; }
 .pcard.thumb-ar { aspect-ratio: 16 / 9; }
 .pcard:hover { transform: translateY(-5px); box-shadow: 0 26px 48px -22px rgba(0, 0, 0, 0.6); }
-.pcard img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 图片单独淡入,盖在卡片自带的骨架底(.pcard 的 --panel-2 背景)上。
+   ★ 关键:淡入的是**图片**,不是整张卡 —— 卡片框和骨架第一帧就在,不藏内容。
+   用户 2026-07-15:「先出骨架 然后再不断加载图片……这样有动画 加载看起来也会快」。
+   img 解码完成前浏览器不渲染它,所以这段 fade 天然只在「图到位」那一刻跑,不需要 JS 控。 */
+.pcard img { width: 100%; height: 100%; object-fit: cover; display: block; animation: img-fade var(--dur-med) var(--ease); }
+@keyframes img-fade { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .pcard img { animation: none; } }
 .pcard .fallback { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-3); }
 .pcard .overlay {
   position: absolute; inset: 0;

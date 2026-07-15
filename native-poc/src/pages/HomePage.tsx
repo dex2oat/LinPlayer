@@ -156,39 +156,52 @@ export default function HomePage({
   const hover = useRef(false);
   const cbarRef = useRef<HTMLDivElement>(null);
 
+  /** 首屏是否还在等第一批数据 —— 控制骨架。null=加载中,[]/有值=到了。 */
+  const [loading, setLoading] = useState(true);
+
   useEffect(() => {
     let alive = true;
     setByLib({});
     setFeatured([]);
     setHeroIdx(0);
     setLogoFail(new Set());
-    (async () => {
-      try {
-        // Hero 走 list_random(服务端 SortBy=Random 且只回有剧照的),不再拿继续观看凑数。
-        const [vs, rz, rnd, favs, cols] = await Promise.all([
-          views(),
-          listResume(12).catch(() => [] as Item[]),
-          listRandom(5).catch(() => [] as Item[]),
-          listFavorites().catch(() => [] as Item[]),
-          // 合集轨道(草稿 L643-649)。没有合集的服务器就是空数组,不是错误 → 静默空。
-          listCollections().catch(() => [] as Item[]),
-        ]);
+    setLoading(true);
+
+    /* ★ 加载结构:骨架先出 → 每块数据各自到、各自渲染 → 媒体库**并发**不串行。
+       用户 2026-07-15 当面纠正:「先出现骨架 然后再不断加载图片 不要等所有图片都能加载再加载」。
+
+       旧写法两个屏障,叠起来是**秒级**的(我之前砍的 668ms 动画只是零头):
+         1) 五个请求 `await Promise.all` —— 收藏/合集慢一点,Hero 就跟着等;
+         2) `for (const v of vs) await listLatest(v)` —— 八个媒体库 = 八次**串行**往返。
+       现在:每个请求**各自** .then 里 set,谁先回谁先画;媒体库用 Promise.all 一次性并发。
+       各块自己有 .catch → 一个源挂了不拖累别的,也不整页报错。 */
+
+    // Hero + 媒体库列表:决定「骨架能不能撤」的两个,先亮。
+    views()
+      .then((vs) => {
         if (!alive) return;
         setLibs(vs);
-        setResume(rz);
-        setFeatured(rnd);
-        setCollections(cols);
-        // 心形要显真状态,不能一律画成未收藏。
-        setFavIds(new Set(favs.map((f) => f.id)));
-        for (const v of vs) {
-          const items = await listLatest(v.id, 20).catch(() => [] as Item[]);
-          if (!alive) return;
-          setByLib((m) => ({ ...m, [v.id]: items }));
+        setLoading(false); // 有库名了,轨道骨架就能各就各位,不必等内容
+        // 每个库**并发**拉,谁先回谁先填 —— 不再一个 await 一个
+        vs.forEach((v) =>
+          listLatest(v.id, 20)
+            .then((items) => alive && setByLib((m) => ({ ...m, [v.id]: items })))
+            .catch(() => {}),
+        );
+      })
+      .catch((e) => {
+        // views 是首页的地基,它挂了才算真错误(其余源挂了都静默)。
+        if (alive) {
+          setErr(String(e));
+          setLoading(false);
         }
-      } catch (e) {
-        if (alive) setErr(String(e));
-      }
-    })();
+      });
+
+    listRandom(5).then((r) => alive && setFeatured(r)).catch(() => {});
+    listResume(12).then((r) => alive && setResume(r)).catch(() => {});
+    listCollections().then((c) => alive && setCollections(c)).catch(() => {});
+    listFavorites().then((f) => alive && setFavIds(new Set(f.map((x) => x.id)))).catch(() => {});
+
     return () => {
       alive = false;
     };
@@ -302,6 +315,12 @@ export default function HomePage({
 
       <div className="scroll" onScroll={onScroll}>
         {err && <div className="empty">加载失败：{err}</div>}
+
+        {/* Hero 骨架:featured 还没回来时垫一块,别让首屏顶上一片空白。
+            list_random 通常是最快回来的之一,但网络差时也可能慢 —— 骨架保证「一进来就有东西」。 */}
+        {!hero && !err && (
+          <div className="hero hm-hero skeleton" style={{ cursor: "default" }} aria-hidden />
+        )}
 
         {hero && (
           <div
@@ -456,6 +475,18 @@ export default function HomePage({
             </section>
           )}
 
+          {/* 媒体库入口行:loading 时先出骨架(和下面每个轨道同款),不要等 views() 回来才凭空冒出来。 */}
+          {loading && (
+            <section>
+              <div className="rowlab"><span className="h">媒体库</span></div>
+              <div className="rail">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div className="r-wide" key={i}><div className="pcard thumb-ar skeleton" /></div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {libs.length > 0 && (
             <section>
               <div className="rowlab">
@@ -490,6 +521,20 @@ export default function HomePage({
               </Rail>
             </section>
           )}
+
+          {/* views() 还没回来时,先出两条「最新」轨道骨架占位 —— libs 空时下面的 libs.map
+              一条都不画,首屏下半会是空的。有 libs 了这段就撤。 */}
+          {loading &&
+            Array.from({ length: 2 }).map((_, s) => (
+              <section key={`sk-${s}`}>
+                <div className="rowlab"><span className="h skeleton" style={{ width: 120, height: 15, borderRadius: 6 }} /></div>
+                <div className="rail">
+                  {Array.from({ length: 7 }).map((_, i) => (
+                    <div className="r-poster" key={i}><div className="pcard poster-ar skeleton" /></div>
+                  ))}
+                </div>
+              </section>
+            ))}
 
           {libs.map((lib) => {
             const items = byLib[lib.id];

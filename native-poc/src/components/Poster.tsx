@@ -8,6 +8,8 @@ type Props = {
   variant?: "poster" | "thumb";
   /** 单击就走它 —— 卡片唯一的主操作。 */
   onOpen: (it: Item) => void;
+  /** 入场动画的阶梯下标(同一行卡片错开一点点淡入)。列表里传 map 的 i 即可,不传按 0。 */
+  index?: number;
   /** 右键菜单。**只有首页传**(标记已/未播放、添加到喜欢);
       媒体库/收藏/搜索浮层不传 = 没有右键(保留浏览器默认)。 */
   onContextMenu?: (e: MouseEvent, it: Item) => void;
@@ -24,6 +26,7 @@ export default function Poster({
   session,
   variant = "poster",
   onOpen,
+  index = 0,
   onContextMenu,
 }: Props) {
   const thumb = variant === "thumb";
@@ -41,7 +44,8 @@ export default function Poster({
       onContextMenu={onContextMenu ? (e) => onContextMenu(e, item) : undefined}
     >
       <div
-        className={`pcard ${thumb ? "thumb-ar" : "poster-ar"}`}
+        className={`pcard ${thumb ? "thumb-ar" : "poster-ar"} enter`}
+        style={{ animationDelay: `${Math.min(index, 12) * 24}ms` }}
         /* 单击直接进详情:不再延后一拍等双击了 —— 没有双击,延迟只会让点击发粘。 */
         onClick={() => onOpen(item)}
         title={label}
@@ -49,23 +53,17 @@ export default function Poster({
         {item.has_primary ? (
           <img
             src={src}
-            /* ★★ 这里曾是「不秒加载」的真凶,和缓存毫无关系。别把它们加回来。
+            /* ★ 关于「切换回去不秒加载」—— **别再拿这里的动画开刀,那不是原因**(用户 2026-07-15
+               当面纠正过我一次:「其实不秒加载并不是你的动画问题」)。
 
-               (1) `enter` + 按卡片下标算的 `animationDelay`(最多 288ms):
-                   `.enter` = `animation: enter var(--dur-slow) both` = **380ms**,
-                   而 `both` 意味着延迟期间元素**opacity:0 完全看不见**。
-                   叠上最多 288ms 的阶梯延迟 → 一行里最后一张卡 **668ms** 才画完。
-                   用户 2026-07-15:「切换回去之后还是不会秒加载 明明这些图片又不大」——
-                   图早就在磁盘缓存里(实测 124 张/35.9MB),是 UI 自己在慢慢演。
-                   **缓存再快也追不过一个写死 668ms 的动画。**
+               我曾量到「.enter 380ms + 按下标最多 288ms 阶梯 = 最后一张卡 668ms」,就把动画
+               砍了 —— **那是拿掉表象**。真正的原因在 HomePage 的加载结构:五个请求 Promise.all
+               等齐才 set、媒体库还串行 await(见那边的长注释),那是**秒级**的,668ms 是零头。
+               结构修好后「骨架先出 → 图片陆续进来 → 每张淡入」正是用户要的观感。
 
-               (2) `loading="lazy"`:浏览器要等布局+相交检测才开始拉,首屏可见的卡
-                   平白多等一轮。媒体库那种长列表值得 lazy,但那也该由列表自己决定,
-                   不是每张卡都默认拖一下。改用 decoding="async" —— 解码不挡主线程,
-                   但请求立刻发。
-
-               入场动效不是不能有,但**不能挡着内容出现**。要加回动效请只动 transform,
-               别动 opacity,更别用 fill-mode:both 把内容藏在延迟里。 */
+               lazy + async 一起用:lazy 让屏幕外的卡不发请求(轨道 20 张只可见 6 张),
+               async 让解码不挡主线程。两者不冲突。 */
+            loading="lazy"
             decoding="async"
             onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")}
           />
