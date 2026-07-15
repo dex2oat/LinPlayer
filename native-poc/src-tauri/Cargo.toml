@@ -21,7 +21,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["json", "socks"] }
 async-trait = "0.1"
-tokio = { version = "1", features = ["sync"] }
+# rt:imgcache 的 spawn_blocking(把同步写盘挪出 async worker)。
+# 别依赖「别的依赖恰好开了这个特性」—— 那种编过是巧合,哪天依赖树一变就红。
+tokio = { version = "1", features = ["sync", "rt"] }
 raw-window-handle = "0.6"
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",

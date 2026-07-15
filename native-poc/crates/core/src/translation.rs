@@ -1895,21 +1895,42 @@ pub mod whisper {
             .unwrap_or_else(|| PathBuf::from("."))
     }
 
-    /// 能跑起来即视为可用(PATH 命中判定)。
+    /// PATH 探测结果的进程内缓存。见 [`runs_ok`] 上关于「为什么缓存是正确的」的论证。
+    static RUNS_OK_MEMO: std::sync::OnceLock<std::sync::Mutex<HashMap<String, bool>>> =
+        std::sync::OnceLock::new();
+
+    /// 能跑起来即视为可用(PATH 命中判定)。**结果按 exe 名缓存到进程退出**。
+    ///
+    /// ## 为什么非缓存不可
+    /// `.status()` 是**同步等子进程退出**。whisper-cli + ffmpeg 各最多试 `-version`/`--help`
+    /// 两次 = 一次探测最多 4 次进程创建。用户 2026-07-15 报「每次打开设置的字幕翻译每次都会卡」
+    /// 就是这个:面板一 mount 就跑一遍,切走再切回重新 mount,又跑一遍。
+    ///
+    /// ## 为什么缓存是**正确**的,不只是快
+    /// 1. `Command` 用的是**本进程启动时继承的 PATH**。用户中途往系统 PATH 里装了 ffmpeg,
+    ///    本进程也看不见 —— 那本来就得重启 App。缓存没有丢失任何本可感知的变化。
+    /// 2. App 内下载的 ffmpeg 落在 `bin_dir()`,而 resolve_* 里 `cached.is_file()` 排在
+    ///    runs_ok **前面**。所以下载完立刻就能命中,根本不经过这里。
+    ///
+    /// 即:缓存唯一"看不见"的场景,是本进程原本也看不见的场景。
     fn runs_ok(exe: &str) -> bool {
-        for arg in ["-version", "--help"] {
-            if std::process::Command::new(exe)
+        let memo = RUNS_OK_MEMO.get_or_init(Default::default);
+        if let Some(hit) = memo.lock().unwrap().get(exe) {
+            return *hit;
+        }
+        // ★ 探测时不持锁:否则两个引擎同时探,后一个会被前一个的进程创建整个卡住,
+        //   等于白缓存。宁可偶尔重复探一次,也不要把锁按在同步 spawn 上面。
+        let ok = ["-version", "--help"].into_iter().any(|arg| {
+            std::process::Command::new(exe)
                 .arg(arg)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
                 .map(|s| s.success())
                 .unwrap_or(false)
-            {
-                return true;
-            }
-        }
-        false
+        });
+        memo.lock().unwrap().insert(exe.to_string(), ok);
+        ok
     }
 
     /// 定位 ffmpeg,找不到返回 None。

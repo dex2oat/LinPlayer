@@ -16,6 +16,7 @@ import {
   fmtTime,
   getPrefs,
   itemDetail,
+  peekItemDetail,
   itemMedia,
   listAccounts,
   personUrl,
@@ -153,7 +154,11 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
   // 媒体信息失败静默(整段不渲染),不能把整页搞红。
   useEffect(() => {
     let alive = true;
-    setD(null);
+    /* ★ 有缓存就先把它画出来,别先 setD(null)。
+       原来无条件清空 = 每次进详情页必然闪一下转圈,哪怕数据 3 秒前才拿过。
+       itemDetail 命中缓存时是同步返回的,下面那个 .then 会立刻把它补齐 ——
+       这里 peek 只是为了**这一帧**就有内容,不留白。 */
+    setD(peekItemDetail(item.id) ?? null);
     setErr("");
     setExpand(false);
     setPlayedLocal(item.played);

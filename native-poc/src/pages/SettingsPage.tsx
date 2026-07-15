@@ -680,19 +680,31 @@ function SubTransPane() {
   const [prog, setProg] = useState<{ what: string; pct: number } | null>(null);
 
   const refreshWhisper = async () => {
-    setModels((await whisperModels()) as unknown as WhisperRow[]);
-    setDeps((await whisperDeps()) as unknown as WhisperDeps);
+    // 并发:两者互不依赖,串行只是白等一轮。
+    const [m, d] = await Promise.all([whisperModels(), whisperDeps()]);
+    setModels(m as unknown as WhisperRow[]);
+    setDeps(d as unknown as WhisperDeps);
   };
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const cur = (await getTranslationSettings()) as unknown as TrSettings;
+        /* ★ 四个 invoke 全并发,别串行 await。
+           用户 2026-07-15 报「每次打开设置的字幕翻译每次都会卡」:
+           核层那边是元凶(whisper_deps 同步 spawn 子进程 + 命令跑在主线程,已改 async+缓存),
+           但这里串行 await 把四次往返摞成一条链,等于把那个卡再放大四倍。 */
+        const [cur, status, m, d] = await Promise.all([
+          getTranslationSettings(),
+          translationEngineStatus(),
+          whisperModels(),
+          whisperDeps(),
+        ]);
         if (!alive) return;
-        setS(cur);
-        setSt(await translationEngineStatus());
-        await refreshWhisper();
+        setS(cur as unknown as TrSettings);
+        setSt(status);
+        setModels(m as unknown as WhisperRow[]);
+        setDeps(d as unknown as WhisperDeps);
       } catch (e) {
         f.err(e);
       }

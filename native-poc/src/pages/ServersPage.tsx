@@ -8,10 +8,12 @@ import {
   accountIcon,
   clearAccountIcon,
   listAccounts,
-  login,
+  onAccountsChanged,
   probeAccounts,
   probeLines,
+  relogin,
   removeAccount,
+  syncLines,
   reorderAccounts,
   setAccountIconFile,
   setActiveLine,
@@ -20,7 +22,7 @@ import {
   updateAccount,
 } from "../lib/api";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { IconClose, IconPlus, IconRefresh, IconSearch, IconServer } from "../app/icons";
+import { IconClose, IconGauge, IconPlus, IconRefresh, IconSearch, IconServer } from "../app/icons";
 import "./ServersPage.css";
 
 /* ============================================================
@@ -133,6 +135,10 @@ export default function ServersPage({ activeServer, onChanged, onGoAdd, onEnter 
       }
     })();
   }, [reload]);
+
+  /* 反向也要通:从侧栏切服/删服后,本页这份副本同样会陈旧。
+     两份 useState 副本谁都不知道对方改了 —— 广播是唯一的连接。 */
+  useEffect(() => onAccountsChanged(() => void reload()), [reload]);
 
   /* 图标:icon_url 是网络地址/本地路径时找核层要 data URI(它负责下载+缓存)。
      失败**不弹错**(每台服都弹会刷屏),按草稿回落内置图标即可。 */
@@ -402,10 +408,14 @@ function Scrim({ onClose, children }: { onClose: () => void; children: React.Rea
   );
 }
 
-/** 编辑:名称/地址/用户名/密码/备注/TLS(草稿 pin 26)。
-    ★ 名称/备注/密码/TLS 走 update_account —— **不能用 login 顶替**:
-    login 是按「登录结果里的 server」upsert 的,改了地址会 upsert 出**第二个账号**,
-    原账号还在,用户以为改好了其实是加了一台。真要换地址请走「重新登录」。 */
+/** 编辑:**服务器名称 / 账号 / 密码 / 备注**(+TLS 开关)。
+ *
+ *  字段与顺序是用户 2026-07-15 定的原话:「第一行是服务器名称 第二行账号 第三行密码 第四行备注」,
+ *  并明确「**服务器地址是「服务器线路」里面填写的**」—— 故这里**没有地址行**,别加回来。
+ *
+ *  ★ 改账号/密码走 relogin(真登一次换 token),改名称/备注/TLS 走 update_account。
+ *    只把 user_name 字段改掉而不重登 = token 还是旧用户的,表现为「显示新账号、
+ *    媒体库还是旧账号的」,而且不报错。 */
 function EditDialog({
   srv,
   onClose,
@@ -418,23 +428,33 @@ function EditDialog({
   onErr: (m: string) => void;
 }) {
   const [name, setName] = useState(srv.name);
+  const [username, setUsername] = useState(srv.user_name);
   const [password, setPassword] = useState("");
   const [remark, setRemark] = useState(srv.remark || "");
   const [tls, setTls] = useState(srv.allow_insecure_tls);
   const [busy, setBusy] = useState(false);
 
+  const userChanged = username.trim() !== srv.user_name;
+
   async function save() {
     if (busy) return;
+    // 换账号必须验一次 —— 没有密码就没法验,存下去只会得到一个打不开的账号。
+    if (userChanged && !password) {
+      onErr("换账号必须填密码(要重新登录一次才能拿到新 token)");
+      return;
+    }
     setBusy(true);
     try {
-      // 不传的字段核层不动;传空串才是清空 —— 故备注恒传(允许清空),密码仅在填了时传。
-      await updateAccount(srv.server, {
-        name: name.trim(),
-        remark,
-        allowInsecureTls: tls,
-        ...(password.trim() ? { password } : {}),
-      });
-      onDone(false); // 只改本地账号字段,会话不变
+      // 先换凭据(会真登一次),再落名称/备注/TLS —— 顺序反了的话 relogin 里的
+      // find_mut 改的是同一条记录,不冲突,但登录失败时不该已经把名字改掉了。
+      let sessionChanged = false;
+      if (userChanged || password) {
+        await relogin(srv.server, username.trim(), password);
+        sessionChanged = true;
+      }
+      // 不传的字段核层不动;传空串才是清空 —— 故备注恒传(允许清空)。
+      await updateAccount(srv.server, { name: name.trim(), remark, allowInsecureTls: tls });
+      onDone(sessionChanged);
     } catch (e) {
       onErr(String(e));
       setBusy(false);
@@ -450,20 +470,17 @@ function EditDialog({
         </button>
       </div>
       <div className="dbd">
+        {/* 顺序 = 用户口径:名称 → 账号 → 密码 → 备注。**地址不在这儿**,在「服务器线路」里。 */}
         <div className="fld">
-          <label>服务器地址(只读,改地址请走「重新登录」)</label>
-          <input className="field" value={srv.line_url} disabled />
-        </div>
-        <div className="fld">
-          <label>显示名称</label>
+          <label>服务器名称</label>
           <input className="field" value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div className="fld">
-          <label>用户名(只读,换账号请走「重新登录」)</label>
-          <input className="field" value={srv.user_name} disabled />
+          <label>账号</label>
+          <input className="field" value={username} onChange={(e) => setUsername(e.target.value)} />
         </div>
         <div className="fld">
-          <label>密码(留空 = 不改)</label>
+          <label>密码{userChanged ? "(换账号必填)" : "(留空 = 不改)"}</label>
           <input
             className="field"
             type="password"
@@ -491,7 +508,13 @@ function EditDialog({
   );
 }
 
-/** 重新登录:固定地址,重输凭据。这里用 login 是对的 —— 地址不变,upsert 命中同一账号。 */
+/** 重新登录:**只重填账号+密码**。
+ *
+ *  用户 2026-07-15:「重新登录是重新填写账密,线路不用重新填写,用的还是服务器线路里面的线路」。
+ *  故这里没有地址行 —— 核层 relogin 自己拿账号当前生效的那条线路去认证。
+ *
+ *  ★ 别改回 login():login 按「登录时用的地址」upsert,而 relogin 认证走的是线路地址
+ *    (≠ 账号主键)—— 用 login 会**凭空多出一台服务器**,原账号还在,用户以为重登好了。 */
 function ReloginDialog({
   srv,
   onClose,
@@ -511,7 +534,7 @@ function ReloginDialog({
     if (busy) return;
     setBusy(true);
     try {
-      await login(srv.server, username.trim(), password);
+      await relogin(srv.server, username.trim(), password);
       onDone(true);
     } catch (e) {
       onErr(String(e));
@@ -528,12 +551,9 @@ function ReloginDialog({
         </button>
       </div>
       <div className="dbd">
+        {/* 地址行已按用户要求删掉:线路在「服务器线路」里维护,重登沿用当前生效那条。 */}
         <div className="fld">
-          <label>服务器地址</label>
-          <input className="field" value={srv.server} disabled />
-        </div>
-        <div className="fld">
-          <label>用户名</label>
+          <label>账号</label>
           <input className="field" value={username} onChange={(e) => setUsername(e.target.value)} />
         </div>
         <div className="fld" style={{ marginBottom: 0 }}>
@@ -610,7 +630,38 @@ function LinesDialog({
     return i < 0 ? 0 : i;
   };
 
+  /** 同步线路 = 从服主部署的 emby_ext_domains 拉取备用域名并入表(草稿 pin 29 的原意)。
+   *  ★ 这个按钮此前调的是 probeLines(测延迟)—— 名字叫「同步线路」却一条线路都不拉,
+   *    是我做错了。测延迟已拆成旁边独立的按钮。
+   *  ★ supported=false(服主没部署)是**常态**,绝大多数 Emby 服务器都没装,不能当错误弹。 */
   async function sync() {
+    setBusy("sync");
+    try {
+      const r = await syncLines(srv.server);
+      if (!r.supported) {
+        onErr("这台服务器没有提供线路表(服主未部署 emby_ext_domains),线路请手动添加");
+        return;
+      }
+      // 拉完重读:核层可能把裸地址落成了「主线」,本地这份副本必须跟着更新,否则下次
+      // persist() 会拿旧表整表覆写,把刚同步进来的线路又抹掉。
+      const fresh = await listAccounts();
+      const me = fresh.find((x) => x.server === srv.server);
+      if (me) {
+        setRows(me.lines);
+        setActive(me.active_line);
+      }
+      setMs({}); // 行变了,旧延迟对不上号
+      onDone(true);
+      onErr(r.added ? `已同步 ${r.added} 条新线路(共 ${r.total} 条)` : `线路已是最新(共 ${r.total} 条)`);
+    } catch (e) {
+      onErr(String(e));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  /** 测延迟:并发 GET 各线路的 /System/Info/Public(不是 ping)。单条不通 = ms:null,不算错误。 */
+  async function probe() {
     setBusy("probe");
     try {
       const r = await probeLines(srv.server);
@@ -694,7 +745,12 @@ function LinesDialog({
       <div className="dbd">
         <div className="sv-linebar">
           <button className="btn sm" disabled={!!busy} onClick={sync}>
-            {busy === "probe" ? <span className="spinner" /> : <><IconRefresh size={14} /> 同步线路</>}
+            {busy === "sync" ? <span className="spinner" /> : <><IconRefresh size={14} /> 同步线路</>}
+          </button>
+          {/* 测延迟拆成独立按钮(用户 2026-07-15 点名)。此前它和「同步线路」是同一个按钮,
+              于是那个按钮名不副实:叫同步、干的却是测速。 */}
+          <button className="btn sm" disabled={!!busy} onClick={probe}>
+            {busy === "probe" ? <span className="spinner" /> : <><IconGauge size={14} /> 测延迟</>}
           </button>
           <button
             className="btn sm"
@@ -753,9 +809,9 @@ function LinesDialog({
           </div>
         )}
 
-        <p className="sv-note">
-          延迟自动探测(GET /System/Info/Public,非 ping),可拖动排序;当前线路高亮。
-        </p>
+        {/* 这里曾有一句「延迟自动探测(GET /System/Info/Public,非 ping),可拖动排序;当前线路高亮」。
+            用户 2026-07-15:「下面对于测延迟的描述去掉 没有必要写出来」。
+            而且那句还是**错的** —— 抄自草稿,但本弹窗里延迟从来不自动探,得点按钮。别加回来。 */}
       </div>
       <div className="dft">
         <button className="btn" onClick={onClose}>关闭</button>

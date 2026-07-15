@@ -7,6 +7,7 @@ pub mod download;
 pub mod emby;
 pub mod http;
 pub mod icon_cache;
+pub mod image_cache;
 pub mod media;
 pub mod net;
 pub mod plugins;

@@ -1,3 +1,4 @@
+mod imgcache;
 mod mpv;
 mod plugins_host;
 mod shaders;
@@ -153,6 +154,61 @@ async fn login(
     *state.session.lock().unwrap() = Some(session);
     *state.source.lock().unwrap() = None; // 登 Emby → 上一个源作废
     Ok(result)
+}
+
+/// 重新登录:**地址不用填**,拿账号当前生效的线路去认证,只换凭据。
+///
+/// 用户 2026-07-15:「重新登录是重新填写账密,线路不用重新填写,用的还是服务器线路里面的线路」。
+///
+/// ## 为什么不能复用 `login`
+/// `login` 是按**登录时用的那个地址**做 upsert 的(`result.server`)。
+/// 而这里认证走的是 `direct_line_url()`(可能是某条 CDN 线路),它 ≠ 账号主键 `a.server`。
+/// 拿 login 顶替 → upsert 命中不到原账号 → **凭空多出一台服务器**,原账号还在,
+/// 用户以为重登好了,其实是加了一台。EditDialog 上原本就有一段注释在警告这个坑,
+/// 现在地址挪进线路表,这个坑就更近了 —— 所以这里 find_mut 定点改字段,不 upsert。
+///
+/// ## 用户名也能改
+/// 编辑框的「账号」现在可编辑。改账号 = 换了个人,token/user_id 全得换 —— 必须真登一次,
+/// 不能只把 user_name 字段改掉(那样 token 还是旧用户的,表现为「显示是新账号、
+/// 看到的还是旧账号的媒体库」这种要命的静默错位)。
+#[tauri::command]
+async fn relogin(
+    state: State<'_, AppState>,
+    server_id: String,
+    username: String,
+    password: String,
+) -> Result<(), String> {
+    // ★ 锁不跨 await。
+    let (line_url, device_id) = {
+        let cfg = state.config.lock().unwrap();
+        let a = cfg.find(&server_id).ok_or("找不到该服务器")?;
+        (a.direct_line_url().to_string(), cfg.device_id.clone())
+    };
+    let (_, result) = emby::login(&state.http, &line_url, &username, &password, &device_id).await?;
+
+    let is_active = {
+        let mut cfg = state.config.lock().unwrap();
+        let a = cfg.find_mut(&server_id).ok_or("找不到该服务器")?;
+        // 定点换凭据。**不动 server/name/remark/icon/lines/active_line** —— 那些是用户的编辑。
+        a.token = result.token.clone();
+        a.user_id = result.user_id.clone();
+        a.user_name = result.user_name.clone();
+        a.password = (!password.is_empty()).then_some(password);
+        cfg.save();
+        cfg.active_account().map(|x| x.server == server_id).unwrap_or(false)
+    };
+    // 是当前活跃账号就顺手把内存会话也换了,否则后续请求还在拿旧 token 打 401。
+    if is_active {
+        let cfg = state.config.lock().unwrap();
+        let a = cfg.find(&server_id).ok_or("找不到该服务器")?;
+        *state.session.lock().unwrap() = Some(Session {
+            server: a.active_line_url(),
+            token: a.token.clone(),
+            user_id: a.user_id.clone(),
+            device_id: cfg.device_id.clone(),
+        });
+    }
+    Ok(())
 }
 
 /// 已登录的 Emby 账号(用于启动时跳过登录页直接进库);无则 None。
@@ -627,6 +683,65 @@ fn set_lines(
     a.lines = lines;
     cfg.save();
     Ok(())
+}
+
+/// 「同步线路」的结果。`supported=false` 时 UI 该说「这台服务器没提供线路表」,不是报错。
+#[derive(serde::Serialize)]
+struct SyncedLines {
+    /// 服主是否部署了 emby_ext_domains(端点 200 且 ok:true)。
+    supported: bool,
+    /// 新增了几条(已有的 url 不会重复加)。
+    added: usize,
+    /// 同步后的线路总数。
+    total: usize,
+}
+
+/// 同步线路:从服主部署的 emby_ext_domains 拉取备用域名,并入本地线路表。
+///
+/// 用户 2026-07-15 点名要接的就是这个(https://github.com/uhdnow/emby_ext_domains)。
+/// 此前「同步线路」这个按钮**名不副实** —— 它调的是 probe_lines(测延迟),
+/// 一条线路都不会拉。草稿 pin 29 写的是「点一下一键拉取/更新全部线路」,是我做错了。
+///
+/// ## 合并策略:只增不删,按 url 去重
+/// **绝不整表覆写。** 用户手填的线路(内网地址、自建 CDN)服主的表里不可能有,
+/// 覆写等于把用户的配置删了 —— 而且他多半是在「当前线路连不上」时点的同步,
+/// 那一刻把他仅有的能用线路删掉是灾难。
+///
+/// ## active_line 必须跟着原来那条 url 走
+/// active_line 是**下标**不是 id。往表里插行会让下标指到别的线路上 ——
+/// 用户点个「同步线路」结果生效线路被悄悄换了,还是那句:不报错,只是干了别的事。
+/// 这里先把当前 url 记下来,合并完按 url 找回下标。有测试钉。
+#[tauri::command]
+async fn sync_lines(state: State<'_, AppState>, server_id: String) -> Result<SyncedLines, String> {
+    // ★ 锁不能跨 await(见 [[prefetch-proxy-deadlock]]):先取完数据立刻放锁。
+    let sess = {
+        let cfg = state.config.lock().unwrap();
+        let a = cfg.find(&server_id).ok_or("找不到该服务器")?;
+        if a.is_file_browse() {
+            return Err("网盘/聚合源没有线路表".into());
+        }
+        Session {
+            server: a.direct_line_url().to_string(),
+            token: a.token.clone(),
+            user_id: a.user_id.clone(),
+            device_id: cfg.device_id.clone(),
+        }
+    };
+    let remote = emby::ext_domains(&state.http, &sess).await?;
+    if remote.is_empty() {
+        let total = {
+            let cfg = state.config.lock().unwrap();
+            cfg.find(&server_id).map(|a| a.lines.len()).unwrap_or(0)
+        };
+        return Ok(SyncedLines { supported: false, added: 0, total });
+    }
+
+    let mut cfg = state.config.lock().unwrap();
+    let a = cfg.find_mut(&server_id).ok_or("找不到该服务器")?;
+    let added = linplayer_core::config::merge_lines(a, &remote);
+    let total = a.lines.len();
+    cfg.save();
+    Ok(SyncedLines { supported: true, added, total })
 }
 
 /// 切换生效线路;若切的是当前活跃服务器,同步刷新会话让后续请求立刻走新线路。
@@ -1610,9 +1725,25 @@ fn add_subtitle(
 // ---------- 字幕翻译 ----------
 use linplayer_core::translation as tr;
 
+/// 把一段阻塞活儿(磁盘读、进程 spawn)挪到 tokio 的阻塞线程池。
+///
+/// ★ 为什么需要它:**Tauri 的非 async 命令跑在主线程**,里面任何同步 IO 都直接冻 UI。
+///   改成 `async fn` 只是让它进 tokio 的**异步**运行时 —— 阻塞调用在那儿一样会占死 worker,
+///   必须再套一层 spawn_blocking 才真的挪走。别只加 async 就以为好了。
+async fn blocking<T, F>(f: F) -> T
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    // JoinError 只在任务自己 panic 或被 abort 时出现 —— 两者都是 bug,不该悄悄吞掉。
+    tokio::task::spawn_blocking(f).await.expect("阻塞任务崩了")
+}
+
 #[tauri::command]
-fn get_translation_settings() -> tr::TranslationSettings {
-    tr::TranslationSettings::load()
+async fn get_translation_settings() -> tr::TranslationSettings {
+    // ★ async + spawn_blocking:Tauri 的**非 async 命令跑在主线程**,而 load() 是磁盘读。
+    //   见 whisper_deps 上那段完整说明。
+    blocking(tr::TranslationSettings::load).await
 }
 
 #[tauri::command]
@@ -1707,13 +1838,16 @@ fn translate_live_stop(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-fn translation_engine_status() -> HashMap<String, bool> {
-    let s = tr::TranslationSettings::load();
-    use tr::TranslationEngineKind::*;
-    [Openai, Anthropic, BaiduGeneral, BaiduLlm, Tencent]
-        .into_iter()
-        .map(|k| (k.storage_key().to_string(), tr::build_engine(k, &s).is_some()))
-        .collect()
+async fn translation_engine_status() -> HashMap<String, bool> {
+    blocking(|| {
+        let s = tr::TranslationSettings::load();
+        use tr::TranslationEngineKind::*;
+        [Openai, Anthropic, BaiduGeneral, BaiduLlm, Tencent]
+            .into_iter()
+            .map(|k| (k.storage_key().to_string(), tr::build_engine(k, &s).is_some()))
+            .collect()
+    })
+    .await
 }
 
 /// 整轨翻译:取当前播放条目的某条字幕流 → 翻译 → 落 SRT → 挂给 mpv。
@@ -1791,17 +1925,20 @@ fn whisper_model_of(key: &str) -> Result<tr::WhisperModel, String> {
 }
 
 #[tauri::command]
-fn whisper_models() -> Vec<WhisperModelInfo> {
-    WHISPER_MODELS
-        .into_iter()
-        .map(|m| WhisperModelInfo {
-            key: m.storage_key().to_string(),
-            display_name: m.display_name().to_string(),
-            size_label: m.size_label().to_string(),
-            downloaded: tr::whisper::is_downloaded(m),
-            downloaded_bytes: tr::whisper::downloaded_size(m),
-        })
-        .collect()
+async fn whisper_models() -> Vec<WhisperModelInfo> {
+    blocking(|| {
+        WHISPER_MODELS
+            .into_iter()
+            .map(|m| WhisperModelInfo {
+                key: m.storage_key().to_string(),
+                display_name: m.display_name().to_string(),
+                size_label: m.size_label().to_string(),
+                downloaded: tr::whisper::is_downloaded(m),
+                downloaded_bytes: tr::whisper::downloaded_size(m),
+            })
+            .collect()
+    })
+    .await
 }
 
 /// 模型下载(1-3GB)。不报进度用户会以为卡死。
@@ -1836,12 +1973,23 @@ struct WhisperDeps {
 }
 
 #[tauri::command]
-fn whisper_deps() -> WhisperDeps {
-    let s = tr::TranslationSettings::load();
-    WhisperDeps {
-        whisper: tr::whisper::resolve_whisper(&s.whisper_binary),
-        ffmpeg: tr::whisper::resolve_ffmpeg(&s.ffmpeg_path),
-    }
+async fn whisper_deps() -> WhisperDeps {
+    /* ★★ 这是「每次打开字幕翻译都卡」的元凶(用户 2026-07-15 报)。
+       resolve_whisper/resolve_ffmpeg 在前面几步都落空时会走到 runs_ok,
+       而 runs_ok 用 `Command::status()` **同步等子进程退出** —— 最多 4 次进程创建。
+
+       Tauri 的**非 async 命令默认在主线程执行**,于是这 4 次 spawn 全程冻 UI。
+       两道一起上:
+         1) 这里 async + spawn_blocking → 挪出主线程,首次打开也不冻;
+         2) runs_ok 自己按 exe 名缓存 → 第二次打开根本不 spawn(见那边的正确性论证)。 */
+    blocking(|| {
+        let s = tr::TranslationSettings::load();
+        WhisperDeps {
+            whisper: tr::whisper::resolve_whisper(&s.whisper_binary),
+            ffmpeg: tr::whisper::resolve_ffmpeg(&s.ffmpeg_path),
+        }
+    })
+    .await
 }
 
 /// 自动下载 ffmpeg(Win/macOS)。Linux 是 .tar.xz,core 解不了 —— 会返回明确错误让用户装包管理器。
@@ -1880,25 +2028,6 @@ fn screenshot(state: State<'_, AppState>, dir: Option<String>) -> Result<String,
     Ok(s)
 }
 
-/// 画质滤镜强度 0~100。落盘持久化 + 立即对在播的画面生效。
-/// 返回是否真设上了 —— 参数名不对时 mpv 会拒掉整个 glsl-shader-opts 且**毫无提示**。
-#[tauri::command]
-fn set_shader_strength(state: State<'_, AppState>, pct: u8) -> Result<bool, String> {
-    let pct = pct.min(100);
-    {
-        let mut cfg = state.config.lock().unwrap();
-        cfg.prefs.shader_strength = pct;
-        cfg.save();
-    }
-    // 没在播 / 当前没挂 shader → 存下就行,下次挂载时自然带上。
-    let guard = state.player.lock().unwrap();
-    let Some(p) = guard.as_ref() else { return Ok(true) };
-    if p.shader_count() == 0 {
-        return Ok(true);
-    }
-    Ok(p.set_shader_opts(&shaders::strength_opts(pct)))
-}
-
 /// 超分档位清单 `(id, 显示名, 窗口模式是否也生效)`。
 /// 第三个字段让 UI 在**点之前**就标出「需放大」—— 用户不该点完看不出变化再去猜。
 #[tauri::command]
@@ -1929,13 +2058,14 @@ fn set_shader_level(state: State<'_, AppState>, level: String) -> Result<ShaderA
         .join("LinPlayer")
         .join("shaders");
     let paths = shaders::shader_paths(&dir, &level)?;
-    let strength = state.config.lock().unwrap().prefs.shader_strength;
     let guard = state.player.lock().unwrap();
     let p = guard.as_ref().ok_or("播放器未就绪")?;
-    /* 强度必须**每次挂载都重设**:glsl-shader-opts 是全局的,而用户可能在没播放时改过强度。
-       不设 = 吃 shader 自带默认(CAS STR=0.5,只开一半)—— 用户实测「强度有点低」就是这个。 */
-    if !paths.is_empty() && !p.set_shader_opts(&shaders::strength_opts(strength)) {
-        poclog(&format!("警告: glsl-shader-opts 没设上(强度 {strength} 不会生效)"));
+    /* 强度是**档位设计的一部分**(见 shaders::preset 的注释),每次挂载都得重设:
+       glsl-shader-opts 是全局的,不设就吃 shader 自带默认(CAS STR=0.5,只开一半)——
+       用户实测「看不太出来」正是这个。切到 off 时 opts 为空串,顺带把上一档的参数清掉。 */
+    let opts = shaders::shader_opts(&level);
+    if !p.set_shader_opts(opts) {
+        poclog(&format!("警告: glsl-shader-opts 没设上({level} 的强度 {opts} 不会生效)"));
     }
     p.set_shaders(&paths);
     let count = p.shader_count();
@@ -3476,7 +3606,8 @@ pub fn run() {
     let _ = std::fs::remove_file(std::env::temp_dir().join("linplayer_poc.log"));
     let _ = std::fs::remove_file(mpv::mpv_log_path());
 
-    tauri::Builder::default()
+    let builder = imgcache::register(tauri::Builder::default());
+    builder
         .plugin(tauri_plugin_opener::init())
         .manage(AppState {
             http,
@@ -3560,6 +3691,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             login,
+            relogin,
             current_session,
             aggregate_search,
             set_active_server,
@@ -3585,6 +3717,7 @@ pub fn run() {
             reorder_accounts,
             set_lines,
             set_active_line,
+            sync_lines,
             probe_accounts,
             startup_deep_link,
             account_icon,
@@ -3617,7 +3750,6 @@ pub fn run() {
             add_subtitle,
             screenshot,
             shader_levels,
-            set_shader_strength,
             set_shader_level,
             mpv_get,
             mpv_set,
@@ -3761,4 +3893,57 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod api_contract_tests {
+    /// 前端 src/lib/api.ts 里 ACCOUNT_MUTATIONS 这个集合决定「改完账号表要不要广播给侧栏」。
+    /// **名字写错 = 永远不广播 = 侧栏永远不刷新,而且不报任何错**(第一版我就写了个
+    /// 根本不存在的 `add_source_server`,真名是 `source_login`,它还恰好是添加网盘的入口)。
+    ///
+    /// 这条测试把那个集合和本文件真实注册的命令表对一遍 —— TS 那边没有测试环境,
+    /// 就让 Rust 来当这份跨语言契约的守门人。
+    #[test]
+    fn frontend_account_mutation_list_names_only_real_commands() {
+        let api_ts = include_str!("../../src/lib/api.ts");
+        let me = include_str!("lib.rs");
+
+        // 抠出 ACCOUNT_MUTATIONS = new Set([...]) 里的字符串字面量
+        let block = api_ts
+            .split_once("const ACCOUNT_MUTATIONS = new Set([")
+            .expect("api.ts 里找不到 ACCOUNT_MUTATIONS —— 契约变了,先更新本测试")
+            .1
+            .split_once("]);")
+            .expect("ACCOUNT_MUTATIONS 没有收尾")
+            .0;
+        let listed: Vec<&str> = block
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix('"'))
+            .filter_map(|l| l.split('"').next())
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert!(listed.len() >= 10, "只抠出 {} 个命令,解析多半坏了", listed.len());
+
+        // generate_handler! 的注册块
+        let handlers = me
+            .split_once("generate_handler![")
+            .expect("找不到 generate_handler!")
+            .1
+            .split_once("])")
+            .expect("generate_handler! 没有收尾")
+            .0;
+        let registered: Vec<&str> = handlers
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty() && !s.starts_with("//"))
+            .collect();
+
+        for cmd in &listed {
+            assert!(
+                registered.contains(cmd),
+                "api.ts 的 ACCOUNT_MUTATIONS 里有 `{cmd}`,但它不是已注册的 tauri 命令 —— \
+                 这个名字永远不会命中,侧栏改完账号不会刷新,且不报错"
+            );
+        }
+    }
 }

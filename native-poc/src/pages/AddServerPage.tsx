@@ -94,14 +94,38 @@ const NAV: { sec: string; items: { id: TypeId; label: string; icon: () => ReactN
   },
 ];
 
-/** 二维码画布:qrcode 已在 package.json 里(之前一直没人 import,白装)。 */
+/** 服务端已经渲染好的二维码**图**(base64 PNG),原样贴出来。
+ *
+ * ★ 别把它塞进 <Qr>:那是「给一张二维码图再编一个二维码」。
+ *   夸克 /oauth/authorize 我们传的是 `qrcode=1&qr_width=460&qr_height=460` ——
+ *   这两个尺寸参数只有「服务端出图」才讲得通,返回的 qr_data 就是 PNG 的 base64。
+ *   实测(cargo test -p linplayer-core quark_qr_data_shape -- --ignored):
+ *   长度 4860,开头 `iVBORw0KGgo` = PNG 文件头。喂给 QRCode.toDataURL 必然
+ *   「The amount of data is too big to be stored in a QR Code」(纠错级 M 上限 ~2.3KB)。
+ *   用户报的「夸克网盘根本生不出来二维码」就是这个,和「扫码搬配置」那个容量问题无关。 */
+function ServerQr({ b64, size = 176 }: { b64: string; size?: number }) {
+  return (
+    <img
+      className="as-qr"
+      src={`data:image/png;base64,${b64}`}
+      width={size}
+      height={size}
+      alt="扫码登录二维码"
+    />
+  );
+}
+
+/** 二维码画布:把**文本**编成二维码。只给真·文本载荷用(如扫码搬配置的 LPSYNC1: 串)。 */
 function Qr({ data, size = 176 }: { data: string; size?: number }) {
   const [img, setImg] = useState("");
   const [err, setErr] = useState("");
   useEffect(() => {
     let alive = true;
     setErr("");
-    QRCode.toDataURL(data, { width: size, margin: 1, errorCorrectionLevel: "M" })
+    /* 纠错级 L(容量 ~2.9KB)必须和 SettingsPage 的出码点一致 —— 同一个 LPSYNC1 载荷
+       两个入口用不同纠错级,会出现「设置页能出图、添加页报容量超限」这种见了鬼的现象。
+       搬配置是屏对屏近距离扫,不需要 M 级的抗污损余量,换容量更划算。 */
+    QRCode.toDataURL(data, { width: size, margin: 1, errorCorrectionLevel: "L" })
       .then((d) => alive && setImg(d))
       // 载荷过长(配置多到超出二维码容量)时会失败 —— 必须说出来,不能白框糊弄。
       .catch((e) => alive && setErr(String(e)));
@@ -414,7 +438,7 @@ export default function AddServerPage({ onDone, onBack }: Props) {
 
             {quarkWay === "scan" ? (
               <div className="as-scan">
-                {scan ? <Qr data={scan.qr_data} /> : <div className="as-qr placeholder">点下方按钮生成二维码</div>}
+                {scan ? <ServerQr b64={scan.qr_data} /> : <div className="as-qr placeholder">点下方按钮生成二维码</div>}
                 <div className="as-scan-side">
                   <p className="hint" style={{ margin: 0 }}>{scanMsg || "用夸克 App 扫码,确认后自动完成登录。"}</p>
                   <button className="btn primary" disabled={busy} onClick={startScan}>

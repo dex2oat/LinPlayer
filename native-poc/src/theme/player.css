@@ -13,6 +13,13 @@
 }
 .player-layer.idle { opacity: 0; }
 .player-layer { transition: opacity 0.4s ease; }
+/* 全屏切换过程中整层瞬时隐藏 —— 画面(mpv 独立窗口,SetWindowPos 瞬时)和
+   UI(WebView2,合成器先拉伸旧画面再重排)是两个渲染器,天生不同步,追不平。
+   ★ transition:none 是**功能性**的:留着 0.4s 淡出,那 0.4s 里用户看到的正是被拉伸的 UI,
+     等于没藏。淡入交给下面的 fs-in,只在恢复时跑。
+   ★ visibility 而不是 display:none —— display 会让整层重新布局,
+     回来时跑马灯要重新量 scrollWidth,平白抖一下。 */
+.player-layer.fs-busy { opacity: 0; visibility: hidden; transition: none; }
 .player-layer > *, .player-layer .p-slide { pointer-events: auto; }
 
 /* 顶栏 —— position/z-index 是功能性的,不是装饰:见 .p-stage 处的说明。 */

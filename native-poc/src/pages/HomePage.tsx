@@ -16,6 +16,7 @@ import {
   listLatest,
   listRandom,
   listResume,
+  logoUrl,
   posterUrl,
   setFavorite,
   setPlayed,
@@ -44,9 +45,7 @@ import "./HomePage.css";
  * ★ 核层 Item 没有 has_logo 之类的标志位 → 只能靠 <img onError> 兜底回文字标题,
  *   没有别的诚实判据(先 HEAD 探一次纯属多一个往返)。
  */
-function logoUrl(session: LoginResult, itemId: string, maxHeight = 150): string {
-  return `${session.server}/Items/${itemId}/Images/Logo?maxHeight=${maxHeight}&quality=90&api_key=${session.token}`;
-}
+
 
 type Props = {
   session: LoginResult;

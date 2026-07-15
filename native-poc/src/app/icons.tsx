@@ -36,6 +36,9 @@ export const IconSearch = ({ size = 20, className }: P) =>
   svg(size, className, <><circle cx="11" cy="11" r="7" /><path d="m20 20-3.2-3.2" /></>);
 export const IconRefresh = ({ size = 20, className }: P) =>
   svg(size, className, <><path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 4v5h-5" /></>);
+/** 仪表盘:测延迟。 */
+export const IconGauge = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="M4 18a9 9 0 1 1 16 0" /><path d="m12 14 4.2-4.2" /><circle cx="12" cy="14" r="1.4" /></>);
 export const IconPlay = ({ size = 20, className }: P) =>
   svg(size, className, <path d="M7 4.5v15l13-7.5-13-7.5Z" fill="currentColor" stroke="none" />);
 export const IconChevronRight = ({ size = 20, className }: P) =>

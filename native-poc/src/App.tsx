@@ -50,7 +50,6 @@ import {
   setSecondarySub,
   setSecondarySubOpts,
   setShaderLevel,
-  setShaderStrength,
   setSpeed as setSpeedApi,
   setSubDelay,
   setSubStyle,
@@ -130,7 +129,7 @@ export default function App() {
   const [playing, setPlaying] = useState<Item | null>(null);
   const [status, setStatus] = useState<Status>({ time: 0, duration: 0, paused: false, buffered: 0 });
   const [tracks, setTracks] = useState<Track[]>([]);
-  const [prefs, setPrefs2] = useState<Prefs>({ audio_lang: null, sub_lang: null, sub_enabled: true, shader_strength: 70 });
+  const [prefs, setPrefs2] = useState<Prefs>({ audio_lang: null, sub_lang: null, sub_enabled: true });
   const [seeking, setSeeking] = useState<number | null>(null);
   const [panel, setPanel] = useState<Panel>(null);
   const [idle, setIdle] = useState(false);
@@ -166,7 +165,6 @@ export default function App() {
   const [shaderLv, setShaderLv] = useState("off");
   /* 滤镜强度 0~100(核层落盘,起播后由 get_prefs 覆盖成真值)。
      用户实测「强度有点低」—— 因为此前一个参数都没设,一直在吃 shader 自带默认(CAS STR=0.5)。 */
-  const [shaderStr, setShaderStr] = useState(70);
   // 字幕样式:核层无回读命令,故记前端态;初值取 mpv 自身默认(sub-font-size 55 / sub-pos 100)
   const [subFont, setSubFont] = useState("sans-serif");
   const [fontOpen, setFontOpen] = useState(false);
@@ -209,7 +207,7 @@ export default function App() {
     (async () => {
       const s = await currentSession().catch(() => null);
       if (s) setSession(s);
-      getPrefs().then((p) => { setPrefs2(p); setShaderStr(p.shader_strength); }).catch(() => {});
+      getPrefs().then(setPrefs2).catch(() => {});
       /* 这里原本 invoke<DmConfig>("get_danmaku_config") 把 Vec<DanmakuServer> 读成单对象
          (api_url 恒 undefined),而弹幕源的增删改现已归设置页 —— 播放器不需要读它,直接删。
          真要读请走 api.ts 的 getDanmakuConfig(): DanmakuServer[],别再退回单对象。 */
@@ -389,17 +387,42 @@ export default function App() {
     setBrightness(100);
   }
 
-  async function toggleFullscreen() {
+  /* 全屏切换期间把 OSD 藏起来(fsBusy),等窗口尺寸稳定了再淡回来。
+
+     ★ 为什么需要:画面和 UI 是**两个渲染器**,天生不同步 ——
+       - 画面(mpv)是个独立顶层窗口,`SetWindowPos` 一步到位,瞬时;
+       - UI 是 WebView2,原生窗口变尺寸时它的合成器会先把**旧画面拉伸**顶着,
+         再重排重绘,肉眼就是「画面已经放大了,UI 还在慢慢放大」(用户 2026-07-15 原话)。
+     这不是我们哪个 CSS transition 干的(播放层只有 opacity 过渡),
+     是浏览器合成器的行为,**追不平**。所以不去追,而是让这一段过渡不可见。 */
+  const [fsBusy, setFsBusy] = useState(false);
+  const fsTimer = useRef<number | null>(null);
+
+  /** 藏 OSD → 切窗口 → 等尺寸不再变(连续 140ms 没有 resize)→ 放回来。 */
+  async function withFsHidden(fn: (w: ReturnType<typeof getCurrentWindow>) => Promise<void>) {
+    const w = getCurrentWindow();
+    setFsBusy(true);
     try {
-      const w = getCurrentWindow();
-      await w.setFullscreen(!(await w.isFullscreen()));
-    } catch { /* 忽略 */ }
+      await fn(w);
+    } catch { /* 忽略:切不了全屏也得把 OSD 放回来,不能永远藏着 */ }
+    /* 用防抖而不是固定延时:全屏一次会连着来好几个 resize 事件,
+       固定 400ms 要么早了(还在抖)要么晚了(白等)。 */
+    const settle = () => {
+      if (fsTimer.current) window.clearTimeout(fsTimer.current);
+      fsTimer.current = window.setTimeout(() => setFsBusy(false), 140);
+    };
+    settle();
+    window.addEventListener("resize", settle);
+    window.setTimeout(() => window.removeEventListener("resize", settle), 1200);
+  }
+
+  async function toggleFullscreen() {
+    await withFsHidden(async (w) => w.setFullscreen(!(await w.isFullscreen())));
   }
   async function exitFullscreen() {
-    try {
-      const w = getCurrentWindow();
+    await withFsHidden(async (w) => {
       if (await w.isFullscreen()) await w.setFullscreen(false);
-    } catch { /* 忽略 */ }
+    });
   }
 
   useEffect(() => {
@@ -643,14 +666,6 @@ export default function App() {
       ★ 别只看 count 就报「已生效」:Anime4K 每个 pass 都带「输出 > 源 ×1.2」的门槛,
         窗口没比源大时整条链一帧都不跑,画面毫无变化,而旧文案还在说「已生效·挂载 6 个」——
         那就是假开,正是 [[superres-and-toast]] 要防的东西,结果自己又犯了一遍。 */
-  /** 强度:核层落盘 + 立刻对在播画面生效。设不上要如实说 —— mpv 拒掉 glsl-shader-opts 时自己不吭声。 */
-  async function applyStrength(pct: number) {
-    const v = Math.max(0, Math.min(100, pct));
-    setShaderStr(v);
-    try {
-      if (!(await setShaderStrength(v))) say("强度未生效:mpv 拒绝了 shader 参数");
-    } catch (e) { fail("滤镜强度", e); }
-  }
   async function applyShader(id: string) {
     try {
       const r = await setShaderLevel(id);
@@ -854,7 +869,11 @@ export default function App() {
       )}
 
       {playing && (
-        <div className={`player-layer${idle && !panel && !vbar && !ctx ? " idle" : ""}`}>
+        /* fs-busy:全屏切换期间整层瞬时隐藏(见 withFsHidden) —— 和 idle 的淡出是两回事,
+           所以给了独立的 class,别合并:idle 要 0.4s 淡,这里要立刻消失。 */
+        <div
+          className={`player-layer${idle && !panel && !vbar && !ctx ? " idle" : ""}${fsBusy ? " fs-busy" : ""}`}
+        >
           {/* 画面区:接右键菜单(草稿 L1152),点空白收起弹出层 */}
           <div
             className="p-stage"
@@ -1207,12 +1226,10 @@ export default function App() {
                           <span className="rt">需放大</span>
                         </button>
                       ))}
-                      <div className="grp-lab">强度</div>
-                      {/* 此前一个参数都没设 = 一直吃 shader 自带默认(CAS STR=0.5,只开一半),
-                          用户实测「强度有点低」就是这个。0 = 锐化那半彻底不跑。 */}
-                      {stepper("锐化/去噪强度", `${shaderStr}%`,
-                        () => applyStrength(shaderStr - 10),
-                        () => applyStrength(shaderStr + 10))}
+                      {/* ★ 这里曾有一个 0~100 的「强度」stepper。用户 2026-07-15 否掉:
+                          「强度不是靠用户调的 是让你设计挡位的……用户又不会调 没用啊」。
+                          强度已烧进各档(shaders.rs 的 preset()),梯度就是档位名里的 轻/推荐/强。
+                          别再加回任何让用户拧参数的控件。 */}
                       <div className="p-note">
                         锐化/去噪(CAS + Anime4K Denoise)在源分辨率就跑,窗口里也立刻见效。
                         放大类(FSR1 / Anime4K CNN)是放大器,只有画面区大于源画面 1.2 倍才工作 —— 按 F 全屏。

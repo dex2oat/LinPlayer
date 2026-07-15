@@ -97,17 +97,73 @@ impl Account {
     }
 }
 
+/// 线路 url 归一化(去尾斜杠 + 去空白)。**去重必须用它** ——
+/// 服主表里写 `https://a.com/`、用户手填 `https://a.com`,不归一化就会重复加一条,
+/// 每点一次「同步线路」表就长一截。
+fn norm_line_url(u: &str) -> String {
+    u.trim().trim_end_matches('/').to_string()
+}
+
+/// 把服主下发的线路并入账号的线路表。返回**新增**条数。
+///
+/// ## 只增不删(见 sync_lines 命令上的说明)
+/// 用户手填的内网/自建线路服主表里没有,整表覆写等于删用户配置 —— 而他多半正是在
+/// 「线路连不上」时点的同步。
+///
+/// ## active_line 跟着 url 走,不跟着下标走
+/// active_line 是**下标**。空表时 direct_line_url() 回落 `server` 本身,一旦同步进来 N 条,
+/// 下标 0 就从「server」变成了「服主的第一条线路」—— 用户点个同步,生效线路被悄悄换掉。
+/// 所以:合并前先记下当前生效的 url,合并后按 url 找回下标。
+pub fn merge_lines(a: &mut Account, remote: &[crate::emby::ExtDomain]) -> usize {
+    // ★ 先记住「现在实际在用哪个地址」。空表时它是 server 本身,不是任何一条 lines。
+    let active_url = norm_line_url(a.direct_line_url());
+
+    /* 表为空 = 一直在用 `server` 裸地址。必须先把它显式落成第一条线路,
+       否则同步完 lines[0] 变成服主的线路,用户原来那条就从表里消失了。 */
+    if a.lines.is_empty() {
+        a.lines.push(ServerLine {
+            id: "origin".into(),
+            name: "主线".into(),
+            url: a.server.clone(),
+            remark: None,
+        });
+    }
+
+    let mut added = 0;
+    for d in remote {
+        let u = norm_line_url(&d.url);
+        if u.is_empty() || a.lines.iter().any(|l| norm_line_url(&l.url) == u) {
+            continue; // 已有,跳过(名字以本地为准:用户可能改过备注)
+        }
+        a.lines.push(ServerLine {
+            // id 用 url 而非序号:序号会随表变动,url 是这条线路的天然身份。
+            id: u.clone(),
+            name: if d.name.trim().is_empty() { u.clone() } else { d.name.trim().to_string() },
+            url: d.url.trim().to_string(),
+            remark: Some("服务器下发".into()),
+        });
+        added += 1;
+    }
+
+    // 按 url 找回原来那条的下标;找不到(理论上不会)就保守钳回合法区间。
+    a.active_line = a
+        .lines
+        .iter()
+        .position(|l| norm_line_url(&l.url) == active_url)
+        .unwrap_or_else(|| a.active_line.min(a.lines.len() - 1));
+    added
+}
+
 /// 播放偏好(语言选轨)。
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Prefs {
     pub audio_lang: Option<String>,
     pub sub_lang: Option<String>,
     pub sub_enabled: bool,
-    /// 画质滤镜强度 0~100(喂 mpv glsl-shader-opts 的 CAS STR / RCAS SHARP)。
-    /// 默认 70:比 shader 自带的默认(CAS STR=0.5)明显一档 —— 用户实测「强度有点低」。
-    /// 不设成 100:CAS 拉满会开始出现锐化光晕,得留出让用户往上加的余量。
-    #[serde(default = "default_shader_strength")]
-    pub shader_strength: u8,
+    /* 这里曾有 `shader_strength: u8`(0~100 的滤镜强度)+ UI 上一个让用户自己拧的 stepper。
+       用户 2026-07-15 否掉:「强度不是靠用户调的 是让你设计挡位的……用户又不会调 没用啊」。
+       强度现在**烧死在档位里**(src-tauri/src/shaders.rs 的 preset()),梯度由档位名承诺。
+       别再把调参外包给用户。旧配置里残留的这个键会被 serde 忽略,不用迁移。 */
     /// 跨服务器续播:在别的服务器看过同一部片时,用本地记录里的最大进度起播。
     /// 默认关 —— 它会让「这台服上没看过的片」也从中间起播,得用户明确要才开。
     #[serde(default)]
@@ -150,17 +206,12 @@ fn default_prefetch_cache() -> u64 {
 fn default_writeback_range() -> String {
     "all".to_string()
 }
-/// 见 Prefs::shader_strength 上的说明:70 是「比 shader 自带默认明显一档,又留出上调余量」。
-fn default_shader_strength() -> u8 {
-    70
-}
 impl Default for Prefs {
     fn default() -> Self {
         Self {
             audio_lang: None,
             sub_lang: None,
             sub_enabled: true,
-            shader_strength: default_shader_strength(),
             cross_server_resume: false,
             cross_server_writeback: false,
             cross_server_writeback_range: default_writeback_range(),
@@ -454,23 +505,104 @@ mod tests {
         Account { server: server.into(), ..Default::default() }
     }
 
-    /// 老配置(没有 shader_strength 键)读出来必须是 70,**不能是 0**。
-    /// u8 的朴素 `#[serde(default)]` 会给 0,而 0 = CAS 的 `//!WHEN STR` 为假 = 锐化
-    /// 彻底不跑、且没有任何提示 —— 所有老用户升级后画质滤镜静默失效。
-    /// 这条就是防有人把 `default = "default_shader_strength"` 改成朴素 default。
+    fn ext(name: &str, url: &str) -> crate::emby::ExtDomain {
+        crate::emby::ExtDomain { name: name.into(), url: url.into() }
+    }
+    fn line(url: &str) -> ServerLine {
+        ServerLine { id: url.into(), name: url.into(), url: url.into(), remark: None }
+    }
+
+    /// ★★ 同步线路**绝不能把用户正在用的那条线换掉**。
+    ///
+    /// 这条测试的第一版是**假的**:它只测了「表非空 + 追加到表尾」,而 merge_lines 本就
+    /// append-only,按下标保留和按 url 保留结果一样 —— 把实现换成 `active_line.min(len-1)`
+    /// 它照样绿。真正会出事的是**下标是脏的**那种:
+    ///
+    /// `set_lines` 的钳位写的是 `if !lines.is_empty()`,所以**传空表时 active_line 的旧值
+    /// 原样留着**(lines=[] 而 active_line=2)。此时 direct_line_url() 因为空表回落 `server`,
+    /// 一切正常;可一旦同步进来几条线,按下标算就会把生效线路挪到某条 CDN 上 ——
+    /// 用户只是点了个「同步线路」,结果连的服务器被悄悄换了,且不报错。
     #[test]
-    fn old_config_without_shader_strength_defaults_to_70_not_zero() {
+    fn sync_keeps_the_line_user_is_actually_on() {
+        let mut a = acc("https://emby.example.com");
+        // 脏状态:线路表空(实际在用 server 裸地址),但下标还留着上一次的值。
+        // 可达路径:set_lines(server_id, vec![]) —— 它的钳位跳过了空表分支。
+        a.lines = vec![];
+        a.active_line = 2;
+        assert_eq!(a.direct_line_url(), "https://emby.example.com", "前提:空表时用的是裸地址");
+
+        merge_lines(&mut a, &[ext("CDN1", "https://cdn1.com"), ext("CDN2", "https://cdn2.com")]);
+
+        assert_eq!(
+            a.direct_line_url(),
+            "https://emby.example.com",
+            "同步后生效线路必须还是用户原来实际在用的那个地址,不能被挪到 CDN 上"
+        );
+    }
+
+    /// 追加线路后,原来那条的下标即使不变也得**指着同一个 url**(防以后有人给 merge 加排序/前插)。
+    #[test]
+    fn sync_appends_and_leaves_existing_lines_where_they_were() {
+        let mut a = acc("https://emby.example.com");
+        a.lines = vec![line("https://old-a.com"), line("https://mine.lan")];
+        a.active_line = 1;
+        let added = merge_lines(&mut a, &[ext("CDN1", "https://cdn1.com")]);
+        assert_eq!(added, 1);
+        assert_eq!(a.direct_line_url(), "https://mine.lan", "生效线路必须还是用户原来那条");
+    }
+
+    /// 用户手填的线路(内网/自建)服主表里不可能有 —— 只增不删,一条都不许丢。
+    #[test]
+    fn sync_never_deletes_user_lines() {
+        let mut a = acc("https://emby.example.com");
+        a.lines = vec![line("https://mine.lan"), line("https://my-cdn.net")];
+        merge_lines(&mut a, &[ext("官方", "https://official.com")]);
+        for u in ["https://mine.lan", "https://my-cdn.net"] {
+            assert!(a.lines.iter().any(|l| l.url == u), "用户手填的 {u} 被同步删掉了");
+        }
+    }
+
+    /// 空线路表时一直用的是 `server` 裸地址。同步必须先把它落成一条线路,
+    /// 否则 lines[0] 变成服主的线路 → 用户原来能用的地址从表里凭空消失。
+    #[test]
+    fn sync_from_empty_table_preserves_the_bare_server_url() {
+        let mut a = acc("https://emby.example.com");
+        assert!(a.lines.is_empty());
+        merge_lines(&mut a, &[ext("CDN", "https://cdn.com")]);
+        assert_eq!(a.lines[0].url, "https://emby.example.com", "原始地址必须落成第一条");
+        assert_eq!(a.direct_line_url(), "https://emby.example.com", "生效线路不能被换成 CDN");
+        assert_eq!(a.lines.len(), 2);
+    }
+
+    /// 重复点「同步线路」不能让表无限膨胀。尾斜杠差异也算同一条。
+    #[test]
+    fn sync_is_idempotent_and_ignores_trailing_slash() {
+        let mut a = acc("https://emby.example.com");
+        let remote = [ext("CDN", "https://cdn.com/")]; // 服主写了尾斜杠
+        assert_eq!(merge_lines(&mut a, &remote), 1);
+        let n = a.lines.len();
+        // 再点两次
+        assert_eq!(merge_lines(&mut a, &remote), 0, "同一条线路被重复加了");
+        assert_eq!(merge_lines(&mut a, &[ext("CDN", "https://cdn.com")]), 0, "尾斜杠差异被当成了新线路");
+        assert_eq!(a.lines.len(), n, "重复同步让线路表膨胀了");
+    }
+
+    /// 已落盘的老配置里**还留着 `shader_strength` 这个已删字段**(上一版发过包)。
+    /// 反序列化必须**忽略**它,而不是报错 —— Config::load 失败会静默回落 Default,
+    /// 于是用户的所有偏好(选轨/跨服/预取)一起蒸发,而且不报错。
+    /// 这条钉的是「别给 Prefs 加 deny_unknown_fields」。
+    #[test]
+    fn stale_shader_strength_key_from_old_builds_is_ignored_not_fatal() {
         let p: Prefs = serde_json::from_str(
-            r#"{"audio_lang":null,"sub_lang":null,"sub_enabled":true}"#,
+            r#"{"audio_lang":"jpn","sub_lang":"chi","sub_enabled":true,"shader_strength":70}"#,
         )
-        .expect("老配置必须还能读");
-        assert_eq!(p.shader_strength, 70, "缺键时必须回落 70;0 = 锐化静默关闭");
-        // 显式写了就照用户的来
-        let p2: Prefs = serde_json::from_str(
-            r#"{"audio_lang":null,"sub_lang":null,"sub_enabled":true,"shader_strength":0}"#,
-        )
-        .unwrap();
-        assert_eq!(p2.shader_strength, 0, "用户显式设 0 就该是 0,别被 default 顶掉");
+        .expect("带已删字段的老配置必须还能读,否则用户偏好全丢");
+        assert_eq!(p.audio_lang.as_deref(), Some("jpn"), "同一份 JSON 里的其它偏好必须留住");
+        // 缺键的更老配置也得能读
+        let p2: Prefs =
+            serde_json::from_str(r#"{"audio_lang":null,"sub_lang":null,"sub_enabled":true}"#)
+                .expect("老配置必须还能读");
+        assert!(p2.sub_enabled);
     }
 
     #[test]

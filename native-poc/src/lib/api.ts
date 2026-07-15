@@ -1,10 +1,58 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke as rawInvoke } from "@tauri-apps/api/core";
 
 /* ============================================================
    Tauri 命令类型化封装 —— 前端调 Rust 核的唯一入口。
    所有页面走这里，不散落裸 invoke，改一处全端生效。
    Rust snake_case 参数 → JS camelCase(Tauri 自动转)。
    ============================================================ */
+
+/** 账号表变了的广播事件名。用 window 原生 CustomEvent —— 全应用没有任何 store/事件总线,
+ *  为这一件事装 zustand/redux 不值当;`accountsChanged` 订阅它即可。 */
+export const ACCOUNTS_CHANGED = "lp:accounts-changed";
+
+/* 会改动核层账号表的命令。**真源在 Rust,前端每个页面各持一份 useState 副本** ——
+   副本之间没有任何连接,谁也不知道别人改了。
+
+   ★ 为什么在 invoke 这层拦、而不是各调用点自己吼一嗓子:
+     「改完记得通知别人」是靠人记的,而这正是 2026-07-15 那个 bug 的成因 ——
+     ServersPage 改名称/备注/图标/密码走的是 onDone(false),压根不通知外层,
+     侧栏于是永远显示旧名字。**让「改数据」这个动作本身成为信号,谁都忘不掉。**
+   新增会改账号表的命令时把名字加进来(漏加 = 侧栏又不刷新,且不报错)。 */
+const ACCOUNT_MUTATIONS = new Set([
+  "login",
+  "relogin",
+  "update_account",
+  "remove_account",
+  "reorder_accounts",
+  "set_active_server",
+  "set_account_icon_file",
+  "clear_account_icon",
+  "set_lines",
+  "set_active_line",
+  "sync_lines",
+  "batch_add_servers",
+  "source_login", // 添加网盘/聚合源 —— 它也 upsert 账号表(第一版我写成了不存在的 add_source_server)
+]);
+
+/** 统一入口:命令成功后,若它动过账号表就广播一次;动过条目状态就清详情缓存。
+ *  **失败不广播、不清** —— 没改成的东西没什么可刷的。 */
+async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const r = await rawInvoke<T>(cmd, args);
+  if (ACCOUNT_MUTATIONS.has(cmd)) {
+    /* 切服/重登/换线路后,详情缓存里全是**上一台服务器**的条目 —— 条目 id 在不同服上
+       可以重复,不清就会拿 A 服的详情去画 B 服的条目,而且不报错。 */
+    clearItemCache();
+    window.dispatchEvent(new CustomEvent(ACCOUNTS_CHANGED));
+  }
+  if (ITEM_MUTATIONS.has(cmd)) clearItemCache();
+  return r;
+}
+
+/** 订阅账号表变更。返回退订函数,直接丢给 useEffect 的 cleanup。 */
+export function onAccountsChanged(fn: () => void): () => void {
+  window.addEventListener(ACCOUNTS_CHANGED, fn);
+  return () => window.removeEventListener(ACCOUNTS_CHANGED, fn);
+}
 
 export type LoginResult = {
   server: string;
@@ -125,8 +173,6 @@ export type Prefs = {
   audio_lang: string | null;
   sub_lang: string | null;
   sub_enabled: boolean;
-  /** 画质滤镜强度 0~100(核层默认 70)。改它请用 setShaderStrength,不要走 setPrefs。 */
-  shader_strength: number;
 };
 
 export type SourceEntry = {
@@ -348,6 +394,13 @@ export type TraktPollResult = {
 export const currentSession = () =>
   invoke<LoginResult | null>("current_session");
 
+/** 重新登录:**不用填地址**,核层拿账号当前生效的那条线路去认证,只换 token/账号。
+ *  名称/备注/图标/线路/生效线路一律不动。
+ *  ★ 不要用 login() 代替:login 按「登录时用的地址」upsert,而这里认证走的是线路地址
+ *    (≠ 账号主键),会凭空多出一台服务器。 */
+export const relogin = (serverId: string, username: string, password: string) =>
+  invoke<void>("relogin", { serverId, username, password });
+
 export const login = (server: string, username: string, password: string) =>
   invoke<LoginResult>("login", { server, username, password });
 
@@ -407,8 +460,56 @@ export const listLatest = (parentId: string, limit = 20) =>
 export const listResume = (limit = 20) =>
   invoke<Item[]>("list_resume", { limit });
 
-export const itemDetail = (itemId: string) =>
-  invoke<ItemDetail>("item_detail", { itemId });
+/* ---------- 条目详情缓存 ----------
+   用户 2026-07-15:「简介……每次都要重新加载,服务器压力很大」。
+   此前 DetailPage 每次 mount 都 `setD(null)` + 全量重拉,来回翻两个条目 = 每次都回源,
+   而且先清空必然闪一下白。
+
+   ## 为什么是**内存** TTL,不是磁盘持久化
+   用户说的是「持久化缓存」,但**图片和元数据不该一个待遇**:
+   - 图片按 tag 基本不可变 → 落盘 2GB/30 天(见 core 的 image_cache)。
+   - itemDetail 里带 `resume_secs`(续播进度)、`is_favorite`、`played` —— 这些**随时会变**,
+     还会被别的设备改。落盘跨重启复用 = 重开 App 看到的是上次的旧进度。
+     那不是省流量,是给自己造一个「进度莫名回退」的 bug。
+   所以这里只解决「同一次使用里来回翻」,TTL 5 分钟,且任何会改条目状态的命令一律清缓存。 */
+const DETAIL_TTL_MS = 5 * 60 * 1000;
+const detailMemo = new Map<string, { at: number; v: ItemDetail }>();
+
+/** 会改条目状态的命令 —— 一律**整体清**详情缓存。
+ *
+ *  ★ 为什么不按 itemId 定点清(我第一版就是,错的):
+ *    - 标记分集已看,变的是**剧集**的 `children[].played`。定点清分集 → 剧集详情还是旧的
+ *      → 用户点了「已看」,列表纹丝不动,且不报错。
+ *    - report_progress 的参数是 {pos, paused},**压根没有 itemId**,定点清是个永远
+ *      删不掉东西的空操作;而且它每几秒发一次。
+ *  这些都是低频用户动作(收藏/标记/停止播放),整体清最多让几个详情重取一次,
+ *  换来的是「不可能因为漏清而显示旧状态」。别为了省这点流量再引一遍那个 bug。
+ *  report_progress 仍然不在表里:高频,进度由 stop_playback 收尾时清一次就够。 */
+const ITEM_MUTATIONS = new Set(["set_played", "set_favorite", "stop_playback"]);
+
+/** 同步偷看缓存,拿不到给 undefined。给 UI 用:有缓存就先画出来,别先清空闪一下。 */
+export function peekItemDetail(itemId: string): ItemDetail | undefined {
+  const hit = detailMemo.get(itemId);
+  if (!hit) return undefined;
+  if (Date.now() - hit.at > DETAIL_TTL_MS) {
+    detailMemo.delete(itemId);
+    return undefined;
+  }
+  return hit.v;
+}
+
+/** 清空条目详情缓存。切服务器/改条目状态后必须调 —— 否则会拿 A 服的详情去画 B 服。 */
+export function clearItemCache() {
+  detailMemo.clear();
+}
+
+export const itemDetail = async (itemId: string): Promise<ItemDetail> => {
+  const hit = peekItemDetail(itemId);
+  if (hit) return hit;
+  const v = await invoke<ItemDetail>("item_detail", { itemId });
+  detailMemo.set(itemId, { at: Date.now(), v });
+  return v;
+};
 
 // ---------- 播放器能力(对齐旧 Flutter video_player_service 契约) ----------
 export type PlayerOpts = {
@@ -463,7 +564,6 @@ export type ShaderLevel = [id: string, name: string, worksInWindow: boolean];
 export const shaderLevels = () => invoke<ShaderLevel[]>("shader_levels");
 /** 画质滤镜强度 0~100(CAS 锐化 STR + FSR RCAS SHARP)。落盘 + 立即生效。
  *  返回 false = mpv 拒了 glsl-shader-opts(参数名对不上),**它自己不会报错**,要如实告诉用户。 */
-export const setShaderStrength = (pct: number) => invoke<boolean>("set_shader_strength", { pct });
 /** 应用超分档位,返回实际挂上的 shader 数;非 off 却返 0 会直接报错(超分没生效)。 */
 /** 挂超分的结果。★ count>0 只说明 mpv 收下了路径,**不代表 shader 会跑** ——
  *  Anime4K 每个 pass 都带「输出 > 源 ×1.2」的门槛,窗口没比源大就整条链空转。
@@ -492,7 +592,8 @@ export const itemMedia = (itemId: string) =>
 
 /** 人物头像。 */
 export function personUrl(session: LoginResult, personId: string, maxHeight = 160): string {
-  return `${session.server}/Items/${personId}/Images/Primary?maxHeight=${maxHeight}&quality=90&api_key=${session.token}`;
+  // 演员头像在 Emby 里也是个 Item,和封面同一条路。
+  return imgUrl(session, personId, "Primary", `h=${maxHeight}`);
 }
 
 /** 字节数 → 「18.4 GB」。 */
@@ -555,7 +656,7 @@ export const getPrefs = () => invoke<Prefs>("get_prefs");
 /** ★ 只收选轨三项 —— 核层 set_prefs 也只认这三个参数(其余走 `..cfg.prefs.clone()` 保留)。
  *  以前这里标成 `p: Prefs`,逼调用方拼一个完整 Prefs 再扔掉多余字段:
  *  看着像「整体覆盖」,给人一种「不传的字段会被清掉」的错觉,新增 Prefs 字段时
- *  每个调用点都得跟着改一遍。改强度请走 setShaderStrength。 */
+ *  每个调用点都得跟着改一遍。 */
 export type TrackPrefs = Pick<Prefs, "audio_lang" | "sub_lang" | "sub_enabled">;
 export const setPrefs = (p: TrackPrefs) =>
   invoke<void>("set_prefs", {
@@ -642,6 +743,19 @@ export const setLines = (serverId: string, lines: ServerLine[]) =>
 /** 切当前线路;若是活跃服务器会同时刷新会话地址,无需重启。 */
 export const setActiveLine = (serverId: string, index: number) =>
   invoke<void>("set_active_line", { serverId, index });
+
+export type SyncedLines = {
+  /** 服主是否部署了 emby_ext_domains。**false 是常态**(绝大多数服务器没装),不是错误。 */
+  supported: boolean;
+  added: number;
+  total: number;
+};
+/** 同步线路:从服主部署的 emby_ext_domains 拉取备用域名并入线路表(只增不删,按 url 去重)。
+ *  上游 https://github.com/uhdnow/emby_ext_domains —— 服主自部署的 Go 小服务,
+ *  挂在自己 Emby 的同一 origin 下(`/emby/System/Ext/ServerDomains`),靠同源隐式匹配。
+ *  ★ 它**不是**测延迟。测延迟是 probeLines,两个按钮两回事。 */
+export const syncLines = (serverId: string) =>
+  invoke<SyncedLines>("sync_lines", { serverId });
 
 // ---------- 测试连接 / 批量 / 深链 ----------
 /** 登录**前**探服务器公开信息(草稿页 06「测试连接」)。不落账号、不动会话。 */
@@ -958,30 +1072,48 @@ export const configExportQr = () => invoke<string>("config_export_qr");
 export const configImportQr = (payload: string) =>
   invoke<number>("config_import_qr", { payload });
 
-// ---------- 图片 URL(直接从会话拼，免每图一次 invoke) ----------
-export function posterUrl(
-  session: LoginResult,
-  itemId: string,
-  maxHeight = 480,
-): string {
-  return `${session.server}/Items/${itemId}/Images/Primary?maxHeight=${maxHeight}&quality=90&api_key=${session.token}`;
+/* ---------- 图片 URL ----------
+   走 `lpimg` 自定义协议(见 src-tauri/src/imgcache.rs):字节由 Rust 给,
+   命中 2GB/30 天的磁盘缓存,miss 才回源。
+
+   ## 两个变化,都别退回去
+   1. **URL 里不再有 api_key。** 以前是 `?api_key=${session.token}` 直接进 `<img src>` ——
+      token 就摊在 DOM 里、webview 网络日志里、Emby access log 里。现在上游地址由 Rust
+      从会话现拼,前端只给条目 id。
+   2. **不再依赖 session.server。** 换线路不会让缓存整盘失效(Rust 那边用账号主键当缓存键)。
+
+   ## 前缀因平台而异,必须用 convertFileSrc 取
+   Windows/Android 是 `http://lpimg.localhost/`,Linux/macOS 是 `lpimg://localhost/`
+   (tauri 注入的 core.js 里就是这么分的)。写死任何一个,另一个平台上全站图片挂掉。
+   ★ 只拿它取**前缀**:convertFileSrc 会对入参做 encodeURIComponent,
+     把整个路径压成一个段(`/Items/1/x` → `%2FItems%2F1%2Fx`),路径得自己拼。 */
+const IMG_BASE = convertFileSrc("", "lpimg");
+
+/** session 形参保留:换服务器/重登时 session 变 → React 会重算 src → 图片跟着换。
+ *  真去掉它,调用点就没有依赖能触发重渲染了(而且不报错,只是图不刷新)。 */
+function imgUrl(_session: LoginResult, itemId: string, kind: string, q: string): string {
+  return `${IMG_BASE}i/${itemId}/${kind}?${q}`;
+}
+
+export function posterUrl(session: LoginResult, itemId: string, maxHeight = 480): string {
+  return imgUrl(session, itemId, "Primary", `h=${maxHeight}`);
 }
 
 /** 横向缩略图(剧集封面/媒体库封面用 Primary，按宽度取，不裁剪比例)。 */
-export function thumbUrl(
-  session: LoginResult,
-  itemId: string,
-  maxWidth = 640,
-): string {
-  return `${session.server}/Items/${itemId}/Images/Primary?maxWidth=${maxWidth}&quality=90&api_key=${session.token}`;
+export function thumbUrl(session: LoginResult, itemId: string, maxWidth = 640): string {
+  return imgUrl(session, itemId, "Primary", `w=${maxWidth}`);
 }
 
-export function backdropUrl(
-  session: LoginResult,
-  itemId: string,
-  maxWidth = 1600,
-): string {
-  return `${session.server}/Items/${itemId}/Images/Backdrop/0?maxWidth=${maxWidth}&quality=90&api_key=${session.token}`;
+export function backdropUrl(session: LoginResult, itemId: string, maxWidth = 1600): string {
+  return imgUrl(session, itemId, "Backdrop", `w=${maxWidth}`);
+}
+
+/** 首页 Hero 的片名 Logo。原先长在 HomePage 里,注释写着「那份文件不归这里改」——
+ *  图片走自定义协议后这话不成立了:路径白名单在 Rust 侧(imgcache::parse),
+ *  散在页面里的拼法会绕开它。图片 URL 只此一处。
+ *  ★ 核层 Item 没有 has_logo 标志位 → 调用点仍需 <img onError> 兜底回文字标题。 */
+export function logoUrl(session: LoginResult, itemId: string, maxHeight = 150): string {
+  return imgUrl(session, itemId, "Logo", `h=${maxHeight}`);
 }
 
 /** 格式化时长(秒 → h:mm:ss / m:ss)。 */

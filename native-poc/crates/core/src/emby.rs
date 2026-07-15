@@ -978,6 +978,92 @@ pub struct ServerInfo {
     pub id: String,
 }
 
+/// 服主下发的一条备用线路(uhdnow/emby_ext_domains 的 `data[]` 元素)。
+#[derive(Deserialize)]
+pub struct ExtDomain {
+    pub name: String,
+    pub url: String,
+}
+
+#[derive(Deserialize)]
+struct ExtDomainsResp {
+    #[serde(default)]
+    data: Vec<ExtDomain>,
+    #[serde(default)]
+    ok: bool,
+}
+
+/// 拉取服主配置的备用线路(「同步线路」)。
+///
+/// ## 这是什么(2026-07-15 按用户点名的 https://github.com/uhdnow/emby_ext_domains 实读源码)
+/// **不是**某个中心化的域名列表,而是**服主自己部署**的一个 Go 小服务(Gin,~180 行),
+/// 用仓库自带的 nginx 片段挂在**自己 Emby 域名的同一 origin** 下:
+/// ```nginx
+/// location = /emby/System/Ext/ServerDomains { proxy_pass http://127.0.0.1:52143; }
+/// ```
+/// 所以「匹配」是**隐式同源**的:拿当前这台服务器的地址去打这个端点,回来的就是这台服的备用线路。
+/// 没有 key、没有 ID、没有分组 —— 别去设计什么匹配逻辑,不存在。
+///
+/// 鉴权:服务端 `extractToken` 认 `X-Emby-Token` / `X-Emby-Authorization` 等 9 种来源,
+/// 我们现有的头原样透传即可,零改造。它拿到 token 后回打 `{Emby}/System/Info` 校验(3s 超时)。
+///
+/// ## Ok(vec![]) 与 Err 的分界(★ 别搞反)
+/// **绝大多数 Emby 服务器没装这玩意 —— 404 是常态,不是错误。** 404/超时/解析不了 → `Ok(vec![])`,
+/// 让 UI 说「这台服务器没提供线路表」而不是弹一个红色报错吓人。
+/// 只有 401(token 失效,用户能采取行动)才 Err。
+pub async fn ext_domains(
+    http: &reqwest::Client,
+    session: &Session,
+) -> Result<Vec<ExtDomain>, String> {
+    /* 端点路径在上游 nginx 里是**精确匹配** `= /emby/System/Ext/ServerDomains`,
+       是相对 origin 的。用户填的地址可能已经带了 /emby(反代常见写法),
+       直接拼就成了 /emby/emby/… → 404。故先把结尾的 /emby 削掉再拼。 */
+    let base = norm(&session.server);
+    let origin = base.strip_suffix("/emby").unwrap_or(&base);
+    let url = format!("{origin}/emby/System/Ext/ServerDomains");
+
+    let resp = tokio::time::timeout(
+        // 上游 nginx 侧 proxy_read_timeout 10s;而且它每次都要回源校验 token(不缓存)。
+        std::time::Duration::from_secs(10),
+        http.get(&url)
+            .header("X-Emby-Token", &session.token)
+            .header("X-Emby-Authorization", auth_header(&session.device_id))
+            .send(),
+    )
+    .await;
+
+    let resp = match resp {
+        Ok(Ok(r)) => r,
+        // 超时/连不上 —— 大概率是没部署。不是用户能修的事,别报错。
+        _ => return Ok(vec![]),
+    };
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("线路服务拒绝了登录凭据(token 可能已失效),请重新登录".into());
+    }
+    if !resp.status().is_success() {
+        return Ok(vec![]); // 404 = 服主没部署,常态
+    }
+    let Ok(j) = resp.json::<ExtDomainsResp>().await else {
+        return Ok(vec![]); // 同路径上挂了别的东西,返回的不是这个格式
+    };
+    if !j.ok {
+        return Ok(vec![]);
+    }
+    /* ★ 信任边界:`url` 是**服主在自己 config.yaml 里自填的裸字符串,上游零校验**。
+       它会被我们直接拿去当 baseUrl 拼 API + 带上 token 请求 —— 配错或被投毒
+       就等于把 token 发到任意地址。这里必须自己把关:只收 http(s),且能解析成合法 URL。 */
+    Ok(j
+        .data
+        .into_iter()
+        .filter(|d| {
+            let u = d.url.trim();
+            // 用 reqwest 自己 re-export 的 Url,不为这一行去加 `url` 直接依赖。
+            (u.starts_with("http://") || u.starts_with("https://"))
+                && reqwest::Url::parse(u).is_ok()
+        })
+        .collect())
+}
+
 /// 探测服务器(草稿页 06「测试连接」)。★ 不需要登录态 —— 这是登录前用的,别走 session。
 /// 实测 GET /System/Info/Public 返回 {ServerName, Version, Id}。
 pub async fn server_info(http: &reqwest::Client, server: &str) -> Result<ServerInfo, String> {

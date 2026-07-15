@@ -3,6 +3,7 @@ import {
   type AccountInfo,
   type AccountStatus,
   listAccounts,
+  onAccountsChanged,
   probeAccounts,
   removeAccount,
   setActiveServer,
@@ -72,6 +73,17 @@ export default function Sidebar({
   useEffect(() => {
     void load();
   }, [load, activeServer]);
+
+  /* ★ 侧栏必须跟着**账号表**变,不能只跟着 activeServer 变。
+
+     旧写法只有上面那个 effect,依赖是 `activeServer` 这个**字符串**。而服务器页里
+     改名称/备注/图标/密码/账号根本不动这个字符串(重登同一地址、删掉非活跃账号也不动),
+     于是侧栏一直显示旧数据 —— 用户 2026-07-15 报的「首页侧边栏的服务器不能实时响应
+     在服务器页的更改」就是这个。Sidebar 还在 Shell 的 key 容器之外,翻页也不会重挂载,
+     那份陈旧 state 能活到关程序为止。
+
+     信号由 api.ts 的 invoke 包装层在**任何**改账号表的命令成功后自动广播,不靠调用点自觉。 */
+  useEffect(() => onAccountsChanged(() => void load()), [load]);
 
   // 下拉/右键菜单:点空白/滚动/Esc 关掉(和首页/媒体库一个套路)。
   useEffect(() => {

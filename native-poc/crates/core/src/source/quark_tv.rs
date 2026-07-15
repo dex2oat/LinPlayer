@@ -350,4 +350,34 @@ mod tests {
         assert_eq!(s.req_id.len(), 32);
         assert_eq!(gen_device_id().len(), 32);
     }
+
+    /// 打真接口,确认 `qr_data` 到底是**图**还是**URL**。
+    ///
+    /// 起因:用户报「夸克网盘根本生不出来二维码,报错 The amount of data is too big to be
+    /// stored in a QR Code」。我们向 /oauth/authorize 传了 `qr_width=460&qr_height=460`
+    /// —— 这两个参数只有在「服务端渲染一张图」时才有意义。若 qr_data 是 base64 图,
+    /// 那前端再拿它去 QRCode.toDataURL() 就是**给一张二维码图再编一个二维码**,必然超容量。
+    ///
+    /// 联网 + 会被限流,故 #[ignore];本地验证:
+    ///   cargo test -p linplayer-core quark_qr_data_shape -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "打夸克真接口,需联网"]
+    async fn quark_qr_data_shape() {
+        let http = reqwest::Client::new();
+        let dev = gen_device_id();
+        let (qr, tok) = get_login_code(&http, &dev).await.expect("取二维码失败");
+        eprintln!("query_token 长度 = {}", tok.len());
+        eprintln!("qr_data 长度 = {}", qr.len());
+        eprintln!("qr_data 开头 120 字符 = {}", &qr[..qr.len().min(120)]);
+        assert!(!qr.is_empty(), "qr_data 为空");
+        // 二维码(纠错级 M)的物理上限约 2.3KB。超过就说明它不是待编码的文本。
+        eprintln!(
+            "→ 判定: {}",
+            if qr.starts_with("data:image") || qr.len() > 2300 {
+                "qr_data 是**图**,必须 <img src> 直出,不能再编码"
+            } else {
+                "qr_data 是短文本,可以喂 QRCode.toDataURL"
+            }
+        );
+    }
 }
