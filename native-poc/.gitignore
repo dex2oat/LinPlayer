@@ -10,6 +10,10 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+# 绿色包产物(scripts/pack-portable.ps1 的输出):exe + 114MB libmpv + zip,共 240MB+。
+# `dist` 只匹配同名条目,匹配不到这个目录 —— 自家脚本产出的东西必须自家忽略掉,
+# 否则每出一次包就在 git status 里躺一堆,早晚被 add -A 扫进去。
+dist-portable/
 *.local
 
 # Rust build artifacts

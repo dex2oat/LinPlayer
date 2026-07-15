@@ -111,6 +111,8 @@ android/gradlew.bat
 android/gradle/wrapper/gradle-wrapper.jar
 android/init.gradle
 *.apk
+# *.apk 匹配不到 bundletool 产出的 .apks(APK Set),漏一个字母就够 50MB 裸奔在 git status 里
+*.apks
 *.aab
 *.dex
 
