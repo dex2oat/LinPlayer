@@ -132,13 +132,11 @@ export default function Shell({
             onPickView={setLibTarget}
             onBack={() => setLibTarget(null)}
             onOpenItem={openDetail}
-            /* 不传 onPlay 的话媒体库的悬停 ▶ 只能回落成「开详情」= 假按钮。收藏页一直有,这里漏了。 */
-            onPlay={onPlay}
             onSearch={onSearch}
           />
         );
       case "favorites":
-        return <FavoritesPage session={session} onOpenItem={openDetail} onPlay={onPlay} />;
+        return <FavoritesPage session={session} onOpenItem={openDetail} />;
       case "rankings":
         return <RankingsPage />;
       case "downloads":
@@ -212,15 +210,7 @@ export default function Shell({
 
       {/* 搜索浮层挂在 Shell 而非 App:它要用 openDetail(点结果进详情,不是直接开播)和切服务器。 */}
       {searchOpen && (
-        <SearchOverlay
-          session={session}
-          onClose={onCloseSearch}
-          onOpenItem={openFromSearch}
-          onPlay={(it) => {
-            onCloseSearch();
-            onPlay(it);
-          }}
-        />
+        <SearchOverlay session={session} onClose={onCloseSearch} onOpenItem={openFromSearch} />
       )}
     </div>
   );

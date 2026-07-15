@@ -7,9 +7,9 @@ import "./SearchOverlay.css";
 type Props = {
   session: LoginResult;
   onClose: () => void;
-  /** serverId:该结果所属服务器(聚合搜可能跨服),宿主据此先切服务器再开详情。 */
+  /** serverId:该结果所属服务器(聚合搜可能跨服),宿主据此先切服务器再开详情。
+      ★ 搜索结果只有这一个操作:点 = 进详情。不从这里起播(用户 2026-07-15 定)。 */
   onOpenItem: (it: Item, serverId?: string) => void;
-  onPlay: (it: Item) => void;
 };
 
 /* 搜索历史(标注 34)。localStorage 存,封顶 8 条 —— 就一个字符串数组,不值得进核层配置。 */
@@ -35,7 +35,7 @@ function writeHist(next: string[]): string[] {
 }
 
 /** 全局搜索浮层(草稿 PAGE 9):Ctrl K 唤起、Esc 收起,聚合开关按服务器分组。 */
-export default function SearchOverlay({ session, onClose, onOpenItem, onPlay }: Props) {
+export default function SearchOverlay({ session, onClose, onOpenItem }: Props) {
   const [q, setQ] = useState("");
   const [aggregate, setAggregate] = useState(true);
   const [groups, setGroups] = useState<ServerGroup[] | null>(null);
@@ -98,11 +98,6 @@ export default function SearchOverlay({ session, onClose, onOpenItem, onPlay }: 
   const pick = (it: Item, serverId?: string) => {
     remember();
     onOpenItem(it, serverId); // 关浮层交给宿主(它可能要先切服务器)
-  };
-  const play = (it: Item) => {
-    remember();
-    onClose();
-    onPlay(it);
   };
 
   return (
@@ -178,7 +173,6 @@ export default function SearchOverlay({ session, onClose, onOpenItem, onPlay }: 
                       item={it}
                       session={session}
                       onOpen={(x) => pick(x, g.server_id)}
-                      onPlay={play}
                       index={i}
                     />
                   </div>
@@ -191,7 +185,7 @@ export default function SearchOverlay({ session, onClose, onOpenItem, onPlay }: 
           {local && local.length > 0 && (
             <div className="dense-grid" style={{ padding: "4px 0 8px" }}>
               {local.map((it, i) => (
-                <Poster key={it.id} item={it} session={session} onOpen={pick} onPlay={play} index={i} />
+                <Poster key={it.id} item={it} session={session} onOpen={pick} index={i} />
               ))}
             </div>
           )}

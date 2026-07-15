@@ -27,7 +27,6 @@ import {
   IconCheck,
   IconChevronLeft,
   IconChevronRight,
-  IconClose,
   IconHeart,
   IconLibrary,
   IconPlay,
@@ -250,30 +249,19 @@ export default function HomePage({
     setCtx({ x: e.clientX, y: e.clientY, item: it });
   }, []);
 
-  /** 标注 7:标记已看/未看。反显靠 Item.played(服务端给的),不在本地猜 → 改完重拉。 */
+  /** 右键「标记为已/未播放」。
+   * ★ Emby 没有「从继续观看里删掉」这种端点 —— 继续观看就是 Resume 查询的结果,
+   *   标记已播放它自己就掉出去,标记未播放又可能回来。所以标记完只需重拉这条轨道,
+   *   让服务端说了算,不在本地猜。
+   * 只刷继续观看,**不整页 onRefresh()**:整页刷会把 Hero 重新随机掉,
+   *   用户只是右键了一张卡,不该整屏跟着变。 */
   async function markPlayed(it: Item, played: boolean) {
     setCtx(null);
     try {
       await setPlayed(it.id, played);
-      onRefresh();
+      setResume(await listResume(12));
     } catch (e) {
       setToast(`标记失败:${e}`);
-    }
-  }
-
-  /**
-   * 标注 7:移出继续观看。
-   * ★ Emby 没有「从 Resume 列表删掉」这种端点 —— 继续观看就是 Resume 查询的结果,
-   *   条目一旦标记已看就自动掉出去。所以「移出」= setPlayed(id, true),这不是变通,就是正解。
-   * 本地直接摘掉卡片,不整页刷新:整页刷新会把 Hero 也换掉,用户只是想收拾一张卡。
-   */
-  async function removeFromResume(it: Item) {
-    setCtx(null);
-    try {
-      await setPlayed(it.id, true);
-      setResume((r) => r.filter((x) => x.id !== it.id));
-    } catch (e) {
-      setToast(`移出失败:${e}`);
     }
   }
 
@@ -439,9 +427,6 @@ export default function HomePage({
                       session={session}
                       variant="thumb"
                       onOpen={onOpenItem}
-                      onPlay={onPlay}
-                      fav={favIds.has(it.id)}
-                      onToggleFav={toggleFav}
                       index={i}
                       onContextMenu={openCtx}
                     />
@@ -465,9 +450,6 @@ export default function HomePage({
                       session={session}
                       variant="thumb"
                       onOpen={onOpenItem}
-                      onPlay={onPlay}
-                      fav={favIds.has(c.id)}
-                      onToggleFav={toggleFav}
                       index={i}
                       onContextMenu={openCtx}
                     />
@@ -540,9 +522,6 @@ export default function HomePage({
                           item={it}
                           session={session}
                           onOpen={onOpenItem}
-                          onPlay={onPlay}
-                          fav={favIds.has(it.id)}
-                          onToggleFav={toggleFav}
                           index={i}
                           onContextMenu={openCtx}
                         />
@@ -557,7 +536,10 @@ export default function HomePage({
         </div>
       </div>
 
-      {/* 标注 7:海报卡右键菜单(移出继续观看 / 标记已看 / 收藏)。 */}
+      {/* 右键菜单**只有首页有**,且只有这三项(用户 2026-07-15 定,覆盖草稿标注 7)。
+          原来的「播放 / 查看详情 / 移出继续观看」已按此删除:
+          单击本身就是进详情,而「标记为已播放」在 Emby 里就等于把它移出继续观看。
+          标记两项都常驻(不做 toggle):用户点名的就是「标记为未/已播放」两条。 */}
       {ctx && (
         <div
           className="ctxmenu"
@@ -565,35 +547,13 @@ export default function HomePage({
           onClick={(e) => e.stopPropagation()}
         >
           {/* 每项都得自己 setCtx(null):菜单容器 stopPropagation 了,关菜单的 window click 到不了这。 */}
-          {!ctx.item.is_folder && (
-            <div
-              className="mi"
-              onClick={() => {
-                onPlay(ctx.item);
-                setCtx(null);
-              }}
-            >
-              <IconPlay size={15} /> 播放
-            </div>
-          )}
-          <div
-            className="mi"
-            onClick={() => {
-              onOpenItem(ctx.item);
-              setCtx(null);
-            }}
-          >
-            <IconInfo size={15} /> 查看详情
+          <div className="mi" onClick={() => void markPlayed(ctx.item, true)}>
+            <IconCheck size={15} /> 标记为已播放
           </div>
-          {/* 只有真在继续观看里的条目才给这项 —— 对一张「最新」轨道上的卡说「移出继续观看」是假的。 */}
-          {resume.some((x) => x.id === ctx.item.id) && (
-            <div className="mi" onClick={() => void removeFromResume(ctx.item)}>
-              <IconClose size={15} /> 移出继续观看
-            </div>
-          )}
-          <div className="mi" onClick={() => void markPlayed(ctx.item, !ctx.item.played)}>
-            <IconCheck size={15} /> {ctx.item.played ? "标记未看" : "标记已看"}
+          <div className="mi" onClick={() => void markPlayed(ctx.item, false)}>
+            <IconCheck size={15} /> 标记为未播放
           </div>
+          {/* 已在喜欢里还显示「添加到喜欢」就是骗人 → 标签跟着实际状态走,仍是一项。 */}
           <div
             className="mi"
             onClick={() => {
@@ -601,7 +561,7 @@ export default function HomePage({
               setCtx(null);
             }}
           >
-            <IconHeart size={15} /> {favIds.has(ctx.item.id) ? "取消收藏" : "收藏"}
+            <IconHeart size={15} /> {favIds.has(ctx.item.id) ? "从喜欢中移除" : "添加到喜欢"}
           </div>
         </div>
       )}

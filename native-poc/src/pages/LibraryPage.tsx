@@ -3,24 +3,16 @@ import {
   type Filters,
   type Item,
   type LoginResult,
-  downloadEnqueue,
   getFilters,
-  listFavorites,
   listItemsPage,
   posterUrl,
-  setFavorite,
-  setPlayed,
   thumbUrl,
   views,
 } from "../lib/api";
 import Poster from "../components/Poster";
 import {
-  IconCheck,
   IconChevronDown,
   IconChevronRight,
-  IconDownload,
-  IconHeart,
-  IconInfo,
   IconLibrary,
   IconPlay,
   IconRefresh,
@@ -34,7 +26,6 @@ type Props = {
   onPickView: (v: Item) => void;
   onBack: () => void;
   onOpenItem: (it: Item) => void;
-  onPlay: (it: Item) => void;
   onSearch: () => void;
 };
 
@@ -76,7 +67,7 @@ export const IconRows = ({ size = 15 }: { size?: number }) => (
 const toggle = <T,>(arr: T[], v: T): T[] =>
   arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
 
-export default function LibraryPage({ session, view, onPickView, onBack, onOpenItem, onPlay, onSearch }: Props) {
+export default function LibraryPage({ session, view, onPickView, onBack, onOpenItem, onSearch }: Props) {
   const [libs, setLibs] = useState<Item[] | null>(null);
   const [items, setItems] = useState<Item[] | null>(null);
   /** 库里符合当前筛选的**总数**(不是已加载条数)—— 面包屑那个「· 1,284」要的就是它。 */
@@ -97,10 +88,7 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
 
   const [openDD, setOpenDD] = useState<null | "sort" | "filter">(null);
   const [layout, setLayout] = useState<"grid" | "list">("grid");
-  const [ctx, setCtx] = useState<{ x: number; y: number; item: Item } | null>(null);
   const [toast, setToast] = useState("");
-  // Item 上没有收藏标记字段 → 单独拉一次收藏表,海报心形/右键菜单才能显示真实状态(同首页做法)。
-  const [favIds, setFavIds] = useState<Set<string>>(new Set());
 
   const nFilters = fGenres.length + fTags.length + fYears.length + (fRating != null ? 1 : 0);
 
@@ -113,30 +101,6 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
     setSort("added");
     setOpenDD(null);
   }, [view?.id]);
-
-  useEffect(() => {
-    let alive = true;
-    listFavorites()
-      .then((fs) => alive && setFavIds(new Set(fs.map((f) => f.id))))
-      .catch(() => {}); // 收藏表拉不到不该拖垮媒体库主流程
-    return () => {
-      alive = false;
-    };
-  }, [session.server]);
-
-  // 右键菜单:点空白/滚动/Esc 关掉(和首页/网盘页一个套路)。
-  useEffect(() => {
-    const close = () => setCtx(null);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setCtx(null);
-    window.addEventListener("click", close);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, []);
 
   useEffect(() => {
     if (!toast) return;
@@ -233,55 +197,6 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
   }
 
   // ---------------- 动作 ----------------
-  const toggleFav = (it: Item) => {
-    setFavIds((s) => {
-      const next = !s.has(it.id);
-      setFavorite(it.id, next).catch((e) => {
-        // 后端没落地就把 UI 状态退回去,不留假的收藏态。
-        setFavIds((cur) => {
-          const back = new Set(cur);
-          if (next) back.delete(it.id);
-          else back.add(it.id);
-          return back;
-        });
-        setToast(`收藏失败:${e}`);
-      });
-      const n = new Set(s);
-      if (next) n.add(it.id);
-      else n.delete(it.id);
-      return n;
-    });
-  };
-
-  /**
-   * 标注 11:标记已看/未看。
-   * 只改本地那一条,不整库重拉:重拉会把 items 打回 null → 已翻的几页全丢、滚回第一屏,
-   * 用户标记第 300 项的代价是回到第 1 项。
-   * ★ 这不是「本地猜」—— setPlayed 成功返回就意味着服务端已经是这个值了,是已知不是假设。
-   */
-  async function markPlayed(it: Item, played: boolean) {
-    setCtx(null);
-    try {
-      await setPlayed(it.id, played);
-      setItems((cur) => cur?.map((x) => (x.id === it.id ? { ...x, played } : x)) ?? cur);
-    } catch (e) {
-      setToast(`标记失败:${e}`);
-    }
-  }
-
-  function download(it: Item) {
-    setCtx(null);
-    // container 传 "mkv":Item 上没有容器字段(容器在 MediaSource 里),详情页的下载也是这么传的。
-    downloadEnqueue(it.id, it.type_, it.name, "mkv", posterUrl(session, it.id))
-      .then(() => setToast("已加入下载"))
-      .catch((e) => setToast(`下载失败:${e}`));
-  }
-
-  const openCtx = (e: { preventDefault: () => void; clientX: number; clientY: number }, it: Item) => {
-    e.preventDefault();
-    setCtx({ x: e.clientX, y: e.clientY, item: it });
-  };
-
   /** 已选筛选胶囊(标注 10):[显示文本, 移除动作]。 */
   const chips = useMemo(() => {
     const out: { key: string; text: string; drop: () => void }[] = [];
@@ -509,29 +424,15 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
           <div className="empty">{nFilters ? "没有符合筛选的内容" : "这个库还没有内容"}</div>
         ) : layout === "grid" ? (
           <div className="dense-grid">
+            {/* 卡片只有一个操作:点 = 进详情。无悬停按钮、无右键(用户 2026-07-15 定,覆盖草稿 11)。 */}
             {items.map((it, i) => (
-              <Poster
-                key={it.id}
-                item={it}
-                session={session}
-                onOpen={onOpenItem}
-                onPlay={onPlay}
-                fav={favIds.has(it.id)}
-                onToggleFav={toggleFav}
-                index={i}
-                onContextMenu={openCtx}
-              />
+              <Poster key={it.id} item={it} session={session} onOpen={onOpenItem} index={i} />
             ))}
           </div>
         ) : (
           <div className="lib-list">
             {items.map((it) => (
-              <button
-                className="lib-row enter"
-                key={it.id}
-                onClick={() => onOpenItem(it)}
-                onContextMenu={(e) => openCtx(e, it)}
-              >
+              <button className="lib-row enter" key={it.id} onClick={() => onOpenItem(it)}>
                 <span className="lib-row-thumb">
                   {it.has_primary ? (
                     <img src={posterUrl(session, it.id, 120)} loading="lazy" />
@@ -556,53 +457,6 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
         )}
         <div style={{ height: 40 }} />
       </div>
-
-      {/* 标注 11:海报右键菜单(播放/标记/收藏/下载/查看详情)。 */}
-      {ctx && (
-        <div
-          className="ctxmenu"
-          style={{ left: ctx.x, top: ctx.y }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {!ctx.item.is_folder && (
-            <div
-              className="mi"
-              onClick={() => {
-                onPlay(ctx.item);
-                setCtx(null);
-              }}
-            >
-              <IconPlay size={15} /> 播放
-            </div>
-          )}
-          <div
-            className="mi"
-            onClick={() => {
-              onOpenItem(ctx.item);
-              setCtx(null);
-            }}
-          >
-            <IconInfo size={15} /> 查看详情
-          </div>
-          <div className="mi" onClick={() => void markPlayed(ctx.item, !ctx.item.played)}>
-            <IconCheck size={15} /> {ctx.item.played ? "标记未看" : "标记已看"}
-          </div>
-          <div
-            className="mi"
-            onClick={() => {
-              toggleFav(ctx.item);
-              setCtx(null);
-            }}
-          >
-            <IconHeart size={15} /> {favIds.has(ctx.item.id) ? "取消收藏" : "收藏"}
-          </div>
-          {!ctx.item.is_folder && (
-            <div className="mi" onClick={() => download(ctx.item)}>
-              <IconDownload size={15} /> 下载
-            </div>
-          )}
-        </div>
-      )}
 
       {toast && <div className="toast">{toast}</div>}
     </>
