@@ -42,7 +42,7 @@ pub struct ProxyHandle {
 impl Drop for ProxyHandle {
     fn drop(&mut self) {
         self.session.closed.store(true, Ordering::SeqCst);
-        let _ = self.session.gen_tx.send(self.session.gen_tx.borrow().wrapping_add(1));
+        self.session.bump_gen();
         self.session.window_notify.notify_waiters();
         self.session.data_notify.notify_waiters();
     }
@@ -217,8 +217,18 @@ impl Session {
     }
 
     // 把供给/取数游标重定位到字节 byte_start(首次连接 / seek)。作废旧 gen 令在途请求立刻 abort。
+    /* gen 自增 = 作废在途拉取。
+       ★ 绝不能写成 `gen_tx.send(gen_tx.borrow().wrapping_add(1))`:
+         borrow() 返回的 Ref 持着 watch 内部 RwLock 的**读锁**,而它是临时量,
+         **活到整条语句结束** —— send() 在读锁未释放时去拿写锁 → 同线程自我死锁,
+         整个代理当场卡死(响应头已发出、body 一个字节都不来 = 播放器黑屏+永远缓冲)。
+         send_modify 只取一次写锁,没有读 guard 存活期,故安全。 */
+    fn bump_gen(&self) {
+        self.gen_tx.send_modify(|g| *g = g.wrapping_add(1));
+    }
+
     async fn reset(&self, byte_start: u64) {
-        let _ = self.gen_tx.send(self.gen_tx.borrow().wrapping_add(1));
+        self.bump_gen();
         let chunk = byte_start / CHUNK_SIZE;
         {
             let mut st = self.state.lock().await;
@@ -525,5 +535,46 @@ mod tests {
         assert_eq!(parse_range("junk"), None);
         // 多区间取第一段
         assert_eq!(parse_range("bytes=0-99,200-299"), Some((0, Some(99))));
+    }
+
+    /* 端到端:代理吐的字节必须与上游逐字节相同 —— 差一个字节 mpv 就是黑屏。
+       需要真网络 + 一条真实直传流,故 #[ignore],手动:
+         cargo test -p linplayer-core prefetch_serves -- --ignored --nocapture
+       URL 从 LP_TEST_STREAM 环境变量取(别把签名链写进仓库)。 */
+    #[tokio::test]
+    #[ignore]
+    async fn prefetch_serves_bytes_identical_to_upstream() {
+        let url = match std::env::var("LP_TEST_STREAM") {
+            Ok(u) if !u.is_empty() => u,
+            _ => {
+                eprintln!("跳过:未设置 LP_TEST_STREAM");
+                return;
+            }
+        };
+
+        let h = start(url.clone(), 3, 1024 * 1024 * 1024, None)
+            .await
+            .expect("代理该起得来(总长 > 4MB 的真实流)");
+        eprintln!("代理地址: {}", h.url);
+
+        let cli = crate::http::client();
+        // 三处取样:头部(mpv 先读头)、跨 chunk 边界、深处 seek。
+        for (name, s, e) in [
+            ("头部", 0u64, 65_535u64),
+            ("跨4MB边界", CHUNK_SIZE - 1024, CHUNK_SIZE + 1023),
+            ("深处seek", 300 * 1024 * 1024, 300 * 1024 * 1024 + 65_535),
+        ] {
+            let rg = format!("bytes={s}-{e}");
+            let up = cli.get(&url).header("Range", &rg).send().await.unwrap();
+            let up_b = up.bytes().await.unwrap();
+            let lo = cli.get(&h.url).header("Range", &rg).send().await.unwrap();
+            let lo_status = lo.status();
+            let lo_b = lo.bytes().await.unwrap();
+
+            eprintln!("{name}: 上游 {} 字节 / 代理 {} 字节 (状态 {lo_status})", up_b.len(), lo_b.len());
+            assert_eq!(lo_status.as_u16(), 206, "{name}: 代理该回 206");
+            assert_eq!(lo_b.len(), up_b.len(), "{name}: 长度不一致");
+            assert_eq!(lo_b, up_b, "{name}: 字节不一致 —— mpv 会黑屏");
+        }
     }
 }
