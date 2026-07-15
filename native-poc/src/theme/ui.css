@@ -231,6 +231,11 @@
   font-size: 13px; font-weight: 600;
   cursor: pointer;
   display: inline-flex; align-items: center; gap: 8px;
+  /* ★ 按钮文字**永不换行**,自己也不被 flex 容器压窄。
+     根因(用户 2026-07-15「一行能放下非分两行 丑死了」):.btn 在 flex 容器(如 .sv-linebar)里
+     默认 flex-shrink:1 + min-width:auto,空间紧时被压窄,中文没有 nowrap 就在按钮内折成两行。
+     nowrap 让文字成整体,flex-shrink:0 让按钮保持内容宽度,宁可容器横向挤也不折字。 */
+  white-space: nowrap; flex-shrink: 0;
   transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
 .btn:hover { background: var(--panel-2); border-color: var(--ink-3); }

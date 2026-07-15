@@ -140,11 +140,33 @@ async fn login(
     // 持久化账号 -> 重启免登。upsert 会保住用户编辑过的名称/备注/线路,不会被重登冲掉。
     {
         let mut cfg = state.config.lock().unwrap();
+        /* 服务器图标默认取登录用户的 Emby 头像(用户 2026-07-15)。
+           ★ 只在**首次添加**时设:upsert 对已存在账号是 `acc.icon_url.or(old)`,
+             传 Some 会盖掉用户自定义的图标 —— 重登不能把人家换过的图标冲回头像。
+           ★ 只在**真有头像 tag** 时设:没头像就留空 icon_url,由 ServerGlyph 回落
+             emby_default.png(不用 build_icon_url 的 /web/touchicon.png 兜底,那玩意常 404)。 */
+        let is_new = cfg.find(&result.server).is_none();
+        let icon_url = if is_new {
+            result
+                .primary_image_tag
+                .as_deref()
+                .filter(|t| !t.is_empty())
+                .map(|tag| {
+                    linplayer_core::server_batch::build_icon_url(
+                        &result.server,
+                        Some(&result.user_id),
+                        Some(tag),
+                    )
+                })
+        } else {
+            None // 已存在 → 传 None,upsert 保留旧图标
+        };
         cfg.upsert(Account {
             server: result.server.clone(),
             token: result.token.clone(),
             user_id: result.user_id.clone(),
             user_name: result.user_name.clone(),
+            icon_url,
             // 存密码供重新登录 + 插件 emby.credentials 权限(对齐旧 Dart ServerConfig.password)。
             password: (!password.is_empty()).then_some(password),
             ..Default::default()
@@ -439,6 +461,17 @@ async fn search(
 async fn similar_items(state: State<'_, AppState>, item_id: String) -> Result<Vec<Item>, String> {
     let s = session_of(&state)?;
     emby::similar(&state.http, &s, &item_id, 12).await
+}
+
+/// 网络图标库(改图标弹窗浏览用)。默认命中 24h 缓存,force=true 重新拉四源。
+/// 返回空 = 从没拉成功过且本次也失败 → 前端提示「拉取失败」。
+#[tauri::command]
+async fn icon_library(
+    state: State<'_, AppState>,
+    force: bool,
+) -> Result<Vec<linplayer_core::icon_library::IconEntry>, String> {
+    // async + State(引用) 的命令 tauri 要求返 Result;库本身不报错(失败回退旧缓存/空)。
+    Ok(linplayer_core::icon_library::library(&state.http, force).await)
 }
 
 /// 首页某库"最新更新"轨道。
@@ -3713,6 +3746,7 @@ pub fn run() {
             list_next_up,
             search,
             similar_items,
+            icon_library,
             list_latest,
             list_resume,
             list_random,

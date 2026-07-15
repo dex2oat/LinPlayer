@@ -507,6 +507,11 @@ export function clearItemCache() {
  *  实测(mecf.mebimmer.de):相似度靠谱,可能混 Series+Movie,单击照常进各自详情。 */
 export const similarItems = (itemId: string) => invoke<Item[]>("similar_items", { itemId });
 
+/** 网络图标库的一个条目(改图标弹窗浏览用)。 */
+export type IconEntry = { name: string; url: string; source: string };
+/** 网络图标库(四个聚合源,核层 24h 缓存)。force=true 重新拉。空数组 = 拉取失败或空。 */
+export const iconLibrary = (force = false) => invoke<IconEntry[]>("icon_library", { force });
+
 export const itemDetail = async (itemId: string): Promise<ItemDetail> => {
   const hit = peekItemDetail(itemId);
   if (hit) return hit;

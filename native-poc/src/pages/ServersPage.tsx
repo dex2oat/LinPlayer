@@ -3,10 +3,12 @@ import {
   type AccountInfo,
   type AccountStatus,
   type LoginResult,
+  type IconEntry,
   type ServerLine,
   type SourceKind,
   accountIcon,
   clearAccountIcon,
+  iconLibrary,
   listAccounts,
   onAccountsChanged,
   probeAccounts,
@@ -77,13 +79,16 @@ const GLYPHS = [
     读不到就 Err,正好由这里回落成字形渲染,不用为字形再加一个核层命令。 */
 const isGlyph = (s: string) => s.length <= 2 && !/[\\/:.]/.test(s);
 
-/** 卡片/弹窗统一图标:data URI/URL→图片,字形→文本,否则默认服务器图标。 */
+/** 卡片/弹窗统一图标:data URI/URL→图片,字形→文本,都没有 → emby 默认图。
+    ★ 兜底用 /emby_default.png(public/,Vite 原样打进 dist)——
+    用户 2026-07-15:「既没有拉取网络图标 又没有图标 → 回退 emby_default.png」。
+    不再用抽象的 IconServer 线框图。 */
 function ServerGlyph({ icon, size = 20 }: { icon?: string | null; size?: number }) {
   if (icon && (icon.startsWith("http") || icon.startsWith("data:")))
     return <img className="sv-sic-img" src={icon} alt="" />;
   if (icon && isGlyph(icon))
     return <span className="sv-glyph" style={{ fontSize: size }}>{icon}</span>;
-  return <IconServer size={size} />;
+  return <img className="sv-sic-img" src="/emby_default.png" alt="" width={size} height={size} />;
 }
 
 /** 视图切换用的内联图标(icons.tsx 无网格/列表图标,就地描边,不用 emoji)。 */
@@ -842,6 +847,36 @@ function IconDialog({
   const [path, setPath] = useState("");
   const [busy, setBusy] = useState(false);
 
+  /* 网络图标库(四个聚合源,~1468 个,核层 24h 缓存)。首次开「网络图标源」页才拉,拉一次留着。
+     lib=null 加载中 / [] 拉失败或空 / 有值渲染网格。q 按名字过滤。 */
+  const [lib, setLib] = useState<IconEntry[] | null>(null);
+  const [libErr, setLibErr] = useState("");
+  const [q, setQ] = useState("");
+  const loadLib = useCallback((force: boolean) => {
+    setLib(null);
+    setLibErr("");
+    iconLibrary(force)
+      .then((list) => {
+        setLib(list);
+        if (list.length === 0) setLibErr("图标库拉取失败,请检查网络后刷新");
+      })
+      .catch((e) => {
+        setLib([]);
+        setLibErr(String(e));
+      });
+  }, []);
+  useEffect(() => {
+    if (source === "net" && lib === null) loadLib(false);
+  }, [source, lib, loadLib]);
+
+  // 过滤 + 封顶渲染数量:1468 个全渲染 <img> 会卡,搜索缩小后再放开。
+  const shownIcons = useMemo(() => {
+    const all = lib ?? [];
+    const kw = q.trim().toLowerCase();
+    const hit = kw ? all.filter((i) => i.name.toLowerCase().includes(kw)) : all;
+    return hit.slice(0, 300); // 一屏 300 个够翻;要更多就靠搜索缩小
+  }, [lib, q]);
+
   /* 本地上传:webview 里的 <input type=file> 拿不到真实路径(File.path 不存在),
      而 set_account_icon_file 要的正是路径。项目未装 @tauri-apps/plugin-dialog,
      故用已装的 @tauri-apps/api 的拖放事件取真实路径(拖入即填),外加手填路径兜底。 */
@@ -931,17 +966,48 @@ function IconDialog({
 
         {source === "net" && (
           <>
+            {/* 搜索框 + 刷新。图标库来自四个聚合源(核层 24h 缓存),点选即选中,确定后下载缓存。 */}
+            <div className="sv-libbar">
+              <input
+                className="field"
+                placeholder={`搜索图标名${lib ? `(共 ${lib.length} 个)` : "…"}`}
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+              />
+              <button className="btn sm" disabled={lib === null} onClick={() => loadLib(true)} title="重新拉取">
+                <IconRefresh size={14} />
+              </button>
+            </div>
+            {lib === null ? (
+              <div className="sv-libgrid loading"><span className="spinner" /></div>
+            ) : libErr ? (
+              <p className="sv-note">{libErr}</p>
+            ) : (
+              <div className="sv-libgrid">
+                {shownIcons.map((ic) => (
+                  <button
+                    key={ic.url}
+                    className={`sv-licell${url === ic.url ? " on" : ""}`}
+                    title={`${ic.name}${ic.source ? ` · ${ic.source}` : ""}`}
+                    onClick={() => setUrl(ic.url)}
+                  >
+                    {/* 缩略图直接 <img>,webview 自己缓存;选中的那张确定后才落 icon_cache。
+                        loading=lazy:网格里几百张,滚到才拉。 */}
+                    <img src={ic.url} alt={ic.name} loading="lazy"
+                      onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
+                  </button>
+                ))}
+                {shownIcons.length === 0 && <p className="sv-note">没有匹配「{q}」的图标</p>}
+              </div>
+            )}
+            {/* 高级:也能直接粘链接。选了网格里的图标这里会同步显示它的 URL。 */}
             <input
               className="field"
-              placeholder="粘贴图片 URL(http/https)…"
+              style={{ marginTop: 8 }}
+              placeholder="或直接粘贴图片 URL(http/https)…"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
             />
-            {/* 真实缺口,不糊弄:核层没有图标库搜索命令,也没有对接的外部图标库 API。 */}
-            <p className="sv-note">
-              在线图标库搜索暂缺(核层无对应命令,需接外部图标库 API);当前支持直接粘贴图片 URL,
-              确定后由核层下载并缓存。
-            </p>
           </>
         )}
 
