@@ -434,6 +434,13 @@ async fn search(
     emby::search(&state.http, &s, &query, types.as_deref(), limit).await
 }
 
+/// 相似推荐(剧集/电影详情页底部)。空结果不是错误 —— 有些条目没有相似项,前端整段不渲染。
+#[tauri::command]
+async fn similar_items(state: State<'_, AppState>, item_id: String) -> Result<Vec<Item>, String> {
+    let s = session_of(&state)?;
+    emby::similar(&state.http, &s, &item_id, 12).await
+}
+
 /// 首页某库"最新更新"轨道。
 #[tauri::command]
 async fn list_latest(
@@ -3705,6 +3712,7 @@ pub fn run() {
             list_collections,
             list_next_up,
             search,
+            similar_items,
             list_latest,
             list_resume,
             list_random,

@@ -503,6 +503,10 @@ export function clearItemCache() {
   detailMemo.clear();
 }
 
+/** 相似推荐(剧集/电影详情页底部)。空数组不是错误 —— 有些条目没有相似项,前端整段不渲染。
+ *  实测(mecf.mebimmer.de):相似度靠谱,可能混 Series+Movie,单击照常进各自详情。 */
+export const similarItems = (itemId: string) => invoke<Item[]>("similar_items", { itemId });
+
 export const itemDetail = async (itemId: string): Promise<ItemDetail> => {
   const hit = peekItemDetail(itemId);
   if (hit) return hit;

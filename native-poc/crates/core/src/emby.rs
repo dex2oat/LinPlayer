@@ -881,6 +881,30 @@ fn search_url(s: &Session, query: &str, types: Option<&[String]>, limit: Option<
 /// 跨服务器续播强匹配所需的 Fields(见 Item 的 provider_ids/presentation_unique_key/path)。
 pub const HISTORY_FIELDS: &str = "ProviderIds,PresentationUniqueKey,Path,SeriesId";
 
+/// 相似推荐(详情页底部)。
+///
+/// 2026-07-15 在 mecf.mebimmer.de 实测(见 [[emby-test-server-2-mebimmer]]):
+/// `GET /Items/{id}/Similar?UserId=..&Limit=12` → `{"Items":[...],"TotalRecordCount":N}`,
+/// 相似度靠谱(同题材),Limit 生效,条目带 Primary/Backdrop。可能混 Series+Movie。
+/// 旧 Flutter 栈既定口径一致(`getSimilarItems`)。
+///
+/// 复用 [`fetch_items`] —— 返回结构和列表端点同构,不另造解析。
+pub async fn similar(
+    http: &reqwest::Client,
+    s: &Session,
+    item_id: &str,
+    limit: u32,
+) -> Result<Vec<Item>, String> {
+    // Fields 与列表端点对齐:海报要 PrimaryImageAspectRatio,卡片角标要 Genres/Year/Rating。
+    let url = format!(
+        "{}/Items/{item_id}/Similar?UserId={}&Limit={}&Fields=PrimaryImageAspectRatio,Genres,ProductionYear,CommunityRating,{HISTORY_FIELDS}",
+        s.server,
+        s.user_id,
+        limit.min(SERVER_PAGE_CAP)
+    );
+    fetch_items(http, s, &url).await
+}
+
 /// 取单条 Item(带跨服续播强匹配所需的全部 Fields)。
 /// 与 [`detail`] 的区别:detail 面向详情页(要 Overview/People/子集),这个面向观看记录 —— 只要匹配判据。
 pub async fn item_for_history(

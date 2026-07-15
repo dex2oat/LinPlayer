@@ -17,6 +17,7 @@ import {
   getPrefs,
   itemDetail,
   peekItemDetail,
+  similarItems,
   itemMedia,
   listAccounts,
   personUrl,
@@ -38,6 +39,7 @@ import {
   IconList,
   IconPlay,
 } from "../app/icons";
+import Poster from "../components/Poster";
 import "./DetailPage.css";
 
 type Props = {
@@ -147,6 +149,9 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
 
   const railRef = useRef<HTMLDivElement | null>(null);
 
+  /** 相似推荐(剧集/电影页底部)。null=没请求/加载中,[]=确实没有 → 整段不渲染。 */
+  const [similar, setSimilar] = useState<Item[] | null>(null);
+
   const isSeries = (d?.type_ ?? item.type_) === "Series";
   const isEpisode = (d?.type_ ?? item.type_) === "Episode";
 
@@ -171,6 +176,15 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
     setSeason(null);
     setEpCtx(null);
     setMoreMenu(null);
+    setSimilar(null);
+
+    /* 相似推荐:**只给剧集/电影**(用户 2026-07-15:集详情页不要)。和详情**并发**,
+       不串在 itemDetail 后面 —— 它慢不该拖累主内容出现,失败也静默(整段不渲染)。 */
+    if (item.type_ === "Series" || item.type_ === "Movie") {
+      similarItems(item.id)
+        .then((s) => alive && setSimilar(s))
+        .catch(() => alive && setSimilar([]));
+    }
 
     itemDetail(item.id)
       .then((x) => {
@@ -890,6 +904,26 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
                   </div>
                 );
               })}
+            </>
+          )}
+
+          {/* ⑧ 相似推荐(剧集/电影页,放最下面 —— 用户 2026-07-15)。
+              空数组 = 服务端没给相似项 → 整段不渲染,不留空标题。
+              用 Poster:它就是海报卡的标准形态(评分角标/进度/单击进详情都现成),
+              onOpenChild 把点到的相似条目当新 item 推进详情栈,和分集点击同一个入口。
+              相似项可能混 Series+Movie,Poster 不关心类型,照常渲染。 */}
+          {similar && similar.length > 0 && (
+            <>
+              <div className="rowlab" style={{ margin: "26px 0 8px" }}>
+                <span className="h">相似推荐</span>
+              </div>
+              <div className="rail" onMouseDown={dragScroll}>
+                {similar.map((it, i) => (
+                  <div className="r-poster" key={it.id}>
+                    <Poster item={it} session={session} index={i} onOpen={onOpenChild} />
+                  </div>
+                ))}
+              </div>
             </>
           )}
         </div>
