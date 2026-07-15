@@ -67,6 +67,17 @@ impl Account {
         &self.lines[i].url
     }
 
+    /// 当前生效的线路地址。**会被 CF 优选反代改写**:该服务器开了优选反代时返回本地反代基址
+    /// (`http://127.0.0.1:port/...`),让 API 请求与 mpv 取流都改走优选 CF IP。
+    /// 需要原始上游地址(起反代自身的上游、编辑线路、展示给用户看)时用 [`Account::direct_line_url`]。
+    ///
+    /// 这是 CF 优选的**唯一 choke point** —— 取基址一律走这里,新增取流路径别绕开它,
+    /// 否则会出现「API 走优选、取流仍走原线」这种一半生效的静默故障。
+    pub fn active_line_url(&self) -> String {
+        crate::net::cf::runtime::local_url_for(&self.server)
+            .unwrap_or_else(|| self.direct_line_url().to_string())
+    }
+
     /// 显示名:优先用户起的名,否则回落 host,再否则整个 URL。
     pub fn display_name(&self) -> String {
         if !self.name.trim().is_empty() {
@@ -96,6 +107,36 @@ pub struct Prefs {
     /// 默认关 —— 它会让「这台服上没看过的片」也从中间起播,得用户明确要才开。
     #[serde(default)]
     pub cross_server_resume: bool,
+    /// 跨服回传主开关:看完/进度写回**其它**服务器。
+    /// 默认关 —— 它会往别人的服务器写数据,必须用户主动开(对齐 Dart 默认值)。
+    #[serde(default)]
+    pub cross_server_writeback: bool,
+    /// 回传范围:"all" 所有看过的服 / "first" 仅初次 / "latest" 仅最近。
+    /// 存 wire 字符串而非枚举:Prefs 在 config 里,枚举在 watch_history 里,
+    /// 这么存免得 config 反过来依赖 watch_history。取用时 WritebackRange::from_wire。
+    #[serde(default = "default_writeback_range")]
+    pub cross_server_writeback_range: String,
+    /// 回传时是否连播放进度一起同步(关掉则只同步「已看完」标记)。默认开。
+    #[serde(default = "default_true")]
+    pub cross_server_writeback_progress: bool,
+    /// 多线程加载(本地预取代理)开关。默认开。
+    #[serde(default = "default_true")]
+    pub prefetch_enabled: bool,
+    /// 预取并发线程数。引擎内部 clamp(2,4),这里存原值。
+    #[serde(default = "default_prefetch_threads")]
+    pub prefetch_threads: usize,
+    /// 读前缓冲上限(字节)。默认 1GB。
+    #[serde(default = "default_prefetch_cache")]
+    pub prefetch_cache_bytes: u64,
+}
+fn default_prefetch_threads() -> usize {
+    3
+}
+fn default_prefetch_cache() -> u64 {
+    1024 * 1024 * 1024
+}
+fn default_writeback_range() -> String {
+    "all".to_string()
 }
 impl Default for Prefs {
     fn default() -> Self {
@@ -104,6 +145,12 @@ impl Default for Prefs {
             sub_lang: None,
             sub_enabled: true,
             cross_server_resume: false,
+            cross_server_writeback: false,
+            cross_server_writeback_range: default_writeback_range(),
+            cross_server_writeback_progress: true,
+            prefetch_enabled: true,
+            prefetch_threads: default_prefetch_threads(),
+            prefetch_cache_bytes: default_prefetch_cache(),
         }
     }
 }
@@ -269,6 +316,9 @@ impl AppConfig {
         if dirty {
             cfg.save();
         }
+        // 必须无条件同步:save() 只在 dirty 时走,干净加载时白名单会是空的 ——
+        // 表现为"重启后自签名服务器全连不上,重新勾一次又好了"。
+        cfg.sync_insecure_hosts();
         cfg
     }
 
@@ -287,6 +337,24 @@ impl AppConfig {
         if let Ok(json) = serde_json::to_string_pretty(self) {
             let _ = std::fs::write(path, json);
         }
+        self.sync_insecure_hosts();
+    }
+
+    /// 把「允许自签名」的账号 host 同步进 HTTP 层白名单。
+    /// 挂在 load/save 上是故意的:每条改账号的路径最后都会 save,搭在这儿就不会漏
+    /// —— 漏了的后果是用户勾了"允许自签名"却连不上、或取消了勾选却还在放行,两头都不响。
+    fn sync_insecure_hosts(&self) {
+        let hosts = self
+            .accounts
+            .iter()
+            .filter(|a| a.allow_insecure_tls)
+            // 一个账号可能配多条线路,每条都可能是不同 host,得全放进去。
+            .flat_map(|a| {
+                std::iter::once(a.server.clone())
+                    .chain(a.lines.iter().map(|l| l.url.clone()))
+            })
+            .collect::<Vec<_>>();
+        crate::http::set_insecure_hosts(hosts);
     }
 
     pub fn active_account(&self) -> Option<&Account> {
@@ -383,6 +451,30 @@ mod tests {
         // 下标越界(线路被删过)→ 钳回最后一条,不 panic。
         a.active_line = 99;
         assert_eq!(a.direct_line_url(), "https://cdn");
+    }
+
+    /// CF 优选的 choke point 必须真的穿透到 Account 这一层 —— 否则改写表登记了、
+    /// 取基址的人却拿不到,就是"开了优选没反应"。这条测的就是那根线通不通。
+    #[test]
+    fn active_line_url_is_rewritten_by_cf_runtime() {
+        // 全局改写表被所有测试共享,用唯一 id 免得和别的用例串台。
+        let mut a = acc("https://cf-choke-point-test.example.com");
+        a.lines = vec![ServerLine {
+            id: "1".into(),
+            name: "CDN".into(),
+            url: "https://cdn.example.com".into(),
+            remark: None,
+        }];
+        // 未开优选 → 与 direct 一致。
+        assert_eq!(a.active_line_url(), "https://cdn.example.com");
+
+        crate::net::cf::runtime::bind(&a.server, "http://127.0.0.1:5001");
+        assert_eq!(a.active_line_url(), "http://127.0.0.1:5001", "开了优选却没改写 = choke point 断了");
+        // direct 必须**不受**改写影响:反代自己要拿它当上游,被改写就自环了。
+        assert_eq!(a.direct_line_url(), "https://cdn.example.com");
+
+        crate::net::cf::runtime::unbind(&a.server);
+        assert_eq!(a.active_line_url(), "https://cdn.example.com", "关了优选没恢复直连");
     }
 
     #[test]

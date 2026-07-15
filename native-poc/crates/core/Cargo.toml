@@ -11,6 +11,12 @@ serde_json = "1"
 # rustls-tls(非 native-tls):去 openssl-sys,安卓交叉编译免装 OpenSSL;桌面亦通用。
 # .resolve()/danger_accept_invalid_certs(CF 钉 IP+SNI)在 rustls 下同样支持。
 reqwest = { version = "0.12", default-features = false, features = ["json", "socks", "rustls-tls", "charset", "http2"] }
+# rustls/webpki-roots/pki-types 本就在依赖树里(reqwest 的 rustls-tls 传递引入),这里提成直接依赖
+# 是为了自定义证书校验器 —— 把「自签名放行」收敛成**按 host 白名单**,而不是全局 accept_invalid_certs。
+# 版本必须与 reqwest 内部的 rustls 同版(0.23),否则 use_preconfigured_tls 的 downcast 落空 → build() 报错。
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = "1"
+webpki-roots = "1"
 dirs = "5"
 async-trait = "0.1"
 md-5 = "0.10"

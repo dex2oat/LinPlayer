@@ -8,6 +8,7 @@ use linplayer_core::danmaku::{self, DanmakuAuthType, DanmakuComment, DanmakuSour
 use linplayer_core::emby::{self, Item, LoginResult, PlaybackTarget, Session};
 use linplayer_core::http;
 use linplayer_core::media::{pick_tracks, Track};
+use linplayer_core::net::cf;
 use linplayer_core::source::anirss::AniRssBackend;
 use linplayer_core::source::feiniu::FeiniuBackend;
 use linplayer_core::source::openlist::OpenListBackend;
@@ -41,8 +42,9 @@ struct AppState {
     resign_count: AtomicU32,
     // 多线程加载:本地预取代理句柄(仅 Emby 直传流);Drop 即停服。None=直连。
     prefetch: Mutex<Option<linplayer_core::net::prefetch::ProxyHandle>>,
-    // CF 优选:本地钉 IP 反代句柄;Drop 即停服。None=不走反代。
-    cf_proxy: Mutex<Option<linplayer_core::net::cf::CfProxyHandle>>,
+    // CF 优选:server_id -> 本地钉 IP 反代句柄;移除即 Drop 停服。
+    // 与 cf::runtime 的路由改写表一一对应(那边是纯改写,这边持句柄),开关必须两边同步。
+    cf_proxy: Mutex<HashMap<String, linplayer_core::net::cf::CfProxyHandle>>,
     // 多线程下载管理器(长驻,持久化索引)。
     download: linplayer_core::download::DownloadManager,
     // 当前 Emby 播放的 Trakt scrobble 上下文(play 时抓取,stop 时用于收尾上报)。
@@ -51,6 +53,15 @@ struct AppState {
     watch_history: linplayer_core::watch_history::WatchHistory,
     // 剧 -> TMDB id 缓存(跨服匹配剧集要它;每部剧只查一次)。对齐 Dart _seriesTmdbCache。
     series_tmdb: Mutex<HashMap<String, Option<String>>>,
+    // server_id -> 连通状态三态。probe_accounts 刷新,list_accounts 读;不落盘(重启即重探)。
+    account_status: Mutex<HashMap<String, AccountStatus>>,
+    // 自动挂弹幕的连号锚点:seriesId|seasonId -> (集号, 弹弹Play episodeId)。
+    // 只在内存(重启重新匹配一次即可,不值得落盘)。
+    danmaku_anchors: Mutex<HashMap<String, (i64, i64)>>,
+    // 实时预读翻译:轮询任务的停止信号。None=没开。
+    live_translate: Mutex<Option<LiveTranslate>>,
+    // 跨服回传去重集(对齐 Dart _done:一次播放会话内不重复回传同一目标)。play 时清空。
+    wh_done: Mutex<std::collections::HashSet<String>>,
     // 当前播放条目的观看记录上下文(play 时装,progress/stop 时用)。
     wh_ctx: Mutex<Option<(String, linplayer_core::watch_history::Candidate, Option<String>)>>,
     // 插件管理器(setup 期建,持 AppHandle 的 host)。
@@ -141,10 +152,16 @@ fn current_session(state: State<'_, AppState>) -> Option<LoginResult> {
         .active_account()
         .filter(|a| !a.is_file_browse())
         .map(|a| LoginResult {
-            server: a.server.clone(),
+            // 前端 api.ts 拿这个 server 直接拼封面/背景图地址,所以必须是**当前生效线路**
+            // (经 CF 优选改写),不能是账号主键 a.server ——
+            // 否则用户切到备用线路后 API 走新线、封面还打老线,表现为"封面全白但不报错"。
+            server: a.active_line_url(),
             token: a.token.clone(),
             user_id: a.user_id.clone(),
             user_name: a.user_name.clone(),
+            // 头像 tag 只在登录那一刻有意义(用来建服务器图标,已存进 Account.icon_url);
+            // 恢复会话时没有也不需要重新取。
+            primary_image_tag: None,
         })
 }
 
@@ -182,7 +199,10 @@ async fn aggregate_search(
         let query = query.clone();
         handles.push(tauri::async_runtime::spawn(async move {
             let s = Session {
-                server: a.server.clone(),
+                // 必须走生效线路:用 a.server(账号主键)会让聚合搜索永远打主线路,
+                // 用户切到备用线是因为主线路不通 —— 那台服务器会 unwrap_or_default() 成空结果
+                // 从搜索里静默消失,查都没处查。
+                server: a.active_line_url(),
                 token: a.token.clone(),
                 user_id: a.user_id.clone(),
                 device_id,
@@ -237,7 +257,7 @@ fn set_active_server(state: State<'_, AppState>, server_id: String) -> Result<()
         *state.session.lock().unwrap() = None;
     } else {
         *state.session.lock().unwrap() = Some(Session {
-            server: account.direct_line_url().to_string(),
+            server: account.active_line_url(),
             token: account.token,
             user_id: account.user_id,
             device_id,
@@ -405,13 +425,32 @@ async fn set_favorite(
     emby::set_favorite(&state.http, &s, &item_id, fav).await
 }
 
+/// 服务器连通状态。草稿 06 的状态点三态:绿=正常 / 黄=需重登 / 灰=未连。
+/// `Unknown` 是「还没探过」,前端按灰显示 —— 与"探过了确实不通"同色不同义,
+/// 别在 Rust 侧合并成一个:合并了就没法区分"没测"和"测了挂了"。
+#[derive(serde::Serialize, Clone, Copy, PartialEq, Debug)]
+#[serde(rename_all = "snake_case")]
+enum AccountStatus {
+    /// 绿:能连且 token 有效。
+    Ok,
+    /// 黄:服务器活着,但 token 被吊销/过期 —— 用户重登一次就好。
+    Reauth,
+    /// 灰:压根连不上(域名挂了/线路不通/超时)。
+    Down,
+    /// 灰:尚未探测。
+    Unknown,
+}
+
 /// 服务器页:服务器列表(Emby + 浏览型源,统一一张表)。
 #[derive(serde::Serialize)]
 struct AccountInfo {
     server: String,
     user_name: String,
     user_id: String,
+    /// 是否当前选中的服务器。**不是**连通状态 —— 状态看 `status`。
     active: bool,
+    /// 连通状态三态(需先调 probe_accounts 刷新,否则恒为 unknown)。
+    status: AccountStatus,
     /// 显示名(用户起的名,空则回落 host)。
     name: String,
     remark: Option<String>,
@@ -427,11 +466,20 @@ struct AccountInfo {
 }
 
 fn account_info(a: &linplayer_core::Account, active: bool) -> AccountInfo {
+    account_info_with(a, active, AccountStatus::Unknown)
+}
+
+fn account_info_with(
+    a: &linplayer_core::Account,
+    active: bool,
+    status: AccountStatus,
+) -> AccountInfo {
     AccountInfo {
         server: a.server.clone(),
         user_name: a.user_name.clone(),
         user_id: a.user_id.clone(),
         active,
+        status,
         name: a.display_name(),
         remark: a.remark.clone(),
         icon_url: a.icon_url.clone(),
@@ -448,11 +496,62 @@ fn account_info(a: &linplayer_core::Account, active: bool) -> AccountInfo {
 fn list_accounts(state: State<'_, AppState>) -> Vec<AccountInfo> {
     let cfg = state.config.lock().unwrap();
     let active = cfg.active;
+    let statuses = state.account_status.lock().unwrap();
     cfg.accounts
         .iter()
         .enumerate()
-        .map(|(i, a)| account_info(a, Some(i) == active))
+        .map(|(i, a)| {
+            let st = statuses.get(&a.server).copied().unwrap_or(AccountStatus::Unknown);
+            account_info_with(a, Some(i) == active, st)
+        })
         .collect()
+}
+
+/// 探测所有服务器的连通状态,刷新缓存并返回新的列表。前端进服务器页时调一次。
+/// 并发探测:一台慢的不该拖住整页(串行 N 台 × 8s 超时 = 页面空一分钟)。
+#[tauri::command]
+async fn probe_accounts(state: State<'_, AppState>) -> Result<Vec<AccountInfo>, String> {
+    let accounts = state.config.lock().unwrap().accounts.clone();
+    let mut handles = Vec::new();
+    for a in accounts {
+        let http = state.http.clone();
+        handles.push(tauri::async_runtime::spawn(async move {
+            let status = probe_account(&http, &a).await;
+            (a.server.clone(), status)
+        }));
+    }
+    for h in handles {
+        if let Ok((server, status)) = h.await {
+            state.account_status.lock().unwrap().insert(server, status);
+        }
+    }
+    Ok(list_accounts(state))
+}
+
+/// 单台探测。**必须走 active_line_url()** —— 用户切了备用线路正是因为主线不通,
+/// 拿主线去探会把一台好服务器判成灰,而用户看到的又是"我明明能用"。
+async fn probe_account(http: &reqwest::Client, a: &linplayer_core::Account) -> AccountStatus {
+    let base = a.active_line_url();
+    let base = base.trim_end_matches('/');
+    if a.is_file_browse() {
+        // 浏览型源没有统一的鉴权探测端点(各家 API 差太多),只判连通:
+        // 能要到任何 HTTP 响应就算活着。判不了"需重登",所以只会给出绿/灰两态。
+        return match http.get(base).send().await {
+            Ok(_) => AccountStatus::Ok,
+            Err(_) => AccountStatus::Down,
+        };
+    }
+    // Emby:/System/Info 需要鉴权 —— 正好一次分出三态。
+    // 用 /System/Info/Public 是不行的:它不校验 token,token 失效也回 200,
+    // 那样"需重登"永远探不出来,黄灯就成了摆设。
+    let url = format!("{base}/System/Info?api_key={}", a.token);
+    match http.get(&url).send().await {
+        Ok(r) if r.status().is_success() => AccountStatus::Ok,
+        Ok(r) if matches!(r.status().as_u16(), 401 | 403) => AccountStatus::Reauth,
+        // 其它状态码(5xx / 404 / 网关错误)说明连上了但这服务器不正常,归为不可用。
+        Ok(_) => AccountStatus::Down,
+        Err(_) => AccountStatus::Down,
+    }
 }
 
 /// 编辑服务器:名称/备注/图标/TLS 放行/密码。None=不改该字段。
@@ -528,10 +627,231 @@ fn set_active_line(state: State<'_, AppState>, server_id: String, index: usize) 
     let is_active = cfg.active_account().map(|x| x.server == server_id).unwrap_or(false);
     if is_active {
         if let Some(s) = state.session.lock().unwrap().as_mut() {
-            s.server = cfg.find(&server_id).unwrap().direct_line_url().to_string();
+            s.server = cfg.find(&server_id).unwrap().active_line_url();
         }
     }
     Ok(())
+}
+
+/// 注册 `linplayer://` 协议(Windows)。
+///
+/// 用「写 .reg 文件 + reg import」而非 `reg add`:后者对空值(`URL Protocol`)和带空格的
+/// 路径引号处理不可靠,会把命令存成没引号、一运行就失败。这是 Dart 侧踩过的坑,照搬。
+///
+/// 每次启动都跑一遍:本项目是绿色压缩包分发,用户挪个文件夹 exe 路径就变了,
+/// 注册表里还钉着老路径的话,深链点了会启动失败或启动到旧副本 —— 而且不报错。
+#[cfg(windows)]
+fn register_deep_link_scheme() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    let exe = exe.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+    let content = format!(
+        "Windows Registry Editor Version 5.00\r\n\
+         \r\n\
+         [HKEY_CURRENT_USER\\Software\\Classes\\linplayer]\r\n\
+         @=\"URL:LinPlayer Protocol\"\r\n\
+         \"URL Protocol\"=\"\"\r\n\
+         \r\n\
+         [HKEY_CURRENT_USER\\Software\\Classes\\linplayer\\shell\\open\\command]\r\n\
+         @=\"\\\"{exe}\\\" \\\"%1\\\"\"\r\n"
+    );
+    let f = std::env::temp_dir().join("linplayer_scheme.reg");
+    // .reg 必须是无 BOM 的 UTF-8,reg import 才认。
+    if std::fs::write(&f, content.as_bytes()).is_ok() {
+        let _ = std::process::Command::new("reg").arg("import").arg(&f).status();
+        let _ = std::fs::remove_file(&f);
+    }
+}
+
+#[cfg(not(windows))]
+fn register_deep_link_scheme() {}
+
+/// 启动参数里的 `linplayer://...`(系统通过协议拉起我们时会作为 argv 传进来)。
+/// 前端进主界面后调一次;有值就走确认流程。
+///
+/// ⚠️ 只在**冷启动**时有效。App 已经开着时再点深链,系统会拉起第二个进程 ——
+/// 那需要单实例守卫(tauri-plugin-single-instance),没接,已知缺口。
+#[tauri::command]
+fn startup_deep_link() -> Option<String> {
+    std::env::args().skip(1).find(|a| a.starts_with("linplayer://"))
+}
+
+// ---------- 服务器图标:下载 / 缓存 / 本地上传 ----------
+
+/// 取服务器图标(data URI)。首次调用会下载并缓存,之后直接读缓存。
+/// 取不到返回 Err —— 由前端回退内置图标,别在这儿吞成空串让 UI 显示碎图。
+#[tauri::command]
+async fn account_icon(state: State<'_, AppState>, server_id: String) -> Result<String, String> {
+    let url = {
+        let cfg = state.config.lock().unwrap();
+        cfg.find(&server_id).and_then(|a| a.icon_url.clone())
+    };
+    linplayer_core::icon_cache::get(&state.http, &server_id, url.as_deref()).await
+}
+
+/// 用户从本地挑一张图当服务器图标。返回 data URI 供前端立刻显示。
+#[tauri::command]
+fn set_account_icon_file(
+    state: State<'_, AppState>,
+    server_id: String,
+    file_path: String,
+) -> Result<String, String> {
+    let uri = linplayer_core::icon_cache::set_from_file(&server_id, &file_path)?;
+    // icon_url 记成本地路径:重装/清缓存后还能从原文件重建,不用让用户再挑一次。
+    let mut cfg = state.config.lock().unwrap();
+    let a = cfg.find_mut(&server_id).ok_or("找不到该服务器")?;
+    a.icon_url = Some(file_path);
+    cfg.save();
+    Ok(uri)
+}
+
+/// 清掉图标缓存,下次 account_icon 会重新下载(服务器换了 logo 时用)。
+#[tauri::command]
+fn clear_account_icon(server_id: String) {
+    linplayer_core::icon_cache::clear(&server_id);
+}
+
+// ---------- 批量解析添加服务器 + linplayer:// 深链(草稿页 06)----------
+
+/// 解析分享文本 → 结构化账号块。**纯解析,不登录、不落盘** ——
+/// 前端拿去展示让用户核对/补用户名,确认后再调 batch_add_servers。
+#[tauri::command]
+fn batch_parse(text: String) -> Vec<linplayer_core::server_batch::ParsedServerBlock> {
+    linplayer_core::server_batch::parse_share_text(&text)
+}
+
+/// 解析 `linplayer://add-server?...` 深链。
+///
+/// ⚠️ 返回 Some **不等于**可以直接加号 —— 深链可能来自任何网页/聊天窗口。
+/// 前端必须弹确认框展示服务器地址和用户名,由用户点头后才调 batch_add_servers。
+#[tauri::command]
+fn parse_deep_link(url: String) -> Option<linplayer_core::server_batch::DeepLinkAddServer> {
+    linplayer_core::server_batch::parse_deep_link(&url)
+}
+
+#[derive(serde::Serialize)]
+struct BatchAddResult {
+    /// 加成功的服务器主键(= 生效线路 URL);失败为 None。
+    server_id: Option<String>,
+    /// 展示名。
+    name: String,
+    /// 失败原因;成功为 None。
+    error: Option<String>,
+}
+
+/// 批量添加:逐块逐线路试登录,第一条通的线路即设为生效线路,其余线路留着备用。
+///
+/// 为什么要逐线路试:分享文本里的「主线路」经常是最不通的那条(被墙/限速),
+/// 直接钉死第 0 条会让用户加完就连不上,还得自己去线路列表里一条条点。
+///
+/// 参数:
+/// - `fallback_username` / `fallback_password`:用户在 UI 里补的,套用到所有 username 为空的块。
+/// - `fallback_name`:深链带来的服务器名(`?name=`);取不到 SystemInfo.serverName 时用。
+#[tauri::command]
+async fn batch_add_servers(
+    state: State<'_, AppState>,
+    blocks: Vec<linplayer_core::server_batch::ParsedServerBlock>,
+    fallback_username: Option<String>,
+    fallback_password: Option<String>,
+    fallback_name: Option<String>,
+) -> Result<Vec<BatchAddResult>, String> {
+    use linplayer_core::server_batch as sb;
+    let device_id = state.config.lock().unwrap().device_id.clone();
+    let mut out = Vec::new();
+
+    for block in &blocks {
+        let lines = sb::server_lines(block);
+        if lines.is_empty() {
+            continue;
+        }
+        // 空串要当「缺用户名」处理,不能 unwrap_or_default 后闷头登 ——
+        // 深链里 ?user= 显式给空串正是这种情况。
+        let username = block
+            .username
+            .clone()
+            .or_else(|| fallback_username.clone())
+            .filter(|s| !s.trim().is_empty());
+        let password = block
+            .password
+            .clone()
+            .or_else(|| fallback_password.clone())
+            .unwrap_or_default();
+        let display = lines[0].name.clone();
+        let Some(username) = username else {
+            out.push(BatchAddResult {
+                server_id: None,
+                name: display,
+                error: Some("缺用户名".into()),
+            });
+            continue;
+        };
+
+        let mut added = None;
+        let mut last_err = String::new();
+        for (i, line) in lines.iter().enumerate() {
+            match emby::login(&state.http, &line.url, &username, &password, &device_id).await {
+                Ok((session, result)) => {
+                    let name = emby::server_info(&state.http, &line.url)
+                        .await
+                        .map(|si| si.name)
+                        .ok()
+                        .filter(|n| !n.trim().is_empty())
+                        .or_else(|| fallback_name.clone())
+                        .unwrap_or_default();
+                    let icon = sb::build_icon_url(
+                        &line.url,
+                        Some(&result.user_id),
+                        result.primary_image_tag.as_deref(),
+                    );
+                    {
+                        let mut cfg = state.config.lock().unwrap();
+                        cfg.upsert(Account {
+                            server: result.server.clone(),
+                            token: result.token.clone(),
+                            user_id: result.user_id.clone(),
+                            user_name: result.user_name.clone(),
+                            name,
+                            icon_url: Some(icon),
+                            password: (!password.is_empty()).then(|| password.clone()),
+                            lines: lines.clone(),
+                            active_line: i, // 试通的那条即生效线路
+                            ..Default::default()
+                        });
+                        // 块里带的弹幕线路并进全局弹幕源(接着现有源的 priority 往后排)。
+                        let base = cfg.danmaku_sources.len() as i32;
+                        for src in sb::danmaku_sources_of(block, base) {
+                            if !cfg.danmaku_sources.iter().any(|x| x.id == src.id) {
+                                cfg.danmaku_sources.push(src);
+                            }
+                        }
+                        cfg.save();
+                    }
+                    *state.session.lock().unwrap() = Some(session);
+                    *state.source.lock().unwrap() = None;
+                    added = Some(result.server);
+                    break;
+                }
+                Err(e) => last_err = e,
+            }
+        }
+        match added {
+            Some(id) => out.push(BatchAddResult {
+                server_id: Some(id),
+                name: display,
+                error: None,
+            }),
+            None => out.push(BatchAddResult {
+                server_id: None,
+                name: display,
+                // 所有线路都没通才算失败,报最后一条的错。
+                error: Some(if last_err.is_empty() {
+                    "所有线路均无法连接".into()
+                } else {
+                    last_err
+                }),
+            }),
+        }
+    }
+    Ok(out)
 }
 
 /// 线路测速:并发 HEAD 各线路的 /System/Info/Public,返回毫秒;不通为 None。
@@ -596,7 +916,7 @@ async fn remove_account(state: State<'_, AppState>, server_id: String) -> Result
                 .iter()
                 .find(|a| a.server == server_id)
                 .map(|a| Session {
-                    server: a.server.clone(),
+                    server: a.active_line_url(),
                     token: a.token.clone(),
                     user_id: a.user_id.clone(),
                     device_id: cfg.device_id.clone(),
@@ -617,7 +937,7 @@ async fn remove_account(state: State<'_, AppState>, server_id: String) -> Result
         cfg.active_account()
             .filter(|a| !a.is_file_browse())
             .map(|a| Session {
-                server: a.direct_line_url().to_string(),
+                server: a.active_line_url(),
                 token: a.token.clone(),
                 user_id: a.user_id.clone(),
                 device_id,
@@ -664,6 +984,9 @@ async fn play(
         None => resume_secs,
     };
     *state.wh_ctx.lock().unwrap() = ctx;
+    // 回传去重集按「一次播放」计生命周期(对齐 Dart _done):不清的话,看完第二集时
+    // 第一集的去重键还在,同一台服务器会被判成"已回传过"而跳过 —— 静默漏传。
+    state.wh_done.lock().unwrap().clear();
 
     let target = emby::resolve_stream(&state.http, &s, &item_id).await?;
     poclog(&format!(
@@ -672,8 +995,12 @@ async fn play(
     ));
 
     // 多线程加载:仅直传流走本地预取代理(转码 URL 是分段流,跳过直连)。
-    // 起服失败/非直传 → 回退直连;旧句柄被替换即 Drop 停服。
-    let play_url = if target.play_method == "DirectStream" {
+    // 起服失败/非直传/用户关掉 → 回退直连;旧句柄被替换即 Drop 停服。
+    let (pf_on, pf_threads, pf_cache) = {
+        let p = &state.config.lock().unwrap().prefs;
+        (p.prefetch_enabled, p.prefetch_threads, p.prefetch_cache_bytes)
+    };
+    let play_url = if pf_on && target.play_method == "DirectStream" {
         let resign: linplayer_core::net::prefetch::ResignFn = {
             let http = state.http.clone();
             let sess = s.clone();
@@ -685,9 +1012,8 @@ async fn play(
                 })
             })
         };
-        // 读前缓冲上限跟随视频缓存档位;PoC 暂固定 3 线程 / 1GB 封顶。
-        // ponytail: 线程数与缓存上限接 Prefs 后再放开,现值覆盖弱网聚合已够验证。
-        match linplayer_core::net::prefetch::start(target.url.clone(), 3, 1024 * 1024 * 1024, Some(resign)).await {
+        // 线程数与读前缓冲上限来自设置页(prefetch::start 内部会把线程数 clamp 到 2~4)。
+        match linplayer_core::net::prefetch::start(target.url.clone(), pf_threads, pf_cache, Some(resign)).await {
             Some(h) => {
                 let u = h.url.clone();
                 *state.prefetch.lock().unwrap() = Some(h);
@@ -863,6 +1189,150 @@ fn set_cross_server_resume(state: State<'_, AppState>, enabled: bool) -> Result<
     Ok(())
 }
 
+/// 跨服回传设置(主开关 / 范围 / 是否带进度)。
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WritebackSettings {
+    enabled: bool,
+    /// "all" | "first" | "latest"
+    range: String,
+    include_progress: bool,
+}
+
+#[tauri::command]
+fn get_writeback_settings(state: State<'_, AppState>) -> WritebackSettings {
+    let p = &state.config.lock().unwrap().prefs;
+    WritebackSettings {
+        enabled: p.cross_server_writeback,
+        range: p.cross_server_writeback_range.clone(),
+        include_progress: p.cross_server_writeback_progress,
+    }
+}
+
+#[tauri::command]
+fn set_writeback_settings(
+    state: State<'_, AppState>,
+    settings: WritebackSettings,
+) -> Result<(), String> {
+    let mut cfg = state.config.lock().unwrap();
+    cfg.prefs.cross_server_writeback = settings.enabled;
+    // from_wire 对无法识别的值静默回落 "all" —— 那会让用户以为选了"仅初次"其实在写所有服。
+    // 宁可在这里拒掉。
+    if !matches!(settings.range.as_str(), "all" | "first" | "latest") {
+        return Err(format!("未知的回传范围: {}", settings.range));
+    }
+    cfg.prefs.cross_server_writeback_range = settings.range;
+    cfg.prefs.cross_server_writeback_progress = settings.include_progress;
+    cfg.save();
+    Ok(())
+}
+
+/// 所有已登录 Emby 账号的会话(跨服回传/恢复扫描要挨个打)。浏览型源没有 Emby 会话,跳过。
+fn all_emby_sessions(state: &AppState) -> Vec<Session> {
+    let cfg = state.config.lock().unwrap();
+    let device_id = cfg.device_id.clone();
+    cfg.accounts
+        .iter()
+        .filter(|a| !a.is_file_browse() && !a.token.is_empty())
+        .map(|a| Session {
+            server: a.active_line_url(),
+            token: a.token.clone(),
+            user_id: a.user_id.clone(),
+            device_id: device_id.clone(),
+        })
+        .collect()
+}
+
+/// 恢复扫描:拿本地观看记录去当前服务器找对应条目,strong 匹配的自动回写进度,
+/// possible 匹配的放进 prompt_candidates 交给用户确认。
+///
+/// ⚠️ 这会**往当前服务器写**播放进度,不是只读扫描。前端别在进页面时自动跑,
+/// 要给用户一个明确的「扫描并恢复」按钮。
+#[tauri::command]
+async fn watch_history_scan_restore(
+    state: State<'_, AppState>,
+) -> Result<linplayer_core::watch_history_sync::RestoreReport, String> {
+    let s = session_of(&state)?;
+    let scope = scope_of(&s);
+    linplayer_core::watch_history_sync::scan_restore(&state.http, &s, &state.watch_history, &scope)
+        .await
+}
+
+/// 用户确认某个 possible 候选后,把它写进当前服务器。
+#[tauri::command]
+async fn watch_history_restore_candidate(
+    state: State<'_, AppState>,
+    candidate: wh::RestoreCandidate,
+) -> Result<bool, String> {
+    let s = session_of(&state)?;
+    linplayer_core::watch_history_sync::restore_candidate(
+        &state.http,
+        &s,
+        &state.watch_history,
+        &candidate,
+    )
+    .await
+}
+
+/// 停播时把这次的进度/已看状态回传到**其它**看过同一内容的服务器。
+/// 判定逻辑全在 core 的 writeback_targets/writeback_plan(已测),这里只做 HTTP 编排。
+///
+/// 默认不跑:主开关默认关,因为它会往用户的其它服务器写数据。
+async fn writeback_on_stop(
+    state: &State<'_, AppState>,
+    scope: &str,
+    cand: &wh::Candidate,
+    pos: f64,
+) -> Result<(), String> {
+    let (enabled, range, include_progress) = {
+        let p = &state.config.lock().unwrap().prefs;
+        (
+            p.cross_server_writeback,
+            wh::WritebackRange::from_wire(&p.cross_server_writeback_range),
+            p.cross_server_writeback_progress,
+        )
+    };
+    if !enabled {
+        return Ok(());
+    }
+    let s = session_of(state)?;
+    let sessions = all_emby_sessions(state);
+    let ticks = (pos * wh::TICKS_PER_SEC as f64) as i64;
+    // 「已看完」判定必须与 capture_history 落本地记录时用的是同一个阈值(90%),
+    // 否则会出现"本地记成看完了、回传给别的服务器却说没看完"这种自相矛盾。
+    let played = cand
+        .run_time_ticks
+        .filter(|r| *r > 0)
+        .map(|r| (ticks as f64 / r as f64) * 100.0 >= 90.0)
+        .unwrap_or(false);
+
+    let mut done = state.wh_done.lock().unwrap().clone();
+    let report = linplayer_core::watch_history_sync::run_writeback(
+        &state.http,
+        &s,
+        &sessions,
+        &state.watch_history,
+        scope,
+        cand,
+        ticks,
+        played,
+        range,
+        include_progress,
+        &mut done,
+    )
+    .await?;
+    *state.wh_done.lock().unwrap() = done;
+    if !report.errors.is_empty() {
+        poclog(&format!("[跨服回传] 部分失败: {:?}", report.errors));
+    }
+    poclog(&format!(
+        "[跨服回传] 目标 {} 台,写成功 {},跳过 {}",
+        report.targets,
+        report.written,
+        report.skipped.len()
+    ));
+    Ok(())
+}
+
 /// 停止播放:暂停 mpv + 上报 stopped(写回最终进度 -> 续播落地)+ 清会话。
 #[tauri::command]
 async fn stop_playback(state: State<'_, AppState>, pos: f64) -> Result<(), String> {
@@ -877,7 +1347,13 @@ async fn stop_playback(state: State<'_, AppState>, pos: f64) -> Result<(), Strin
 
     // 观看记录:最终进度必须落地(force 绕开 10s 节流),否则看一半退出这段就丢了。
     capture_history(&state, pos, true);
-    *state.wh_ctx.lock().unwrap() = None;
+    // 跨服回传要用 ctx 里的 Candidate,得在清空前取走。
+    let wh_ctx = state.wh_ctx.lock().unwrap().take();
+    if let Some((scope, cand, _)) = wh_ctx {
+        if let Err(e) = writeback_on_stop(&state, &scope, &cand, pos).await {
+            poclog(&format!("[跨服回传] 失败: {e}"));
+        }
+    }
 
     // 播放期同步收尾:按最终进度上报。
     let ctx = state.scrobble_ctx.lock().unwrap().take();
@@ -1113,6 +1589,91 @@ fn set_translation_settings(settings: tr::TranslationSettings) -> Result<(), Str
 }
 
 /// 各引擎是否已配好(设置页的状态点)。key=引擎 storage_key。
+// ---------- 实时预读翻译:挂在播放器上 ----------
+//
+// 「字幕 cue 观测」听着像要新建一套观测机制,其实 mpv 的 `sub-text` / `sub-start` /
+// `sub-end` 就是普通属性,get_property 直接读得到 —— 播放器侧没有任何前置缺口。
+// 内嵌字幕也不用隐藏:我们不改字幕轨,只是把 mpv 当前显示的这句原样取出来译好,
+// 通过事件推给前端叠加层渲染,mpv 那句由前端决定盖不盖。
+
+/// 停掉实时翻译轮询的信号。Drop/置 false 即停。
+struct LiveTranslate {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// 开启实时预读翻译。轮询 mpv 的 sub-text,每换一句就译一句,译完 emit 给前端叠加层。
+///
+/// source_lang=None 表示让引擎自动判断源语言。
+#[tauri::command]
+fn translate_live_start(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source_lang: Option<String>,
+) -> Result<(), String> {
+    let settings = tr::TranslationSettings::load();
+    let engine = tr::active_engine(&settings)
+        .ok_or("当前翻译引擎还没配好(缺 API Key 或地址),先去设置里填")?;
+    let translator = Arc::new(tr::StreamingTranslator::new(
+        engine,
+        source_lang.unwrap_or_default(),
+        settings.target_lang.clone(),
+        settings.layout,
+    ));
+
+    // 先停旧的:不停的话切换引擎/语言会留下两个轮询,两句译文交替闪。
+    translate_live_stop(state.clone());
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    *state.live_translate.lock().unwrap() = Some(LiveTranslate { stop: stop.clone() });
+
+    tauri::async_runtime::spawn(async move {
+        use tauri::Emitter;
+        let mut last = String::new();
+        loop {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            // 每轮重新拿 state:播放器可能中途被换掉(换片),持着旧引用会译到上一部的字幕。
+            let cur = {
+                let st: State<'_, AppState> = app.state();
+                let guard = st.player.lock().unwrap();
+                guard.as_ref().and_then(|p| p.get_property("sub-text"))
+            }
+            .unwrap_or_default();
+
+            if cur != last {
+                last = cur.clone();
+                if cur.trim().is_empty() {
+                    // 空 cue = 这句结束了,清掉叠加层,否则上一句会一直挂着。
+                    let _ = app.emit("subtitle-translated", String::new());
+                } else if let Some(hit) = translator.cached_display(&cur) {
+                    // 命中缓存就直接推,不必等一个网络往返(重复台词/回看很常见)。
+                    let _ = app.emit("subtitle-translated", hit);
+                } else {
+                    match translator.on_cue(&cur).await {
+                        Ok(text) => {
+                            let _ = app.emit("subtitle-translated", text);
+                        }
+                        // 单句失败不该停掉整个轮询(限流/抖动),但要让前端知道这句没译出来,
+                        // 不能静默显示原文让用户以为翻译在工作。
+                        Err(e) => {
+                            let _ = app.emit("subtitle-translate-error", e);
+                        }
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn translate_live_stop(state: State<'_, AppState>) {
+    if let Some(lt) = state.live_translate.lock().unwrap().take() {
+        lt.stop.store(true, Ordering::SeqCst);
+    }
+}
+
 #[tauri::command]
 fn translation_engine_status() -> HashMap<String, bool> {
     let s = tr::TranslationSettings::load();
@@ -1391,10 +1952,14 @@ fn danmaku_cfg(s: &DanmakuServer) -> DanmakuSourceConfig {
 }
 
 /// 弹弹Play 官方源配置(编译期加密注入凭据齐才有);无凭据返回 None。
+/// 官方弹弹Play 源的 id。★ 是 "official",不是 Dart 那边的 "dandanplay" ——
+/// 自动挂弹幕的 episodeId 连号快路径要按它认源,写错了不报错,只是快路径永远不命中。
+const DANDAN_OFFICIAL_SOURCE_ID: &str = "official";
+
 fn official_danmaku_cfg() -> Option<DanmakuSourceConfig> {
     let (app_id, app_secret) = linplayer_core::secrets::dandan_creds()?;
     Some(DanmakuSourceConfig {
-        id: "official".into(),
+        id: DANDAN_OFFICIAL_SOURCE_ID.into(),
         name: "弹弹Play".into(),
         api_url: String::new(), // official=true 走固定 OFFICIAL_BASE
         official: true,
@@ -1502,6 +2067,82 @@ async fn danmaku_load(
     .await)
 }
 
+/// 播放开始时自动匹配并挂弹幕。对齐 Dart DanmakuAutoLoader。
+///
+/// 返回 None = 没自动挂(没匹配上 / 分数不够 / 取到空弹幕)。这不是错误:
+/// 给非动漫内容硬塞错配弹幕比不挂更糟,用户仍可手动搜索。
+///
+/// 快路径:弹弹Play 同一作品的 episodeId 是连号的(第 N 集 +1 = 第 N+1 集)。
+/// 追番看下一集时直接 +1 取,省一次 match 往返。猜错(跨季/特殊编号)会取到空弹幕,
+/// 自动退回全量匹配 —— 所以「取到非空」就是这条快路径的兜底校验,别去掉。
+///
+/// `anchor_key`:剧集锚点键(seriesId|seasonId);网盘/无剧集上下文传 None 即关掉快路径。
+#[tauri::command]
+async fn danmaku_auto_load(
+    state: State<'_, AppState>,
+    input: danmaku::MatchInput,
+    options: danmaku::FilterOptions,
+    ch_convert: Option<i32>,
+    anchor_key: Option<String>,
+) -> Result<Option<Vec<DanmakuComment>>, String> {
+    let sources = require_danmaku_sources(&state)?;
+    let ch = ch_convert.unwrap_or(0);
+    let finish = |raw: Vec<DanmakuComment>| danmaku::apply_filter_and_dedup(raw, &options);
+
+    // 快路径:紧邻下一集。
+    if let (Some(key), Some(ep)) = (anchor_key.as_ref(), input.episode_no) {
+        let guess = {
+            let anchors = state.danmaku_anchors.lock().unwrap();
+            anchors.get(key).and_then(|(a_ep, a_id)| (ep == a_ep + 1).then_some(a_id + 1))
+        };
+        if let Some(gid) = guess {
+            let raw = danmaku::get_comments_from_all(
+                &state.http,
+                &sources,
+                &gid.to_string(),
+                Some(DANDAN_OFFICIAL_SOURCE_ID),
+                ch,
+            )
+            .await;
+            if !raw.is_empty() {
+                state
+                    .danmaku_anchors
+                    .lock()
+                    .unwrap()
+                    .insert(key.clone(), (ep, gid));
+                return Ok(Some(finish(raw)));
+            }
+        }
+    }
+
+    let candidates = danmaku::match_all(&state.http, &sources, &input).await;
+    let Some(best) = candidates.into_iter().next().filter(|c| c.score >= danmaku::MIN_AUTO_SCORE)
+    else {
+        return Ok(None);
+    };
+    let raw = danmaku::get_comments_from_all(
+        &state.http,
+        &sources,
+        &best.episode_id,
+        Some(&best.source_id),
+        ch,
+    )
+    .await;
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    // 只有官方源 + episodeId 是纯数字时才记锚点 —— 自建源的 id 未必连号,
+    // 拿去 +1 会取到隔壁作品的弹幕(不报错,只是全篇对不上)。
+    if best.source_id == DANDAN_OFFICIAL_SOURCE_ID {
+        if let (Some(key), Some(ep), Ok(id)) =
+            (anchor_key, input.episode_no, best.episode_id.parse::<i64>())
+        {
+            state.danmaku_anchors.lock().unwrap().insert(key, (ep, id));
+        }
+    }
+    Ok(Some(finish(raw)))
+}
+
 /// 过滤 + 去重(屏蔽词/屏蔽用户/合并重复)。渲染参数不在这层 —— 那是前端的事。
 #[tauri::command]
 fn danmaku_filter(
@@ -1525,6 +2166,22 @@ fn danmaku_cache_clear() -> usize {
 #[tauri::command]
 fn danmaku_cache_size() -> u64 {
     danmaku::cache_disk_size_bytes()
+}
+
+/// 加载本地弹幕文件(xml / json / ass / ssa)。格式按**内容**嗅探,不只信扩展名 ——
+/// 用户从别处存下来的弹幕改过名是常事。
+///
+/// 整文件解析失败返回 Err:绝不能返回空 Vec 假装成功,那会让用户看到
+/// 「加载成功但一条弹幕都没有」然后无从排查。单条畸形则跳过。
+#[tauri::command]
+fn danmaku_load_local(path: String) -> Result<Vec<DanmakuComment>, String> {
+    let p = std::path::Path::new(&path);
+    let content = std::fs::read(p).map_err(|e| format!("读不到弹幕文件: {e}"))?;
+    // 弹幕文件常见 GBK/UTF-16 编码,但 from_utf8_lossy 至少不会整个失败;
+    // 真乱码时下面的解析会因为找不到 <d>/cues 而报错,不会静默返回空。
+    let text = String::from_utf8_lossy(&content);
+    let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    linplayer_core::danmaku::local::parse(name, &text)
 }
 
 // ---------- 文件浏览型源命令(网盘/追番)----------
@@ -2157,45 +2814,99 @@ async fn cf_speed_test(
     Ok(linplayer_core::net::cf::speed_test(o).await)
 }
 
-/// 为 host 起本地钉 IP 反代,返回本地基址 http://127.0.0.1:<port>;调用方把它当 Emby 基址用
-/// (SNI/Host 仍是真实域名,DNS 钉到优选 ip)。allow_insecure 放行自签名。
-#[tauri::command]
-async fn cf_proxy_start(
-    state: State<'_, AppState>,
-    host: String,
-    ip: String,
-    port: Option<u16>,
-    allow_insecure: Option<bool>,
-) -> Result<String, String> {
-    let handle = linplayer_core::net::cf::start_proxy(
-        "https".to_string(),
-        host,
-        port.unwrap_or(443),
-        ip,
-        allow_insecure.unwrap_or(true),
-    )
-    .await
-    .ok_or("CF 反代起服失败(IP 非法?)")?;
-    let base = format!("http://127.0.0.1:{}", handle.port);
-    *state.cf_proxy.lock().unwrap() = Some(handle); // 替换旧句柄即 Drop 停旧服
-    Ok(base)
-}
-
-/// 切换反代优选 IP(端口不变)。
-#[tauri::command]
-async fn cf_proxy_update_ip(state: State<'_, AppState>, ip: String) -> Result<(), String> {
-    let handle = state.cf_proxy.lock().unwrap().take();
-    if let Some(h) = handle {
-        h.update_ip(ip).await;
-        *state.cf_proxy.lock().unwrap() = Some(h);
+/// 活跃会话的基址跟随当前生效线路(含 CF 改写)重新对齐。
+/// 开关反代后必须调:否则改写只对**之后**新建的会话生效,当前这条还打老地址 ——
+/// 表现为"开了优选没反应,重启才生效"。
+fn refresh_session_base(state: &AppState, server_id: &str) {
+    let cfg = state.config.lock().unwrap();
+    let is_active = cfg.active_account().map(|a| a.server == server_id).unwrap_or(false);
+    if !is_active {
+        return;
     }
+    if let Some(url) = cfg.find(server_id).map(|a| a.active_line_url()) {
+        if let Some(s) = state.session.lock().unwrap().as_mut() {
+            s.server = url;
+        }
+    }
+}
+
+/// 为某台服务器开启 CF 优选反代,并**登记路由改写** —— 之后该服的 `active_line_url()`
+/// 返回本地反代基址,Emby API / 封面图 / mpv 取流全部自动改走优选 IP。
+/// 已开则热切换 IP(端口与本地基址不变,对进行中的会话无感)。
+#[tauri::command]
+async fn cf_proxy_enable(
+    state: State<'_, AppState>,
+    server_id: String,
+    ip: String,
+) -> Result<String, String> {
+    // 已开 → 只热切 IP。注意别在持锁期间 await。
+    let existing = {
+        let m = state.cf_proxy.lock().unwrap();
+        m.get(&server_id).map(|h| h.port)
+    };
+    if existing.is_some() {
+        let handle = state.cf_proxy.lock().unwrap().remove(&server_id);
+        if let Some(h) = handle {
+            h.update_ip(ip).await;
+            let url = cf::runtime::local_url_for(&server_id).unwrap_or_default();
+            state.cf_proxy.lock().unwrap().insert(server_id, h);
+            return Ok(url);
+        }
+    }
+
+    let (upstream, allow_insecure) = {
+        let cfg = state.config.lock().unwrap();
+        let a = cfg.find(&server_id).ok_or("找不到该服务器")?;
+        // 上游必须用 direct_line_url:用 active_line_url 会在反代已开时把反代自己当上游,
+        // 打成 127.0.0.1 → 127.0.0.1 的自环。
+        (a.direct_line_url().to_string(), a.allow_insecure_tls)
+    };
+    let (scheme, host, port) = cf::runtime::split_upstream(&upstream);
+    let handle = linplayer_core::net::cf::start_proxy(scheme, host, port, ip, allow_insecure)
+        .await
+        .ok_or("CF 反代起服失败(IP 非法?)")?;
+    let local = cf::runtime::local_base(&upstream, handle.port);
+    cf::runtime::bind(&server_id, &local);
+    state.cf_proxy.lock().unwrap().insert(server_id.clone(), handle);
+    refresh_session_base(&state, &server_id);
+    Ok(local)
+}
+
+/// 关闭某服的反代,撤销路由改写,恢复直连原线路。
+#[tauri::command]
+fn cf_proxy_disable(state: State<'_, AppState>, server_id: String) -> Result<(), String> {
+    cf::runtime::unbind(&server_id);
+    state.cf_proxy.lock().unwrap().remove(&server_id); // Drop 停服
+    refresh_session_base(&state, &server_id);
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+struct CfProxyStatus {
+    server_id: String,
+    local_url: String,
+    pinned_ip: String,
+}
+
+/// 当前所有生效的反代改写(设置页展示"哪台服在走优选、钉的哪个 IP")。
 #[tauri::command]
-fn cf_proxy_stop(state: State<'_, AppState>) -> Result<(), String> {
-    *state.cf_proxy.lock().unwrap() = None; // Drop 停服
-    Ok(())
+async fn cf_proxy_status(state: State<'_, AppState>) -> Result<Vec<CfProxyStatus>, String> {
+    let ports: Vec<(String, String)> = cf::runtime::all().into_iter().collect();
+    let mut out = Vec::new();
+    for (server_id, local_url) in ports {
+        // pinned_ip 要 await,不能在持锁时取;先把句柄摘出来问完再放回。
+        let handle = state.cf_proxy.lock().unwrap().remove(&server_id);
+        let pinned_ip = match handle {
+            Some(h) => {
+                let ip = h.pinned_ip().await;
+                state.cf_proxy.lock().unwrap().insert(server_id.clone(), h);
+                ip
+            }
+            None => String::new(),
+        };
+        out.push(CfProxyStatus { server_id, local_url, pinned_ip });
+    }
+    Ok(out)
 }
 
 // ---------- 多线程下载命令 ----------
@@ -2242,6 +2953,62 @@ fn download_resume(state: State<'_, AppState>, id: String) {
 #[tauri::command]
 fn download_remove(state: State<'_, AppState>, id: String) {
     state.download.remove(&id);
+}
+
+/// 批量清除已完成的下载记录(下载页「清除已完成」)。返回清掉的条数。
+/// 只清记录,不删已下好的文件 —— 用户点「清除已完成」是想收拾列表,不是想丢文件。
+#[tauri::command]
+fn download_clear_completed(state: State<'_, AppState>) -> usize {
+    let done: Vec<String> = state
+        .download
+        .list()
+        .into_iter()
+        .filter(|i| i.status == linplayer_core::download::DownloadStatus::Completed)
+        .map(|i| i.id)
+        .collect();
+    let n = done.len();
+    for id in done {
+        state.download.remove(&id);
+    }
+    n
+}
+
+/// 多线程加载(预取代理)设置。threads 引擎内部 clamp 到 2~4。
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PrefetchSettings {
+    enabled: bool,
+    threads: usize,
+    cache_bytes: u64,
+}
+
+#[tauri::command]
+fn get_prefetch_settings(state: State<'_, AppState>) -> PrefetchSettings {
+    let p = &state.config.lock().unwrap().prefs;
+    PrefetchSettings {
+        enabled: p.prefetch_enabled,
+        threads: p.prefetch_threads,
+        cache_bytes: p.prefetch_cache_bytes,
+    }
+}
+
+#[tauri::command]
+fn set_prefetch_settings(
+    state: State<'_, AppState>,
+    settings: PrefetchSettings,
+) -> Result<(), String> {
+    // 引擎会 clamp(2,4),但在这儿拒掉才有反馈 —— 悄悄 clamp 会让用户以为设了 8 线程生效了。
+    if !(2..=4).contains(&settings.threads) {
+        return Err("预取线程数只支持 2~4".into());
+    }
+    if settings.cache_bytes < 16 * 1024 * 1024 {
+        return Err("读前缓冲上限不能低于 16MB".into());
+    }
+    let mut cfg = state.config.lock().unwrap();
+    cfg.prefs.prefetch_enabled = settings.enabled;
+    cfg.prefs.prefetch_threads = settings.threads;
+    cfg.prefs.prefetch_cache_bytes = settings.cache_bytes;
+    cfg.save();
+    Ok(())
 }
 
 #[tauri::command]
@@ -2575,6 +3342,8 @@ fn plugin_ui_respond(state: State<'_, AppState>, id: u64, value: Option<serde_js
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 每次启动重注册 linplayer:// —— 绿色包用户挪了文件夹,老路径就是死的。
+    register_deep_link_scheme();
     let config = AppConfig::load();
     // 先把代理写进全局,再建各 HTTP 客户端(含 Emby 主客户端/下载),使其启动即带代理。
     http::set_proxy(config.proxy.proxy_url());
@@ -2594,7 +3363,7 @@ pub fn run() {
     // 活跃的是 Emby 就装 session,是浏览型源就装 source —— 两者互斥,别同时留着。
     let active = config.active_account();
     let session = active.filter(|a| !a.is_file_browse()).map(|a| Session {
-        server: a.direct_line_url().to_string(),
+        server: a.active_line_url(),
         token: a.token.clone(),
         user_id: a.user_id.clone(),
         device_id: config.device_id.clone(),
@@ -2633,7 +3402,11 @@ pub fn run() {
             source_play_entry: Mutex::new(None),
             resign_count: AtomicU32::new(0),
             prefetch: Mutex::new(None),
-            cf_proxy: Mutex::new(None),
+            cf_proxy: Mutex::new(HashMap::new()),
+            account_status: Mutex::new(HashMap::new()),
+            live_translate: Mutex::new(None),
+            danmaku_anchors: Mutex::new(HashMap::new()),
+            wh_done: Mutex::new(std::collections::HashSet::new()),
             download,
             scrobble_ctx: Mutex::new(None),
             plugins: OnceLock::new(),
@@ -2716,6 +3489,14 @@ pub fn run() {
             reorder_accounts,
             set_lines,
             set_active_line,
+            probe_accounts,
+            startup_deep_link,
+            account_icon,
+            set_account_icon_file,
+            clear_account_icon,
+            batch_parse,
+            parse_deep_link,
+            batch_add_servers,
             probe_lines,
             current_source,
             play,
@@ -2814,18 +3595,27 @@ pub fn run() {
             danmaku_import_blocklist,
             danmaku_cache_clear,
             danmaku_cache_size,
+            danmaku_load_local,
+            danmaku_auto_load,
             cf_speed_test,
-            cf_proxy_start,
-            cf_proxy_update_ip,
-            cf_proxy_stop,
+            cf_proxy_enable,
+            cf_proxy_disable,
+            cf_proxy_status,
             download_enqueue,
             download_list,
             download_pause,
             download_resume,
             download_remove,
             download_set_threads,
+            download_clear_completed,
+            get_prefetch_settings,
+            set_prefetch_settings,
             play_local,
             watch_history_list,
+            watch_history_scan_restore,
+            watch_history_restore_candidate,
+            get_writeback_settings,
+            set_writeback_settings,
             watch_history_clear,
             watch_history_delete,
             get_cross_server_resume,
@@ -2833,6 +3623,8 @@ pub fn run() {
             get_translation_settings,
             set_translation_settings,
             translation_engine_status,
+            translate_live_start,
+            translate_live_stop,
             translate_subtitle,
             whisper_models,
             whisper_download,

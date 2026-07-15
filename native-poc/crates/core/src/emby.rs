@@ -24,6 +24,9 @@ pub struct LoginResult {
     pub token: String,
     pub user_id: String,
     pub user_name: String,
+    /// 登录用户的头像 tag(建服务器图标用)。无头像则 None。
+    #[serde(default)]
+    pub primary_image_tag: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -39,6 +42,10 @@ struct AuthUser {
     id: String,
     #[serde(rename = "Name")]
     name: String,
+    /// 用户头像 tag。很多 Emby 服把品牌 logo 设成用户头像,服务器图标优先用它。
+    /// 不解这个字段的话图标只能退 /web/touchicon.png —— 能用,但悄悄降级。
+    #[serde(rename = "PrimaryImageTag", default)]
+    primary_image_tag: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -400,6 +407,7 @@ pub async fn login(
         token: session.token.clone(),
         user_id: auth.user.id,
         user_name: auth.user.name,
+        primary_image_tag: auth.user.primary_image_tag,
     };
     Ok((session, result))
 }

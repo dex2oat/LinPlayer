@@ -275,7 +275,7 @@ pub struct Fingerprint {
     pub normalized_path_stem: Option<String>,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MatchResult {
     pub confidence: MatchConfidence,
     pub reason: String,
@@ -287,7 +287,9 @@ impl MatchResult {
 }
 
 /// 一条「可恢复」的候选:记录 + 在本服匹配到的条目。
-#[derive(Serialize, Clone, Debug)]
+/// 需要 Deserialize:possible 匹配要交给用户确认,确认后前端把这个候选原样传回来调
+/// [`crate::watch_history_sync::restore_candidate`]。
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RestoreCandidate {
     pub record: Record,
     pub matched_item: Candidate,

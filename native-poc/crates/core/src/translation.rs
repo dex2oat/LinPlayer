@@ -1987,18 +1987,95 @@ pub mod whisper {
     const FFMPEG_WIN: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
     const FFMPEG_MAC: &str = "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip";
 
+    /// Linux 静态构建(.tar.xz)。johnvansickle 是 ffmpeg 官网 Download 页给 Linux 指的源。
+    #[cfg(target_os = "linux")]
+    const FFMPEG_LINUX_AMD64: &str =
+        "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz";
+    #[cfg(target_os = "linux")]
+    const FFMPEG_LINUX_ARM64: &str =
+        "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz";
+
     /// 下载并安装 ffmpeg 到应用 bin 目录,返回可执行文件路径。
-    ///
-    /// ⚠️ Linux 的官方静态构建是 .tar.xz,解包需 tar+xz crate(本 crate 未引);
-    /// Linux 侧请让用户装发行版 ffmpeg 或手填路径(resolve_ffmpeg 已覆盖这些)。
     pub async fn download_ffmpeg(on_progress: Option<DownloadProgress>) -> Result<String, String> {
-        let url = if cfg!(windows) {
-            FFMPEG_WIN
-        } else if cfg!(target_os = "macos") {
-            FFMPEG_MAC
+        #[cfg(target_os = "linux")]
+        {
+            return download_ffmpeg_linux(on_progress).await;
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            download_ffmpeg_zip(on_progress).await
+        }
+    }
+
+    /// Linux:.tar.xz 交给系统 tar 解 —— 每个发行版都自带,省掉 tar+xz2 两个 crate。
+    /// ponytail: 依赖外部 tar;若哪天要支持无 tar 的极简容器,再引 xz2+tar crate。
+    #[cfg(target_os = "linux")]
+    async fn download_ffmpeg_linux(
+        on_progress: Option<DownloadProgress>,
+    ) -> Result<String, String> {
+        let url = if cfg!(target_arch = "aarch64") {
+            FFMPEG_LINUX_ARM64
         } else {
-            return Err("Linux 请用发行版包管理器安装 ffmpeg,或在设置里手填路径".into());
+            FFMPEG_LINUX_AMD64
         };
+        // 先确认 tar 在:没有的话早点说清楚,别下完 30MB 再失败。
+        std::process::Command::new("tar")
+            .arg("--version")
+            .output()
+            .map_err(|_| "系统没有 tar,无法解包;请用发行版包管理器装 ffmpeg,或在设置里手填路径".to_string())?;
+
+        let dir = bin_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| format!("建 bin 目录失败: {e}"))?;
+        let tmp = dir.join("ffmpeg_dl.tar.xz");
+        download_to(url, &tmp, None, on_progress).await?;
+
+        // 解到临时目录再挑文件:包内路径含版本号(ffmpeg-7.x-amd64-static/ffmpeg),
+        // 写死路径会在上游发版时静默失效。
+        let ex = dir.join("ffmpeg_extract");
+        let _ = std::fs::remove_dir_all(&ex);
+        std::fs::create_dir_all(&ex).map_err(|e| format!("建解包目录失败: {e}"))?;
+        let st = std::process::Command::new("tar")
+            .arg("-xJf")
+            .arg(&tmp)
+            .arg("-C")
+            .arg(&ex)
+            .status()
+            .map_err(|e| format!("调用 tar 失败: {e}"))?;
+        if !st.success() {
+            return Err("tar 解包失败(包损坏或缺 xz 支持)".into());
+        }
+
+        let found = find_file(&ex, "ffmpeg").ok_or("包内未找到 ffmpeg")?;
+        let out = dir.join("ffmpeg");
+        std::fs::copy(&found, &out).map_err(|e| format!("写 ffmpeg 失败: {e}"))?;
+        let _ = std::fs::remove_dir_all(&ex);
+        let _ = std::fs::remove_file(&tmp);
+        set_executable(&out);
+        Ok(out.to_string_lossy().into_owned())
+    }
+
+    /// 在目录树里找指定文件名的第一个匹配。
+    #[cfg(target_os = "linux")]
+    fn find_file(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
+        let rd = std::fs::read_dir(dir).ok()?;
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if let Some(hit) = find_file(&p, name) {
+                    return Some(hit);
+                }
+            } else if p.file_name().and_then(|s| s.to_str()) == Some(name) {
+                return Some(p);
+            }
+        }
+        None
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    async fn download_ffmpeg_zip(
+        on_progress: Option<DownloadProgress>,
+    ) -> Result<String, String> {
+        let url = if cfg!(windows) { FFMPEG_WIN } else { FFMPEG_MAC };
         let dir = bin_dir();
         std::fs::create_dir_all(&dir).map_err(|e| format!("建 bin 目录失败: {e}"))?;
         let tmp = dir.join("ffmpeg_dl.zip");

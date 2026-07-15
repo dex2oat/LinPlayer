@@ -6,15 +6,18 @@ pub mod danmaku;
 pub mod download;
 pub mod emby;
 pub mod http;
+pub mod icon_cache;
 pub mod media;
 pub mod net;
 pub mod plugins;
 pub mod ranking;
 pub mod secrets;
+pub mod server_batch;
 pub mod source;
 pub mod sync;
 pub mod translation;
 pub mod watch_history;
+pub mod watch_history_sync;
 
 pub use config::{Account, AppConfig, Prefs, ProxyConfig};
 pub use emby::{Item, LoginResult, PlaybackTarget, Session};
