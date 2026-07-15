@@ -159,3 +159,10 @@
   color: var(--ink);
   font-weight: 600;
 }
+
+/* 已知缺陷/风险提示(比普通 hint 更醒目,但不做成红色报错 —— 它不是错误,是告知) */
+.st-warn {
+  border-left: 2px solid var(--warn);
+  padding-left: 10px;
+  color: var(--ink-2);
+}

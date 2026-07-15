@@ -15,8 +15,9 @@
 .player-layer { transition: opacity 0.4s ease; }
 .player-layer > *, .player-layer .p-slide { pointer-events: auto; }
 
-/* 顶栏 */
+/* 顶栏 —— position/z-index 是功能性的,不是装饰:见 .p-stage 处的说明。 */
 .p-top {
+  position: relative; z-index: 1;
   display: flex; align-items: center; gap: 12px;
   padding: 14px 18px;
   background: linear-gradient(180deg, rgba(6, 9, 13, 0.85), transparent);
@@ -34,8 +35,14 @@
 .p-top-r { margin-left: auto; display: flex; align-items: center; gap: 4px; }
 .p-sep { width: 1px; height: 24px; background: rgba(255, 255, 255, 0.18); margin: 0 4px; }
 
-/* 画面区:接右键菜单 + 点空白收起弹出层。mpv 在网页层之下,这层不挡画面。 */
-.p-stage { position: absolute; inset: 0; }
+/* 画面区:接右键菜单 + 点空白收起弹出层。mpv 在网页层之下,这层不挡画面。
+   ★ 它是 absolute+inset:0 的**定位元素**,而 .p-top/.p-bot 是静态的 ——
+   按 CSS 绘制顺序(CSS2.1 附录 E),定位元素画在同一层叠上下文里的静态元素**之上**,
+   于是这块透明的画面区会盖住上下两条 OSD 栏,把所有按钮的点击**全部吃掉**。
+   曾经的真实症状:整个播放器只有进度条能点 —— 因为 .p-scrub input 恰好是 OSD 里
+   唯一自身带 position 的控件(absolute),又在 DOM 里排在 .p-stage 之后,才逃过一劫。
+   故 .p-top/.p-bot 必须显式定位并抬 z-index,别把这几行当成「多余的样式」删掉。 */
+.p-stage { position: absolute; inset: 0; z-index: 0; }
 
 /* 亮度遮罩:核层无亮度命令,盖黑就是真调光(在 player-layer 外,不随 OSD 淡出)。 */
 .p-dim { position: fixed; inset: 0; background: #000; pointer-events: none; z-index: 1; }
@@ -58,8 +65,9 @@
 .pb.hot { color: #fff; }
 .pb.big .i { transform: scale(1.15); }
 
-/* 底栏 */
+/* 底栏 —— position/z-index 同顶栏,理由见 .p-stage 处的说明。 */
 .p-bot {
+  position: relative; z-index: 1;
   padding: 16px 18px 14px;
   background: linear-gradient(0deg, rgba(6, 9, 13, 0.9), transparent);
 }

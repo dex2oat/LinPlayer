@@ -119,8 +119,15 @@ pub struct Prefs {
     /// 回传时是否连播放进度一起同步(关掉则只同步「已看完」标记)。默认开。
     #[serde(default = "default_true")]
     pub cross_server_writeback_progress: bool,
-    /// 多线程加载(本地预取代理)开关。默认开。
-    #[serde(default = "default_true")]
+    /* 多线程加载(本地预取代理)开关。**默认关**。
+       2026-07-15 真机实测:开着会让 Emby 直传流放不出来(有流量、黑屏、无声、永远缓冲),
+       关掉立刻正常 —— 同一个包、只翻这一个开关的 A/B 对照。
+       已修掉其中一个死锁(见 net/prefetch.rs 的 bump_gen),但那只是一环,整体仍不可靠:
+       每次 seek 的 reset() 会 ready.clear() 把已下好的缓存全丢,而 mpv 探测 MKV 时
+       (尤其带大字体附件、cues 在文件末尾的片子)会来回大跳,等于反复重下。
+       它是**优化**不是功能:不确定能加速之前,绝不能默认开着换来「放不了」。
+       修好并有端到端验证之前别改回 default_true。 */
+    #[serde(default)]
     pub prefetch_enabled: bool,
     /// 预取并发线程数。引擎内部 clamp(2,4),这里存原值。
     #[serde(default = "default_prefetch_threads")]
@@ -148,7 +155,7 @@ impl Default for Prefs {
             cross_server_writeback: false,
             cross_server_writeback_range: default_writeback_range(),
             cross_server_writeback_progress: true,
-            prefetch_enabled: true,
+            prefetch_enabled: false, // 见字段上的说明:开着会放不了,修好前默认关
             prefetch_threads: default_prefetch_threads(),
             prefetch_cache_bytes: default_prefetch_cache(),
         }
