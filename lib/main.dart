@@ -19,8 +19,6 @@ import 'core/services/portable_paths.dart';
 import 'core/theme/app_motion.dart';
 import 'core/utils/platform_utils.dart';
 import 'package:tdesign_flutter/tdesign_flutter.dart';
-import 'desktop/desktop_app.dart';
-import 'desktop/window/desktop_window_chrome.dart';
 import 'plugins/plugin_system.dart';
 import 'tv/tv_app.dart';
 
@@ -66,11 +64,6 @@ Future<void> main() async {
   // 必须在任何网络请求/客户端构建之前完成，确保首个请求即走代理。
   await initializeProxyRuntime();
 
-  // 桌面端：初始化无边框窗口 + 自绘标题栏
-  if (isDesktopPlatform && !isTvPlatform) {
-    await initDesktopWindow();
-  }
-
   // 缓存策略（全平台，对内存小的机器友好）：
   // - 内存只保留少量解码位图（~100MB/1000，LRU 回收），不常驻海量图。
   // - 磁盘持久化由 PersistentNetworkImageProvider 负责（图片 6GB 上限 + 14 天过期）。
@@ -83,11 +76,10 @@ Future<void> main() async {
   final container = ProviderContainer();
   await initializePluginSystem(container);
 
-  final Widget appWidget = isTvPlatform
-      ? const LinPlayerTvApp()
-      : isDesktopPlatform
-          ? const LinPlayerDesktopApp()
-          : const LinPlayerApp();
+  // PC(Win/Linux)已迁到 Rust+React+Tauri(native-poc/),苹果全线不做 ——
+  // 此处只剩 Android 手机与 Android TV 两端。
+  final Widget appWidget =
+      isTvPlatform ? const LinPlayerTvApp() : const LinPlayerApp();
 
   // 匿名遥测（崩溃 + Release Health 活跃用户统计）：包住 runApp 及其后的启动尾巴，
   // 让这段代码的未捕获异常也进 Sentry。见 core/services/telemetry.dart。

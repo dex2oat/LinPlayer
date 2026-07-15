@@ -84,9 +84,8 @@ dependencies:
   
   # XML解析 (DLNA设备描述)
   xml: ^6.5.0
-  fluent_ui: ^4.15.1
-  macos_ui: ^2.2.2
-  window_manager: ^0.5.1
+  # fluent_ui / macos_ui / window_manager 随 lib/desktop 一并移除:
+  # PC 已迁到 Rust+React+Tauri,苹果全线不做,此三者已零引用。
 
   # 插件系统：QuickJS 脚本引擎（每个插件独立 isolate，崩溃/超时隔离）
   # 使用仓库内 vendored 版本：已打 Dart 3 / ffi 2.x 兼容补丁（见 third_party/flutter_qjs）。

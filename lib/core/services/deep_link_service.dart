@@ -5,7 +5,6 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../desktop/routes/desktop_router.dart';
 import '../../routes/app_router.dart';
 import '../../tv/routes/tv_router.dart';
 import '../api/danmaku/danmaku_service.dart';
@@ -212,13 +211,6 @@ class DeepLinkService {
       if (isTvPlatform) {
         return tvRouter.routerDelegate.navigatorKey.currentContext;
       }
-      if (isDesktopPlatform) {
-        return container
-            .read(desktopRouterProvider)
-            .routerDelegate
-            .navigatorKey
-            .currentContext;
-      }
       return container
           .read(appRouterProvider)
           .routerDelegate
@@ -285,8 +277,6 @@ class DeepLinkService {
     try {
       if (isTvPlatform) {
         tvRouter.go('/tv/home');
-      } else if (isDesktopPlatform) {
-        container.read(desktopRouterProvider).go('/');
       } else {
         container.read(appRouterProvider).go('/home');
       }
