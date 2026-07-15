@@ -419,14 +419,13 @@ export default function HomePage({
               </div>
               {/* 继续观看基本都是剧集,封面本来就是 16:9 剧照 → thumb 横版,不用竖海报。 */}
               <Rail>
-                {resume.map((it, i) => (
+                {resume.map((it) => (
                   <div className="r-wide" key={it.id}>
                     <Poster
                       item={it}
                       session={session}
                       variant="thumb"
                       onOpen={onOpenItem}
-                      index={i}
                       onContextMenu={openCtx}
                     />
                   </div>
@@ -442,14 +441,13 @@ export default function HomePage({
                 <span className="h">合集</span>
               </div>
               <Rail>
-                {collections.map((c, i) => (
+                {collections.map((c) => (
                   <div className="r-wide" key={c.id}>
                     <Poster
                       item={c}
                       session={session}
                       variant="thumb"
                       onOpen={onOpenItem}
-                      index={i}
                       onContextMenu={openCtx}
                     />
                   </div>
@@ -515,13 +513,12 @@ export default function HomePage({
                   <div className="empty">这个库还没有内容</div>
                 ) : (
                   <Rail>
-                    {items.map((it, i) => (
+                    {items.map((it) => (
                       <div className="r-poster" key={it.id}>
                         <Poster
                           item={it}
                           session={session}
                           onOpen={onOpenItem}
-                          index={i}
                           onContextMenu={openCtx}
                         />
                       </div>

@@ -287,14 +287,15 @@ export default function ServersPage({ activeServer, onChanged, onGoAdd, onEnter 
           <div className="empty">没有匹配「{q}」的服务器。</div>
         ) : (
           <div className={`sv-srvgrid${view === "list" ? " list" : ""}`}>
-            {shown.map((a, i) => {
+            {shown.map((a) => {
               const active = isActive(a);
               const busy = pending === a.server;
               return (
                 <div
                   key={a.server}
                   className={`sv-srvcard enter${active ? " cur" : ""}`}
-                  style={{ animationDelay: `${Math.min(i, 12) * 26}ms` }}
+                  /* 阶梯延迟砍掉(第 12 张要等 312ms 才可见)。这页卡片少、不是热路径,
+                     `.enter` 本体留着;真嫌慢连它一起去掉。 */
                   draggable
                   onDragStart={() => (dragFrom.current = realIndex(a))}
                   onDragOver={(e) => e.preventDefault()}

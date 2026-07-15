@@ -8,7 +8,6 @@ type Props = {
   variant?: "poster" | "thumb";
   /** 单击就走它 —— 卡片唯一的主操作。 */
   onOpen: (it: Item) => void;
-  index?: number;
   /** 右键菜单。**只有首页传**(标记已/未播放、添加到喜欢);
       媒体库/收藏/搜索浮层不传 = 没有右键(保留浏览器默认)。 */
   onContextMenu?: (e: MouseEvent, it: Item) => void;
@@ -25,7 +24,6 @@ export default function Poster({
   session,
   variant = "poster",
   onOpen,
-  index = 0,
   onContextMenu,
 }: Props) {
   const thumb = variant === "thumb";
@@ -43,8 +41,7 @@ export default function Poster({
       onContextMenu={onContextMenu ? (e) => onContextMenu(e, item) : undefined}
     >
       <div
-        className={`pcard ${thumb ? "thumb-ar" : "poster-ar"} enter`}
-        style={{ animationDelay: `${Math.min(index, 12) * 24}ms` }}
+        className={`pcard ${thumb ? "thumb-ar" : "poster-ar"}`}
         /* 单击直接进详情:不再延后一拍等双击了 —— 没有双击,延迟只会让点击发粘。 */
         onClick={() => onOpen(item)}
         title={label}
@@ -52,7 +49,24 @@ export default function Poster({
         {item.has_primary ? (
           <img
             src={src}
-            loading="lazy"
+            /* ★★ 这里曾是「不秒加载」的真凶,和缓存毫无关系。别把它们加回来。
+
+               (1) `enter` + 按卡片下标算的 `animationDelay`(最多 288ms):
+                   `.enter` = `animation: enter var(--dur-slow) both` = **380ms**,
+                   而 `both` 意味着延迟期间元素**opacity:0 完全看不见**。
+                   叠上最多 288ms 的阶梯延迟 → 一行里最后一张卡 **668ms** 才画完。
+                   用户 2026-07-15:「切换回去之后还是不会秒加载 明明这些图片又不大」——
+                   图早就在磁盘缓存里(实测 124 张/35.9MB),是 UI 自己在慢慢演。
+                   **缓存再快也追不过一个写死 668ms 的动画。**
+
+               (2) `loading="lazy"`:浏览器要等布局+相交检测才开始拉,首屏可见的卡
+                   平白多等一轮。媒体库那种长列表值得 lazy,但那也该由列表自己决定,
+                   不是每张卡都默认拖一下。改用 decoding="async" —— 解码不挡主线程,
+                   但请求立刻发。
+
+               入场动效不是不能有,但**不能挡着内容出现**。要加回动效请只动 transform,
+               别动 opacity,更别用 fill-mode:both 把内容藏在延迟里。 */
+            decoding="async"
             onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")}
           />
         ) : (

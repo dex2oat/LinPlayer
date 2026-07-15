@@ -244,12 +244,14 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
                     <div className="lib-cover skeleton lib-skel" />
                   </div>
                 ))
-              : libs.map((lib, i) => (
+              : libs.map((lib) => (
                   <button
                     key={lib.id}
                     type="button"
-                    className="lib-card enter"
-                    style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}
+                    /* 不挂 enter+阶梯延迟:`.enter` 是 380ms 且 fill-mode:both(延迟期间
+                       完全看不见),叠上 300ms 阶梯 = 最后一张卡 680ms 才出来。
+                       和 Poster 同一个病,见那边的长注释。内容出现不能被动效挡着。 */
+                    className="lib-card"
                     onClick={() => onPickView(lib)}
                   >
                     <div className="lib-cover">
@@ -425,8 +427,8 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
         ) : layout === "grid" ? (
           <div className="dense-grid">
             {/* 卡片只有一个操作:点 = 进详情。无悬停按钮、无右键(用户 2026-07-15 定,覆盖草稿 11)。 */}
-            {items.map((it, i) => (
-              <Poster key={it.id} item={it} session={session} onOpen={onOpenItem} index={i} />
+            {items.map((it) => (
+              <Poster key={it.id} item={it} session={session} onOpen={onOpenItem} />
             ))}
           </div>
         ) : (

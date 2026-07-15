@@ -116,7 +116,16 @@ async fn load<R: Runtime>(
        用线路地址当键的话,用户一切线路整盘缓存就全部落空。
        更不能用完整上游 URL —— 那里面有 api_key,重登一次 token 变了,缓存全废。 */
     let key = format!("{acct_key}|{id}|{kind}|{query}");
-    if let Some(b) = image_cache::get(&key) {
+
+    /* ★ 必须 spawn_blocking:image_cache 是同步 fs::read。
+       直接在 async fn 里读盘 = 阻塞 tokio worker,一屏几十张图并发时把整个运行时按住 ——
+       **和刚修的 whisper_deps 一模一样的病,我在同一个 commit 里又犯了一遍**。
+       内存命中不碰盘,但这里预先不知道会不会命中,所以一律当阻塞的处理。 */
+    let k = key.clone();
+    if let Some(b) = tokio::task::spawn_blocking(move || image_cache::get_2l(&k))
+        .await
+        .map_err(|e| format!("读缓存任务崩了: {e}"))?
+    {
         return Ok(b);
     }
 
@@ -136,6 +145,11 @@ async fn load<R: Runtime>(
         }
     }
 
+    /* reqwest 默认就跟 301(Policy::default = 最多 10 跳),这里依赖这个行为:
+       实测(2026-07-15)UHD 那台服务器的 /Items/{id}/Images/Backdrop/0 会 **301 跳到
+       静态文件** /img/i/fanart/{id}.jpg。不跟跳只会拿到 79 字节的 HTML,
+       然后被 sniff 判成 octet-stream —— 表现为「图不显示但也不报错」。
+       别给这个 client 关掉 redirect。 */
     let resp = state
         .http
         .get(&url)
@@ -150,7 +164,7 @@ async fn load<R: Runtime>(
 
     // 写盘是同步 IO,挪出 async worker;顺带把 bytes 还回来免得多克隆一份。
     let bytes = tokio::task::spawn_blocking(move || {
-        image_cache::put(&key, &bytes);
+        image_cache::put_2l(&key, &bytes);
         bytes
     })
     .await

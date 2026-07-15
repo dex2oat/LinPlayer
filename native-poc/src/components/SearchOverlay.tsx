@@ -38,12 +38,26 @@ function writeHist(next: string[]): string[] {
 export default function SearchOverlay({ session, onClose, onOpenItem }: Props) {
   const [q, setQ] = useState("");
   const [aggregate, setAggregate] = useState(true);
+  /* ★ 开关的**当前值**要给防抖里的异步闭包读,但它**不能进 effect 依赖** ——
+     进了依赖 = 一拨开关就重跑 effect、重发一轮搜索。用户 2026-07-15:
+     「聚合搜索 我点开又关闭 会自行搜索 这是不对的」,而且聚合一次要打 N 台服务器,
+     手一抖来回拨两下就是 2N 个请求。
+     ref 是这里唯一能「读到最新值又不触发重跑」的办法(state 做不到:它一变就重渲染+重跑)。 */
+  const aggRef = useRef(true);
   const [groups, setGroups] = useState<ServerGroup[] | null>(null);
   const [local, setLocal] = useState<Item[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [hist, setHist] = useState<string[]>(readHist);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  /** 拨开关:只改「下一次搜用哪个模式」,**不搜**。当前结果原样留着。 */
+  const toggleAggregate = () => {
+    setAggregate((v) => {
+      aggRef.current = !v;
+      return !v;
+    });
+  };
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -66,7 +80,7 @@ export default function SearchOverlay({ session, onClose, onOpenItem }: Props) {
     const t = window.setTimeout(async () => {
       setErr("");
       try {
-        if (aggregate) {
+        if (aggRef.current) {
           setGroups(await aggregateSearch(kw));
           setLocal(null);
         } else {
@@ -87,7 +101,9 @@ export default function SearchOverlay({ session, onClose, onOpenItem }: Props) {
       }
     }, 320);
     return () => window.clearTimeout(t);
-  }, [q, aggregate]);
+    /* 依赖只有 q:**别把 aggregate 加回来**(见 aggRef 上的注释)。
+       eslint 会说 aggRef 不用进依赖(ref 本来就不用),这里也确实不需要。 */
+  }, [q]);
 
   /* 只在用户真的点开了某个结果时才记历史 —— 跟着防抖记的话,
      打「阿凡达」会把「阿」「阿凡」「阿凡达」全记进去。 */
@@ -113,7 +129,7 @@ export default function SearchOverlay({ session, onClose, onOpenItem }: Props) {
               placeholder="搜索片名 / 聚合…"
             />
           </div>
-          <button className={`pill${aggregate ? " on-pill" : ""}`} onClick={() => setAggregate((v) => !v)}>
+          <button className={`pill${aggregate ? " on-pill" : ""}`} onClick={toggleAggregate}>
             聚合搜索
             <span className={`sw${aggregate ? " on" : ""}`} style={{ marginLeft: 4 }}>
               <i />
@@ -167,13 +183,12 @@ export default function SearchOverlay({ session, onClose, onOpenItem }: Props) {
             <section key={g.server_id}>
               <div className="ovl-grouplab">{g.server_name}</div>
               <div className="rail">
-                {g.items.map((it, i) => (
+                {g.items.map((it) => (
                   <div className="r-poster" key={it.id}>
                     <Poster
                       item={it}
                       session={session}
                       onOpen={(x) => pick(x, g.server_id)}
-                      index={i}
                     />
                   </div>
                 ))}
@@ -184,8 +199,8 @@ export default function SearchOverlay({ session, onClose, onOpenItem }: Props) {
 
           {local && local.length > 0 && (
             <div className="dense-grid" style={{ padding: "4px 0 8px" }}>
-              {local.map((it, i) => (
-                <Poster key={it.id} item={it} session={session} onOpen={pick} index={i} />
+              {local.map((it) => (
+                <Poster key={it.id} item={it} session={session} onOpen={pick} />
               ))}
             </div>
           )}

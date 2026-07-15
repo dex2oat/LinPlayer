@@ -283,12 +283,13 @@ async fn aggregate_search(
             let items = emby::search(&http, &s, &query, None, None)
                 .await
                 .unwrap_or_default();
+            /* ★ 这里曾拼成 `账户名 @ 地址`。用户 2026-07-15:「聚合搜索的时候
+               只显示服务器名称 不显示账户名字和地址」——
+               而且拼串这个做法本身就错:前端**拆不开**,想只显示一部分都做不到。
+               现在传 display_name()(= 用户在服务器页起的名,空则回落 host),
+               账户名/地址一个都不带。要加回去请**加字段**,别再往一个串里塞三样东西。 */
             ServerGroup {
-                server_name: if a.user_name.is_empty() {
-                    a.server.clone()
-                } else {
-                    format!("{} @ {}", a.user_name, a.server)
-                },
+                server_name: a.display_name(),
                 server_id: a.server,
                 items,
             }

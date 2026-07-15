@@ -111,8 +111,8 @@ export default function FavoritesPage({ session, onOpenItem }: Props) {
         ) : layout === "grid" ? (
           <div className="dense-grid">
             {/* 卡片只有一个操作:点 = 进详情。无悬停按钮、无右键(用户 2026-07-15 定,覆盖草稿 36)。 */}
-            {shown.map((it, i) => (
-              <Poster key={it.id} item={it} session={session} index={i} onOpen={onOpenItem} />
+            {shown.map((it) => (
+              <Poster key={it.id} item={it} session={session} onOpen={onOpenItem} />
             ))}
           </div>
         ) : (
