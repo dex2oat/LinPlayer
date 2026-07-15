@@ -97,6 +97,12 @@ app.*.symbols
 # Obfuscation related
 app.*.map.json
 
+# TV 专属 mihomo 内核(28MB)与 zashboard 面板(310 文件)——按需脚本拉取,不入库。
+# 见 android/app/src/tv/jniLibs/armeabi-v7a/README.md 与 scripts/fetch_mihomo_tv.ps1。
+# 曾经被误提进仓库,与自己的 README 直接矛盾;CI 已补 fetch 步骤,别再让它们溜回来。
+android/app/src/tv/jniLibs/armeabi-v7a/*.so
+android/app/src/tv/assets/zashboard/
+
 # Android build artifacts
 android/app/debug/
 android/app/profile/

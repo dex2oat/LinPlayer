@@ -26,7 +26,9 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $jniDir = Join-Path $repoRoot "android/app/src/tv/jniLibs/armeabi-v7a"
 $assetsDir = Join-Path $repoRoot "android/app/src/tv/assets/zashboard"
-$tmp = Join-Path $env:TEMP "linplayer_tv_proxy"
+# 不能用 $env:TEMP —— Linux/macOS 的 pwsh 上它是空的,Join-Path $null 直接抛错。
+# CI(ubuntu-latest)靠这个脚本拉内核,写死 Windows 环境变量会让 TV 构建当场挂。
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) "linplayer_tv_proxy"
 
 New-Item -ItemType Directory -Force -Path $jniDir | Out-Null
 New-Item -ItemType Directory -Force -Path $assetsDir | Out-Null
@@ -47,7 +49,14 @@ $gzip = New-Object System.IO.Compression.GzipStream($inStream, [System.IO.Compre
 $outStream = [System.IO.File]::Create($mihomoOut)
 $gzip.CopyTo($outStream)
 $outStream.Close(); $gzip.Close(); $inStream.Close()
-Write-Host "mihomo 内核已就位: $mihomoOut"
+
+# 校验:内核不入库后,这个脚本就是 TV 包里有没有 mihomo 的唯一保证。
+# 解出个 0 字节文件的话,构建照样成功、APK 照样能装,只是代理功能悄悄失灵 —— 必须当场炸。
+$mihomoSize = (Get-Item $mihomoOut).Length
+if ($mihomoSize -lt 1MB) {
+    throw "mihomo 内核解压后只有 $mihomoSize 字节,明显不对(应为 10MB+)。下载或解压失败。"
+}
+Write-Host "mihomo 内核已就位: $mihomoOut ($([math]::Round($mihomoSize/1MB,1)) MB)"
 
 # ---- zashboard 面板 ----
 $zashUrl = "https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip"
@@ -70,5 +79,11 @@ if ($inner -and (Test-Path $inner)) {
     Remove-Item -Recurse -Force $inner
 }
 
-Write-Host "zashboard 面板已就位: $assetsDir"
+# 校验:同理,面板不入库后这里是唯一保证。index.html 缺了 = mihomo 的 external-ui 打开是白页。
+$zashIndex = Join-Path $assetsDir "index.html"
+if (-not (Test-Path $zashIndex)) {
+    throw "zashboard 解压后找不到 index.html —— 上游 dist.zip 结构可能变了,面板会是白页。"
+}
+$zashCount = (Get-ChildItem -Path $assetsDir -Recurse -File).Count
+Write-Host "zashboard 面板已就位: $assetsDir ($zashCount 个文件)"
 Write-Host "完成。重新构建 tv flavor 即可包含内核与面板：flutter build apk --flavor tv --dart-define=FLAVOR=tv"

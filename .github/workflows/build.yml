@@ -350,6 +350,15 @@ jobs:
             echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，APK 将用 debug 签名，无法覆盖更新"
           fi
 
+      # mihomo 内核与 zashboard 面板不入库(见 scripts/fetch_mihomo_tv.ps1 与
+      # android/app/src/tv/jniLibs/armeabi-v7a/README.md),必须在打包前拉齐。
+      # ★ 这一步失败就得让整个 job 红:缺内核时 flutter build 照样成功、APK 照样能装,
+      #   只是 TV 端代理功能悄悄失灵 —— 不能用 `|| true` 之类放过。
+      #   脚本自身已校验内核体积与面板 index.html,拉了个空壳会 throw。
+      - name: Fetch TV proxy kernel (mihomo + zashboard)
+        shell: pwsh
+        run: ./scripts/fetch_mihomo_tv.ps1
+
       - name: Build Android TV Release APK (armeabi-v7a)
         env:
           DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
