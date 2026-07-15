@@ -36,15 +36,24 @@
   display: flex; gap: 20px; align-items: flex-start;
   padding: 52px 24px 22px;
 }
+/* 左列:封面 +(仅集详情)封面下方的简介。宽度由封面定,简介跟着这个宽度换行。 */
+.dt-hero-left { flex: none; display: flex; flex-direction: column; min-width: 0; }
 /* 独立封面:竖版 2:3(剧集/电影)。完整显示,object-fit:contain 不裁。 */
 .dt-hero-cover {
-  flex: none; width: clamp(96px, 11vw, 128px); aspect-ratio: 2 / 3;
+  width: clamp(96px, 11vw, 128px); aspect-ratio: 2 / 3;
   border-radius: 9px; overflow: hidden; border: 1px solid var(--line-strong);
   background: var(--panel-2); box-shadow: 0 14px 34px -10px rgba(0, 0, 0, 0.6);
 }
 /* 集详情:横版剧照 16:9,更宽。 */
 .dt-hero-cover.wide { width: clamp(180px, 20vw, 236px); aspect-ratio: 16 / 9; }
 .dt-hero-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 集详情:封面正下方的简介(用户 2026-07-15:填掉封面下那块大空隙,只留小间距)。
+   margin-top 8px = 「适当一点间隔」;宽度跟着封面(左列宽),多了截断,别撑破 Hero 高度。 */
+.dt-hero-epsyn {
+  margin: 8px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--ink-2);
+  width: clamp(180px, 20vw, 236px);
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+}
 .dt-hero-body { min-width: 0; flex: 1; align-self: center; }
 .dt-hero-title { font-size: clamp(22px, 3vw, 34px); font-weight: 720; letter-spacing: -0.02em; color: var(--ink); line-height: 1.1; text-wrap: balance; }
 .dt-hero-chips { margin-top: 10px; }

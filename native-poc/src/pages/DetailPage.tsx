@@ -486,13 +486,22 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
               封面完整显示不裁不缩:剧集/电影用竖版 2:3,集详情用横版剧照 16:9。
               背景该裁就裁(object-fit:cover),封面不动 —— 这就是「不想裁封面,大可背景不用封面」。 */}
           <div className="dt-hero-inner">
-            <div className={`dt-hero-cover ${isEpisode ? "wide" : ""}`}>
-              {/* 集详情用分集自己的横版剧照(Primary,实测 22/22 有);剧集/电影用竖版海报。 */}
-              <img
-                src={isEpisode ? thumbUrl(session, item.id, 480) : posterUrl(session, item.id, 480)}
-                alt={title}
-                onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")}
-              />
+            {/* 左列 = 封面 +(仅集详情)封面下方的简介。
+                集详情的封面是 16:9,比 Hero 矮一大截,下方本来空一大块 —— 用户 2026-07-15:
+                「封面下方有很宽的间隔 把它去掉 然后把集简介加进去 适当有一点间隔就行」。
+                所以集详情的简介搬到这里(封面正下方,小间距),正文区那份 ③ 简介对 Episode 隐藏,不重复。 */}
+            <div className="dt-hero-left">
+              <div className={`dt-hero-cover ${isEpisode ? "wide" : ""}`}>
+                {/* 集详情用分集自己的横版剧照(Primary,实测 22/22 有);剧集/电影用竖版海报。 */}
+                <img
+                  src={isEpisode ? thumbUrl(session, item.id, 480) : posterUrl(session, item.id, 480)}
+                  alt={title}
+                  onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")}
+                />
+              </div>
+              {isEpisode && d?.overview && (
+                <p className="dt-hero-epsyn">{d.overview}</p>
+              )}
             </div>
             <div className="dt-hero-body">
               {isEpisode && d?.episode_no != null && (
@@ -560,8 +569,8 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
 
           {err && <div className="empty">加载失败：{err}</div>}
 
-          {/* ③ 简介 */}
-          {d?.overview && (
+          {/* ③ 简介。集详情的简介已挪到 Hero 里封面正下方(见 dt-hero-left),这里对 Episode 隐藏,不重复。 */}
+          {!isEpisode && d?.overview && (
             <>
               <div className="rowlab" style={{ margin: "20px 0 10px" }}>
                 <span className="h">简介</span>
