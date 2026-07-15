@@ -61,6 +61,18 @@ pub fn mpv_log_path() -> std::path::PathBuf {
     std::env::temp_dir().join("linplayer_mpv.log")
 }
 
+use crate::poclog;
+
+/// 编译好的 shader 缓存目录。放 app data 而不是 %TEMP% —— 它就是要跨次启动活着才有意义,
+/// 被临时目录清理掉就等于没缓存。和 config.rs 同一个 LinPlayer 根,不另起门户。
+fn shader_cache_dir() -> std::path::PathBuf {
+    dirs::cache_dir()
+        .or_else(dirs::config_dir)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("LinPlayer")
+        .join("shader-cache")
+}
+
 // ---------- Win32 顶层视频窗口 ----------
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Gdi::HBRUSH;
@@ -158,13 +170,57 @@ impl Player {
             set("terminal", "no");
             set("input-default-bindings", "no");
             set("input-vo-keyboard", "no");
-            set("msg-level", "all=v");
-            set("log-file", &mpv_log_path().to_string_lossy());
+
+            /* shader 缓存。libmpv 没有配置目录(日志里 `cache path: '' -> '-'`),
+               不显式给路径就**没有任何缓存** —— 每次起播都要把整条 Anime4K 链
+               (最重的档 6 个 pass、VL 模型 143K)重新 glsl→SPIR-V(shaderc)
+               →HLSL(spirv-cross)→D3D 编译一遍,首帧就得干等这一整轮。
+               这条同时打「起播慢」和「一开超分就卡」。 */
+            let cache = shader_cache_dir();
+            let _ = std::fs::create_dir_all(&cache);
+            set("gpu-shader-cache", "yes");
+            set("gpu-shader-cache-dir", &cache.to_string_lossy());
+
+            /* ★ mpv 日志默认**关闭** —— 别无条件打开。
+               `log-file` 一旦给了路径,mpv 就把日志目标钉在 MSGL_DEBUG,`msg-level=all=v`
+               管不住它(证据:日志里全是 [d] 行),而且会连带把 ffmpeg 的 av_log_set_level
+               一起拉到 debug → 解码器逐 packet 打日志并**同步写盘**。
+               实测:一个文件都没加载、光 mpv 初始化就写了 247 行 / 24KB。
+               需要排查时(见 [[prefetch-proxy-deadlock]] 的查法)设环境变量再跑:
+                   set LP_MPV_LOG=1 && LinPlayer.exe
+               日志仍落 %TEMP%\linplayer_mpv.log。 */
+            if std::env::var_os("LP_MPV_LOG").is_some() {
+                set("msg-level", "all=v");
+                set("log-file", &mpv_log_path().to_string_lossy());
+            }
             let rc = mpv_initialize(ctx);
             if rc < 0 {
                 let e = err_str(rc);
                 mpv_terminate_destroy(ctx);
                 return Err(format!("mpv_initialize 失败: {e}"));
+            }
+
+            /* ★ 回读校验 shader 缓存真设上了。上面那个 set() **吞掉 mpv 的返回码** ——
+               选项名写错/该版 mpv 不认,是**静默无效**,不报错,只是缓存永远不生效,
+               而「起播慢」这种症状根本看不出是它。本项目吃过太多次「不报错,只是静默不干活」
+               的亏,这类优化必须回读确认(同 set_shader_level 回读 glsl-shaders 的理由)。 */
+            let got = {
+                let n = CString::new("gpu-shader-cache-dir").unwrap();
+                let p = mpv_get_property_string(ctx, n.as_ptr());
+                if p.is_null() {
+                    String::new()
+                } else {
+                    let s = CStr::from_ptr(p).to_string_lossy().into_owned();
+                    mpv_free(p as *mut c_void);
+                    s
+                }
+            };
+            if got != cache.to_string_lossy() {
+                poclog(&format!(
+                    "警告: gpu-shader-cache-dir 没设上(回读={got:?} 期望={:?}) —— \
+                     shader 每次起播都要重编译,起播会变慢",
+                    cache.to_string_lossy()
+                ));
             }
 
             // 事件循环线程:排空 mpv 事件,捕获 END_FILE=error(直链失效)。

@@ -961,10 +961,21 @@ async fn play(
 ) -> Result<f64, String> {
     let s = session_of(&state)?;
 
-    // 观看记录:装上下文,并据此决定真正的起播点。
+    /* 观看记录上下文 与 取流地址 **并发**打 —— 两者互不依赖,却曾经一前一后串着 await,
+       白白多等 1~2 个 RTT(远程 Emby 每个 100~300ms)才轮到 mpv loadfile。
+       ★ 能 join 的前提是这两条路上**没有跨 await 持有的 std Mutex**:
+         build_wh_ctx→series_tmdb_cached 的锁在 await 前就出了作用域,resolve_stream 只用 http。
+         往这两条路上加锁时务必重新确认,否则 join! 把两个 future 放同一线程轮询,
+         一方持锁 await、另一方去抢同一把锁 = 自我死锁(本项目在 [[prefetch-proxy-deadlock]]
+         上栽过同一类跟头:症状是起播直接吊死,不报错)。 */
+    let (ctx, target) = tokio::join!(
+        build_wh_ctx(&state, &s, &item_id),
+        emby::resolve_stream(&state.http, &s, &item_id, media_source_id.as_deref()),
+    );
+    let target = target?;
+
     // 前端传进来的 resume_secs 只是 Emby 本服的进度;跨服续播开启时,
     // 本地记录里别的服务器上更靠后的进度会覆盖它(取最大)。
-    let ctx = build_wh_ctx(&state, &s, &item_id).await;
     let resume_secs = match &ctx {
         Some((scope, cand, series_tmdb)) => {
             let cross = state.config.lock().unwrap().prefs.cross_server_resume;
@@ -989,7 +1000,6 @@ async fn play(
     // 第一集的去重键还在,同一台服务器会被判成"已回传过"而跳过 —— 静默漏传。
     state.wh_done.lock().unwrap().clear();
 
-    let target = emby::resolve_stream(&state.http, &s, &item_id, media_source_id.as_deref()).await?;
     poclog(&format!(
         "PLAY item={item_id} resume={resume_secs} psid={} url={} method={}",
         target.play_session_id, target.url, target.play_method

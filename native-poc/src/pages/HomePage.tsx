@@ -327,24 +327,24 @@ export default function HomePage({
             {featured.length > 1 && (
               <>
                 <button
-                  className="hm-hot left"
+                  className="hm-arrow left"
                   title="上一张"
                   onClick={(e) => {
                     e.stopPropagation();
                     step(-1);
                   }}
                 >
-                  <IconChevronLeft size={22} />
+                  <IconChevronLeft size={16} />
                 </button>
                 <button
-                  className="hm-hot right"
+                  className="hm-arrow right"
                   title="下一张"
                   onClick={(e) => {
                     e.stopPropagation();
                     step(1);
                   }}
                 >
-                  <IconChevronRight size={22} />
+                  <IconChevronRight size={16} />
                 </button>
               </>
             )}

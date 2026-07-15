@@ -144,7 +144,6 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
   const [epCtx, setEpCtx] = useState<{ x: number; y: number; ep: Item } | null>(null);
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
 
-  const clickTimer = useRef<number | null>(null);
   const railRef = useRef<HTMLDivElement | null>(null);
 
   const isSeries = (d?.type_ ?? item.type_) === "Series";
@@ -230,10 +229,6 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
     const t = window.setTimeout(() => setToast(""), 2000);
     return () => clearTimeout(t);
   }, [toast]);
-
-  useEffect(() => () => {
-    if (clickTimer.current) clearTimeout(clickTimer.current);
-  }, []);
 
   const bgId = d?.series_id ?? item.id;
   const episodes = d?.children ?? []; // children 已按季+集号排序。
@@ -407,17 +402,6 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
     };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
-  }
-
-  /** 单击进详情 / 双击播放:单击延后一拍,双击来了就撤销。 */
-  function epClick(ep: Item) {
-    if (clickTimer.current) clearTimeout(clickTimer.current);
-    clickTimer.current = window.setTimeout(() => onOpenChild(ep), 220);
-  }
-  function epDblClick(ep: Item) {
-    if (clickTimer.current) clearTimeout(clickTimer.current);
-    clickTimer.current = null;
-    onPlay(ep);
   }
 
   const chev = <IconChevronDown size={12} />;
@@ -756,8 +740,10 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
                     <div
                       className="dt-ep"
                       key={ep.id}
-                      onClick={() => epClick(ep)}
-                      onDoubleClick={() => epDblClick(ep)}
+                      /* 单击进集详情。★ 这里曾为了「双击播放」把单击延后 220ms 等双击 ——
+                         用户口径是「没有双击这一说」,而且那一拍延迟让单击手感发黏。
+                         播放走缩略图上悬停显现的 ▶(草稿标注 16),不占双击。 */
+                      onClick={() => onOpenChild(ep)}
                       onContextMenu={(e) => {
                         e.preventDefault();
                         setEpCtx({ x: e.clientX, y: e.clientY, ep });
@@ -784,7 +770,6 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
                           title="播放"
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (clickTimer.current) clearTimeout(clickTimer.current);
                             onPlay(ep);
                           }}
                         >

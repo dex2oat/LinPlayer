@@ -1,5 +1,3 @@
-// 文档 https://github.com/hooke007/mpv_PlayKit/wiki/4_GLSL
-
 // This is free and unencumbered software released into the public domain.
 
 // Anyone is free to copy, modify, publish, use, compile, sell, or
@@ -25,7 +23,7 @@
 
 // For more information, please refer to <https://unlicense.org>
 
-//!DESC [Anime4K_AutoDownscalePre_x2][v4.0]
+//!DESC Anime4K-v4.0-AutoDownscalePre-x2
 //!HOOK MAIN
 //!BIND HOOKED
 //!BIND NATIVE

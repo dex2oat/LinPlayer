@@ -97,8 +97,12 @@
 .p-ctrls { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .p-grp { display: flex; align-items: center; gap: 6px; }
 
-/* 滑出面板的暗化背板(草稿 .dim):点空白收起,左侧画面仍看得见 */
-.p-scrim { position: fixed; inset: 0; z-index: 3; background: rgba(6, 9, 13, 0.38); animation: p-fade var(--dur-med) var(--ease); }
+/* 滑出面板的暗化背板(草稿 .dim):点空白收起,左侧画面仍看得见。
+   ★ z-index 必须**低于**上下两条 OSD 栏(z1),高于画面区(.p-stage z0,靠 DOM 顺序压过它)。
+   曾经写 z-index:3 盖住整条 OSD:面板一开,顶栏/底栏所有按钮的点击全被这块背板吃掉 ——
+   于是「开了超分面板后,点线路先关超分、再点一次才开线路」,每个选项都得按两下。
+   背板只该盖画面,不该盖控制条。 */
+.p-scrim { position: fixed; inset: 0; z-index: 0; background: rgba(6, 9, 13, 0.38); animation: p-fade var(--dur-med) var(--ease); }
 @keyframes p-fade { from { opacity: 0; } }
 
 /* 右侧滑出面板(草稿 .p-panel / slide) */

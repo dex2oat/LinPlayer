@@ -365,11 +365,12 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
   isolation: isolate;
 }
 .hero-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -2; transition: opacity var(--dur-slow) var(--ease); }
+/* 只压底部一条,给标题/按钮垫可读性。**左侧那道 90deg 渐变已按用户要求删掉** ——
+   它从左边起 34% 全不透明、到 68% 才化开,等于把大半张剧照糊掉,用户要的是「正常全显示」。
+   别再加回来。 */
 .hero-grad {
   position: absolute; inset: 0; z-index: -1;
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--bg) 92%, transparent) 0 34%, transparent 68%),
-    linear-gradient(0deg, color-mix(in srgb, var(--bg) 85%, transparent), transparent 55%);
+  background: linear-gradient(0deg, color-mix(in srgb, var(--bg) 85%, transparent), transparent 55%);
 }
 .hero-body { position: absolute; left: 32px; bottom: 26px; max-width: 48%; }
 .hero-eyebrow { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }

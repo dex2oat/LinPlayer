@@ -14,11 +14,10 @@
   isolation: isolate;
 }
 .dt-hero-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -2; }
+/* 同首页 Hero:只压底部一条。左侧 90deg 渐变已删 —— 它把大半张剧照糊掉了,见 ui.css .hero-grad。 */
 .dt-hero-grad {
   position: absolute; inset: 0; z-index: -1;
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--bg) 92%, transparent) 0 34%, transparent 68%),
-    linear-gradient(0deg, var(--bg), transparent 55%);
+  background: linear-gradient(0deg, var(--bg), transparent 55%);
 }
 .dt-hero-body { position: absolute; left: 20px; bottom: 22px; max-width: 52%; }
 .dt-hero-title { font-size: clamp(26px, 3.4vw, 40px); font-weight: 720; letter-spacing: -0.02em; color: var(--ink); line-height: 1.06; text-wrap: balance; }

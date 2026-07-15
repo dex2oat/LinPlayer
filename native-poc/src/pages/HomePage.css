@@ -41,26 +41,11 @@
   filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.55));
 }
 
-/* ---------- Hero 左右热区翻页(标注 6) ---------- */
-.hm-hot {
-  position: absolute; top: 0; bottom: 0;
-  width: 68px;
-  border: none; padding: 0;
-  background: none;
-  color: var(--ink-2);
-  cursor: pointer;
-  z-index: 1;
-  display: grid; place-items: center;
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease);
-}
-.hm-hot.left { left: 0; }
-.hm-hot.right { right: 0; }
-.hm-hero:hover .hm-hot { opacity: 1; }
-.hm-hot:hover { color: var(--ink); background: color-mix(in srgb, var(--bg) 30%, transparent); }
-
-/* 热区铺满 Hero 整个高度,和标题/按钮/圆点有重叠。热区在 z1,所以这两个必须压在它上面,
-   否则「播放」按钮和圆点会被热区吃掉点击。 */
+/* ---------- Hero 左右翻页(标注 6) ---------- */
+/* 直接复用轨道那对 .hm-arrow(28×44 小圆角),不另造样式:用户要的就是「和下面的左右
+   切换按钮一样小」。原先是 68px 宽 × 铺满整个 Hero 高度的透明热区 —— 大得离谱,
+   还得靠给 hero-body/hero-dots 抬 z-index 才不被它吃掉点击。别再改回热区。 */
+.hm-hero:hover .hm-arrow { opacity: 1; }
 .hm-hero .hero-body { z-index: 2; }
 .hm-hero .hero-dots { z-index: 3; }
 
