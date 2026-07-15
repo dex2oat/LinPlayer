@@ -3460,7 +3460,12 @@ pub fn run() {
                 }
             });
 
-            // 插件系统:host 持 AppHandle 落平台能力;基目录用应用配置目录。
+            /* 插件系统:host 持 AppHandle 落平台能力;基目录用应用配置目录。
+               ⚠️ app_config_dir() 是由 tauri.conf.json 的 **identifier** 推出来的
+               (现为 com.linplayer.poc)。改 identifier = 换目录 = 已装插件**静默失联**
+               (不报错,只是列表空了)。真要改先写迁移。
+               注意服务器/账号配置不在这儿:config.rs 写死 config_dir()/LinPlayer/config.json,
+               与 identifier 无关 —— 别看到这条就以为改 identifier 会丢服务器。 */
             let base = app
                 .path()
                 .app_config_dir()
