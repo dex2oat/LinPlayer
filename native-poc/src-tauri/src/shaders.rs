@@ -186,6 +186,24 @@ pub fn levels() -> Vec<(&'static str, &'static str, bool)> {
     ]
 }
 
+/// 强度(0~100)→ mpv `glsl-shader-opts` 的值。
+///
+/// hooke007 那套 shader 是**参数驱动**的,我们此前一个都没设 = 一直在吃默认值
+/// (CAS `STR=0.5`,只开一半;RCAS `SHARP=0.2`)。用户「是不是强度有点低了」问的就是这个。
+///
+/// 两个参数方向**相反**,别搞反:
+/// - `STR`(CAS,0.0~1.0):**越大越锐**,0 = 不跑(`//!WHEN STR`)。
+/// - `SHARP`(RCAS,0.0~4.0):**越小越锐**(AMD RCAS 里它是以 stop 为单位的衰减),
+///   4.0 = 不跑(`//!WHEN SHARP 4.0 <`)。
+///
+/// 故 pct=0 时两者都落到「不跑」,pct=100 时都到最锐 —— 端点自洽,有测试钉。
+pub fn strength_opts(pct: u8) -> String {
+    let p = (pct.min(100) as f64) / 100.0;
+    let str_ = p; // 0..1,越大越锐
+    let sharp = 4.0 * (1.0 - p); // 4..0,越小越锐
+    format!("STR={str_:.3},SHARP={sharp:.3}")
+}
+
 /// 把嵌入的 shader 落盘到 dir(已存在且大小一致就跳过),返回 文件名→绝对路径。
 fn ensure_files(dir: &Path) -> Result<HashMap<&'static str, PathBuf>, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("建 shader 目录失败: {e}"))?;
@@ -349,6 +367,51 @@ mod tests {
         assert!(!is_upscale_gated("Anime4K_Denoise_Bilateral_Mode.glsl"), "去噪没有 WHEN,永远跑");
         // 名字不存在时别默默返回 false 把「不挑尺寸」栽给一个不存在的文件
         assert_eq!(body_of("不存在.glsl"), "");
+    }
+
+    /// 强度端点必须自洽:0 = 两个滤镜都落到各自的「不跑」值,100 = 都到最锐。
+    /// 两个参数方向相反,这条就是防我把它们搞反。
+    #[test]
+    fn strength_endpoints_are_coherent() {
+        // 0% → CAS 的 STR=0(//!WHEN STR 为假,不跑);RCAS 的 SHARP=4(//!WHEN SHARP 4.0 < 为假,不跑)
+        assert_eq!(strength_opts(0), "STR=0.000,SHARP=4.000");
+        // 100% → 都到最锐端
+        assert_eq!(strength_opts(100), "STR=1.000,SHARP=0.000");
+        // 中间点:STR 随强度**上升**,SHARP 随强度**下降**
+        assert_eq!(strength_opts(50), "STR=0.500,SHARP=2.000");
+        // 越界不许炸,也不许绕回去(u8 传 200 得夹到 100)
+        assert_eq!(strength_opts(200), strength_opts(100));
+        // 单调性:方向搞反的话这里必红
+        let s = |p: u8| {
+            let v = strength_opts(p);
+            let f = |k: &str| {
+                v.split(',')
+                    .find(|x| x.starts_with(k))
+                    .unwrap()
+                    .split('=')
+                    .nth(1)
+                    .unwrap()
+                    .parse::<f64>()
+                    .unwrap()
+            };
+            (f("STR"), f("SHARP"))
+        };
+        let (str_lo, sharp_lo) = s(20);
+        let (str_hi, sharp_hi) = s(80);
+        assert!(str_hi > str_lo, "STR 必须随强度上升(越大越锐)");
+        assert!(sharp_hi < sharp_lo, "SHARP 必须随强度下降(越小越锐)—— 搞反了就是越调越糊");
+    }
+
+    /// 强度参数名必须真的存在于嵌入的 shader 里,否则 glsl-shader-opts 设了个寂寞
+    /// (mpv 对不认识的参数名会报错/忽略,两种都等于用户白调)。
+    #[test]
+    fn strength_param_names_exist_in_shaders() {
+        for (param, file) in [("STR", "AMD_CAS_luma_RT.glsl"), ("SHARP", "AMD_FSR1_RCAS_RT.glsl")] {
+            assert!(
+                body_of(file).lines().any(|l| l.trim() == format!("//!PARAM {param}")),
+                "{file} 里没有 //!PARAM {param} —— strength_opts 在设一个不存在的参数"
+            );
+        }
     }
 
     /// 嵌入的内容不能是空的(文件被清空/拉取失败会静默变成空串)。

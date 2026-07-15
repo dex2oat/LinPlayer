@@ -1880,6 +1880,25 @@ fn screenshot(state: State<'_, AppState>, dir: Option<String>) -> Result<String,
     Ok(s)
 }
 
+/// 画质滤镜强度 0~100。落盘持久化 + 立即对在播的画面生效。
+/// 返回是否真设上了 —— 参数名不对时 mpv 会拒掉整个 glsl-shader-opts 且**毫无提示**。
+#[tauri::command]
+fn set_shader_strength(state: State<'_, AppState>, pct: u8) -> Result<bool, String> {
+    let pct = pct.min(100);
+    {
+        let mut cfg = state.config.lock().unwrap();
+        cfg.prefs.shader_strength = pct;
+        cfg.save();
+    }
+    // 没在播 / 当前没挂 shader → 存下就行,下次挂载时自然带上。
+    let guard = state.player.lock().unwrap();
+    let Some(p) = guard.as_ref() else { return Ok(true) };
+    if p.shader_count() == 0 {
+        return Ok(true);
+    }
+    Ok(p.set_shader_opts(&shaders::strength_opts(pct)))
+}
+
 /// 超分档位清单 `(id, 显示名, 窗口模式是否也生效)`。
 /// 第三个字段让 UI 在**点之前**就标出「需放大」—— 用户不该点完看不出变化再去猜。
 #[tauri::command]
@@ -1910,8 +1929,14 @@ fn set_shader_level(state: State<'_, AppState>, level: String) -> Result<ShaderA
         .join("LinPlayer")
         .join("shaders");
     let paths = shaders::shader_paths(&dir, &level)?;
+    let strength = state.config.lock().unwrap().prefs.shader_strength;
     let guard = state.player.lock().unwrap();
     let p = guard.as_ref().ok_or("播放器未就绪")?;
+    /* 强度必须**每次挂载都重设**:glsl-shader-opts 是全局的,而用户可能在没播放时改过强度。
+       不设 = 吃 shader 自带默认(CAS STR=0.5,只开一半)—— 用户实测「强度有点低」就是这个。 */
+    if !paths.is_empty() && !p.set_shader_opts(&shaders::strength_opts(strength)) {
+        poclog(&format!("警告: glsl-shader-opts 没设上(强度 {strength} 不会生效)"));
+    }
     p.set_shaders(&paths);
     let count = p.shader_count();
     if !paths.is_empty() && count == 0 {
@@ -3592,6 +3617,7 @@ pub fn run() {
             add_subtitle,
             screenshot,
             shader_levels,
+            set_shader_strength,
             set_shader_level,
             mpv_get,
             mpv_set,

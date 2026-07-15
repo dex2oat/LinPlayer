@@ -125,6 +125,8 @@ export type Prefs = {
   audio_lang: string | null;
   sub_lang: string | null;
   sub_enabled: boolean;
+  /** 画质滤镜强度 0~100(核层默认 70)。改它请用 setShaderStrength,不要走 setPrefs。 */
+  shader_strength: number;
 };
 
 export type SourceEntry = {
@@ -459,6 +461,9 @@ export const screenshot = (dir?: string) => invoke<string>("screenshot", { dir }
  *  窗口里播 1080p 点了毫无变化。要在**点之前**就标出来,别让用户点完自己猜。 */
 export type ShaderLevel = [id: string, name: string, worksInWindow: boolean];
 export const shaderLevels = () => invoke<ShaderLevel[]>("shader_levels");
+/** 画质滤镜强度 0~100(CAS 锐化 STR + FSR RCAS SHARP)。落盘 + 立即生效。
+ *  返回 false = mpv 拒了 glsl-shader-opts(参数名对不上),**它自己不会报错**,要如实告诉用户。 */
+export const setShaderStrength = (pct: number) => invoke<boolean>("set_shader_strength", { pct });
 /** 应用超分档位,返回实际挂上的 shader 数;非 off 却返 0 会直接报错(超分没生效)。 */
 /** 挂超分的结果。★ count>0 只说明 mpv 收下了路径,**不代表 shader 会跑** ——
  *  Anime4K 每个 pass 都带「输出 > 源 ×1.2」的门槛,窗口没比源大就整条链空转。
@@ -547,7 +552,12 @@ export const applyPrefs = () =>
 
 export const getPrefs = () => invoke<Prefs>("get_prefs");
 
-export const setPrefs = (p: Prefs) =>
+/** ★ 只收选轨三项 —— 核层 set_prefs 也只认这三个参数(其余走 `..cfg.prefs.clone()` 保留)。
+ *  以前这里标成 `p: Prefs`,逼调用方拼一个完整 Prefs 再扔掉多余字段:
+ *  看着像「整体覆盖」,给人一种「不传的字段会被清掉」的错觉,新增 Prefs 字段时
+ *  每个调用点都得跟着改一遍。改强度请走 setShaderStrength。 */
+export type TrackPrefs = Pick<Prefs, "audio_lang" | "sub_lang" | "sub_enabled">;
+export const setPrefs = (p: TrackPrefs) =>
   invoke<void>("set_prefs", {
     audioLang: p.audio_lang,
     subLang: p.sub_lang,

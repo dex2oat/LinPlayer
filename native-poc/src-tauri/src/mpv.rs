@@ -515,6 +515,14 @@ impl Player {
         let joined = paths.join(";");
         self.set_str("glsl-shaders", &joined);
     }
+    /// shader 参数(mpv glsl-shader-opts)。hooke007 那套 shader 全靠参数调强度,
+    /// 不设 = 一直吃默认值(CAS STR=0.5 只开一半)。返回是否设上了 —— 参数名写错
+    /// mpv 会拒掉整个选项,而且**不会有任何提示**,必须回读。
+    pub fn set_shader_opts(&self, opts: &str) -> bool {
+        self.set_str("glsl-shader-opts", opts);
+        self.get_str("glsl-shader-opts").as_deref() == Some(opts)
+    }
+
     /// 源画面尺寸(dwidth/dheight 是**显示**尺寸,已算进非方像素/裁剪,正是 shader 里的 MAIN)。
     /// 没在播 → None。
     pub fn video_size(&self) -> Option<(f64, f64)> {

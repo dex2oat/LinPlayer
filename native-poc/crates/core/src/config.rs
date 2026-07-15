@@ -103,6 +103,11 @@ pub struct Prefs {
     pub audio_lang: Option<String>,
     pub sub_lang: Option<String>,
     pub sub_enabled: bool,
+    /// 画质滤镜强度 0~100(喂 mpv glsl-shader-opts 的 CAS STR / RCAS SHARP)。
+    /// 默认 70:比 shader 自带的默认(CAS STR=0.5)明显一档 —— 用户实测「强度有点低」。
+    /// 不设成 100:CAS 拉满会开始出现锐化光晕,得留出让用户往上加的余量。
+    #[serde(default = "default_shader_strength")]
+    pub shader_strength: u8,
     /// 跨服务器续播:在别的服务器看过同一部片时,用本地记录里的最大进度起播。
     /// 默认关 —— 它会让「这台服上没看过的片」也从中间起播,得用户明确要才开。
     #[serde(default)]
@@ -145,12 +150,17 @@ fn default_prefetch_cache() -> u64 {
 fn default_writeback_range() -> String {
     "all".to_string()
 }
+/// 见 Prefs::shader_strength 上的说明:70 是「比 shader 自带默认明显一档,又留出上调余量」。
+fn default_shader_strength() -> u8 {
+    70
+}
 impl Default for Prefs {
     fn default() -> Self {
         Self {
             audio_lang: None,
             sub_lang: None,
             sub_enabled: true,
+            shader_strength: default_shader_strength(),
             cross_server_resume: false,
             cross_server_writeback: false,
             cross_server_writeback_range: default_writeback_range(),
@@ -442,6 +452,25 @@ mod tests {
 
     fn acc(server: &str) -> Account {
         Account { server: server.into(), ..Default::default() }
+    }
+
+    /// 老配置(没有 shader_strength 键)读出来必须是 70,**不能是 0**。
+    /// u8 的朴素 `#[serde(default)]` 会给 0,而 0 = CAS 的 `//!WHEN STR` 为假 = 锐化
+    /// 彻底不跑、且没有任何提示 —— 所有老用户升级后画质滤镜静默失效。
+    /// 这条就是防有人把 `default = "default_shader_strength"` 改成朴素 default。
+    #[test]
+    fn old_config_without_shader_strength_defaults_to_70_not_zero() {
+        let p: Prefs = serde_json::from_str(
+            r#"{"audio_lang":null,"sub_lang":null,"sub_enabled":true}"#,
+        )
+        .expect("老配置必须还能读");
+        assert_eq!(p.shader_strength, 70, "缺键时必须回落 70;0 = 锐化静默关闭");
+        // 显式写了就照用户的来
+        let p2: Prefs = serde_json::from_str(
+            r#"{"audio_lang":null,"sub_lang":null,"sub_enabled":true,"shader_strength":0}"#,
+        )
+        .unwrap();
+        assert_eq!(p2.shader_strength, 0, "用户显式设 0 就该是 0,别被 default 顶掉");
     }
 
     #[test]

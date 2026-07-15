@@ -50,6 +50,7 @@ import {
   setSecondarySub,
   setSecondarySubOpts,
   setShaderLevel,
+  setShaderStrength,
   setSpeed as setSpeedApi,
   setSubDelay,
   setSubStyle,
@@ -129,7 +130,7 @@ export default function App() {
   const [playing, setPlaying] = useState<Item | null>(null);
   const [status, setStatus] = useState<Status>({ time: 0, duration: 0, paused: false, buffered: 0 });
   const [tracks, setTracks] = useState<Track[]>([]);
-  const [prefs, setPrefs2] = useState<Prefs>({ audio_lang: null, sub_lang: null, sub_enabled: true });
+  const [prefs, setPrefs2] = useState<Prefs>({ audio_lang: null, sub_lang: null, sub_enabled: true, shader_strength: 70 });
   const [seeking, setSeeking] = useState<number | null>(null);
   const [panel, setPanel] = useState<Panel>(null);
   const [idle, setIdle] = useState(false);
@@ -163,6 +164,9 @@ export default function App() {
   // 超分:档位清单来自核层 shader_levels(),不再前端写死
   const [shaderList, setShaderList] = useState<ShaderLevel[]>([]);
   const [shaderLv, setShaderLv] = useState("off");
+  /* 滤镜强度 0~100(核层落盘,起播后由 get_prefs 覆盖成真值)。
+     用户实测「强度有点低」—— 因为此前一个参数都没设,一直在吃 shader 自带默认(CAS STR=0.5)。 */
+  const [shaderStr, setShaderStr] = useState(70);
   // 字幕样式:核层无回读命令,故记前端态;初值取 mpv 自身默认(sub-font-size 55 / sub-pos 100)
   const [subFont, setSubFont] = useState("sans-serif");
   const [fontOpen, setFontOpen] = useState(false);
@@ -205,7 +209,7 @@ export default function App() {
     (async () => {
       const s = await currentSession().catch(() => null);
       if (s) setSession(s);
-      getPrefs().then(setPrefs2).catch(() => {});
+      getPrefs().then((p) => { setPrefs2(p); setShaderStr(p.shader_strength); }).catch(() => {});
       /* 这里原本 invoke<DmConfig>("get_danmaku_config") 把 Vec<DanmakuServer> 读成单对象
          (api_url 恒 undefined),而弹幕源的增删改现已归设置页 —— 播放器不需要读它,直接删。
          真要读请走 api.ts 的 getDanmakuConfig(): DanmakuServer[],别再退回单对象。 */
@@ -639,6 +643,14 @@ export default function App() {
       ★ 别只看 count 就报「已生效」:Anime4K 每个 pass 都带「输出 > 源 ×1.2」的门槛,
         窗口没比源大时整条链一帧都不跑,画面毫无变化,而旧文案还在说「已生效·挂载 6 个」——
         那就是假开,正是 [[superres-and-toast]] 要防的东西,结果自己又犯了一遍。 */
+  /** 强度:核层落盘 + 立刻对在播画面生效。设不上要如实说 —— mpv 拒掉 glsl-shader-opts 时自己不吭声。 */
+  async function applyStrength(pct: number) {
+    const v = Math.max(0, Math.min(100, pct));
+    setShaderStr(v);
+    try {
+      if (!(await setShaderStrength(v))) say("强度未生效:mpv 拒绝了 shader 参数");
+    } catch (e) { fail("滤镜强度", e); }
+  }
   async function applyShader(id: string) {
     try {
       const r = await setShaderLevel(id);
@@ -1195,6 +1207,12 @@ export default function App() {
                           <span className="rt">需放大</span>
                         </button>
                       ))}
+                      <div className="grp-lab">强度</div>
+                      {/* 此前一个参数都没设 = 一直吃 shader 自带默认(CAS STR=0.5,只开一半),
+                          用户实测「强度有点低」就是这个。0 = 锐化那半彻底不跑。 */}
+                      {stepper("锐化/去噪强度", `${shaderStr}%`,
+                        () => applyStrength(shaderStr - 10),
+                        () => applyStrength(shaderStr + 10))}
                       <div className="p-note">
                         锐化/去噪(CAS + Anime4K Denoise)在源分辨率就跑,窗口里也立刻见效。
                         放大类(FSR1 / Anime4K CNN)是放大器,只有画面区大于源画面 1.2 倍才工作 —— 按 F 全屏。
