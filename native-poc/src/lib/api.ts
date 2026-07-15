@@ -456,7 +456,17 @@ export const screenshot = (dir?: string) => invoke<string>("screenshot", { dir }
 /** 超分档位清单 [id, 显示名][]。 */
 export const shaderLevels = () => invoke<[string, string][]>("shader_levels");
 /** 应用超分档位,返回实际挂上的 shader 数;非 off 却返 0 会直接报错(超分没生效)。 */
-export const setShaderLevel = (level: string) => invoke<number>("set_shader_level", { level });
+/** 挂超分的结果。★ count>0 只说明 mpv 收下了路径,**不代表 shader 会跑** ——
+ *  Anime4K 每个 pass 都带「输出 > 源 ×1.2」的门槛,窗口没比源大就整条链空转。
+ *  所以必须看 will_run,别只看 count 就报「已生效」(那正是它撒过的谎)。 */
+export type ShaderApplied = {
+  count: number;
+  /** null = 没在播,尺寸未知,核层不下结论 */
+  will_run: boolean | null;
+  /** will_run=false 时的人话解释(带真实数字),直接显示给用户 */
+  note: string | null;
+};
+export const setShaderLevel = (level: string) => invoke<ShaderApplied>("set_shader_level", { level });
 
 /** mpv 属性直通(有专用命令的优先用专用命令)。 */
 export const mpvGet = (name: string) => invoke<string | null>("mpv_get", { name });

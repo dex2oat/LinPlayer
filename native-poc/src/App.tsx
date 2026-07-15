@@ -232,11 +232,13 @@ export default function App() {
     await setPrefs(next).catch(() => {});
   }
 
-  /** OSD 统一提示(复用 ui.css 的 .toast)。 */
+  /** OSD 统一提示(复用 ui.css 的 .toast)。
+      停留时长按字数给:整句解释(如超分为何不生效)2.4s 根本读不完,读不完等于没说。 */
   function say(msg: string) {
     setToast(msg);
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(null), 2400);
+    const ms = Math.min(9000, Math.max(2400, msg.length * 130));
+    toastTimer.current = window.setTimeout(() => setToast(null), ms);
   }
   /** 核层确实没有的命令:诚实告知,不装作能用。 */
   const soon = (what: string) => say(`${what}:核层暂无对应命令,待接`);
@@ -632,13 +634,17 @@ export default function App() {
     }, min * 60_000);
     say(`已设置 ${min} 分钟后关闭`);
   }
-  /** 超分:核层挂完回读 glsl-shaders 校验,非 off 却 0 会 reject —— 必须如实报,
-      不能吞(见 [[superres-and-toast]]:软件纹理根本不跑 glsl,吞了就是假开)。 */
+  /** 超分:核层挂完**双重回读** —— glsl-shaders 校验挂没挂上,尺寸校验会不会真跑。
+      ★ 别只看 count 就报「已生效」:Anime4K 每个 pass 都带「输出 > 源 ×1.2」的门槛,
+        窗口没比源大时整条链一帧都不跑,画面毫无变化,而旧文案还在说「已生效·挂载 6 个」——
+        那就是假开,正是 [[superres-and-toast]] 要防的东西,结果自己又犯了一遍。 */
   async function applyShader(id: string) {
     try {
-      const n = await setShaderLevel(id);
+      const r = await setShaderLevel(id);
       setShaderLv(id);
-      say(id === "off" ? "超分已关闭" : `超分已生效 · 挂载 ${n} 个 shader`);
+      if (id === "off") { say("超分已关闭"); return; }
+      // will_run=false:挂上了但不会跑 → 把核层给的真实数字原样告诉用户,别粉饰成成功。
+      say(r.will_run === false && r.note ? r.note : `超分已生效 · 挂载 ${r.count} 个 shader`);
     } catch (e) {
       say(`超分未生效:${e}`); // 档位高亮不动:没生效就别显示成选中
     }
@@ -1178,7 +1184,12 @@ export default function App() {
                           <span className="rad" /> {name}
                         </button>
                       ))}
-                      <div className="p-note">后续接入更多超分模型(不止 Anime4K)· 仅 mpv/原生 MPV。挂载后回读 glsl-shaders 校验:没真生效会报错,不会假装开了。</div>
+                      {/* 这段必须在点之前就说清楚:Anime4K 是**放大器**,不放大时它什么都不做,
+                          而且它自己不会吭声 —— 用户只会看到「点了没反应」。 */}
+                      <div className="p-note">
+                        Anime4K 是放大器:只有画面区大于源画面 1.2 倍才工作。窗口播 1080p 通常不满足 —— 按 F 全屏。
+                        档位越靠后越清晰也越吃显卡;挂载后回读 glsl-shaders 与画面尺寸双重校验,不会假装开了。
+                      </div>
                     </>
                   )
                 )}

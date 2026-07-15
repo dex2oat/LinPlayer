@@ -1886,10 +1886,24 @@ fn shader_levels() -> Vec<(&'static str, &'static str)> {
     shaders::levels()
 }
 
-/// 应用超分档位。返回实际挂上的 shader 数 —— 0 而档位非 off 就是没生效
+/// 应用超分档位的结果。
+/// ★ 为什么不只回一个数:`count>0` 只能证明 mpv **收下了**路径,**证明不了 shader 会跑**。
+///   Anime4K 每个 pass 都带 `//!WHEN 输出>源*1.2`,窗口没比源大就整条链空转 —— 画面一点没变,
+///   而旧版 UI 照样报「超分已生效 · 挂载 6 个 shader」。那就是在撒谎,正是本项目最贵的那类 bug。
+#[derive(serde::Serialize)]
+struct ShaderApplied {
+    /// mpv 收下的 shader 数(0 而档位非 off = 连挂都没挂上)。
+    count: usize,
+    /// 当前尺寸下这条链会不会真的跑。None = 没在播,尺寸未知,不下结论。
+    will_run: Option<bool>,
+    /// will_run=false 时的人话解释(带真实数字),UI 直接显示。
+    note: Option<String>,
+}
+
+/// 应用超分档位。挂载后**双重回读**:glsl-shaders 校验挂没挂上,尺寸校验会不会真跑
 /// (见 [[superres-and-toast]]:旧 Flutter 桌面软件纹理根本不跑 glsl,必须回读校验)。
 #[tauri::command]
-fn set_shader_level(state: State<'_, AppState>, level: String) -> Result<usize, String> {
+fn set_shader_level(state: State<'_, AppState>, level: String) -> Result<ShaderApplied, String> {
     let dir = dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("LinPlayer")
@@ -1898,11 +1912,29 @@ fn set_shader_level(state: State<'_, AppState>, level: String) -> Result<usize, 
     let guard = state.player.lock().unwrap();
     let p = guard.as_ref().ok_or("播放器未就绪")?;
     p.set_shaders(&paths);
-    let got = p.shader_count();
-    if !paths.is_empty() && got == 0 {
+    let count = p.shader_count();
+    if !paths.is_empty() && count == 0 {
         return Err("超分未生效(mpv 未接受 shader)".into());
     }
-    Ok(got)
+    if paths.is_empty() {
+        return Ok(ShaderApplied { count, will_run: None, note: None });
+    }
+
+    let (video, output) = (p.video_size(), p.output_size());
+    let will_run = shaders::will_run(video, output);
+    let note = match (will_run, video, output) {
+        (Some(false), Some((vw, vh)), Some((ow, oh))) => Some(format!(
+            "shader 已挂载,但当前尺寸下不会生效:Anime4K 是放大器,要求画面区大于源的 {:.1} 倍才工作。\
+             现在源 {vw:.0}×{vh:.0}、画面区只有 {ow:.0}×{oh:.0}({:.2}×)—— 你在缩小画面,没有可放大的。\
+             按 F 全屏(或把窗口拉大到超过 {:.0}×{:.0})即可生效。",
+            shaders::WHEN_RATIO,
+            ow / vw,
+            vw * shaders::WHEN_RATIO,
+            vh * shaders::WHEN_RATIO,
+        )),
+        _ => None,
+    };
+    Ok(ShaderApplied { count, will_run, note })
 }
 
 /// mpv 属性直读/直写 + 命令直通。插件桥和一次性调参用(对齐 Flutter 的

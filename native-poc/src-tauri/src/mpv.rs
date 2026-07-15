@@ -515,8 +515,23 @@ impl Player {
         let joined = paths.join(";");
         self.set_str("glsl-shaders", &joined);
     }
+    /// 源画面尺寸(dwidth/dheight 是**显示**尺寸,已算进非方像素/裁剪,正是 shader 里的 MAIN)。
+    /// 没在播 → None。
+    pub fn video_size(&self) -> Option<(f64, f64)> {
+        let w = self.get_str("dwidth")?.parse().ok()?;
+        let h = self.get_str("dheight")?.parse().ok()?;
+        Some((w, h))
+    }
+    /// mpv 输出区尺寸(= shader 里的 OUTPUT)。窗口大小,不是屏幕大小。
+    pub fn output_size(&self) -> Option<(f64, f64)> {
+        let w = self.get_str("osd-width")?.parse().ok()?;
+        let h = self.get_str("osd-height")?.parse().ok()?;
+        Some((w, h))
+    }
+
     /// 实际挂上的 shader 数(用于校验超分是否真生效 —— 见 [[superres-and-toast]]:
     /// 旧 Flutter 桌面端软件纹理根本不跑 glsl-shader,回读才知道)。
+    /// ⚠️ 它只说明 mpv **收下了**路径,**不代表 shader 会跑** —— 见 will_run()。
     pub fn shader_count(&self) -> usize {
         self.get_str("glsl-shaders")
             .map(|s| s.split(';').filter(|x| !x.trim().is_empty()).count())

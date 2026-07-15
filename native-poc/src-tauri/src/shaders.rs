@@ -137,6 +137,25 @@ pub fn levels() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
+/// Anime4K 每个 pass 的触发门槛:**输出宽高都要 > 源的 1.2 倍**,否则那一 pass 整个跳过。
+/// shader 源里写死的那行是:
+///   `//!WHEN OUTPUT.w MAIN.w / 1.200 > OUTPUT.h MAIN.h / 1.200 > *`
+/// 这不是我们的策略,是 Anime4K 自己的设计 —— 它是**放大器**,不放大时本就该什么都不做。
+/// 有测试从嵌入的 shader 源里把这个 1.200 抠出来比对,shader 换版本改了门槛会红。
+pub const WHEN_RATIO: f64 = 1.2;
+
+/// 当前尺寸下 shader 会不会真的跑。`None` = 尺寸未知(没在播),不下结论。
+/// ★ 存在的理由:mpv 收下 glsl-shaders 路径 ≠ shader 会执行。
+/// 2026-07-15 真机:窗口 1770×1080 播 1920×1080,六个 pass 全被 //!WHEN 跳过,
+/// 而 UI 还在报「超分已生效 · 挂载 6 个 shader」—— 典型的「不报错,只是静默不干活」。
+pub fn will_run(video: Option<(f64, f64)>, output: Option<(f64, f64)>) -> Option<bool> {
+    let ((vw, vh), (ow, oh)) = (video?, output?);
+    if vw <= 0.0 || vh <= 0.0 {
+        return None;
+    }
+    Some(ow / vw > WHEN_RATIO && oh / vh > WHEN_RATIO)
+}
+
 /// 把嵌入的 shader 落盘到 dir(已存在且大小一致就跳过),返回 文件名→绝对路径。
 fn ensure_files(dir: &Path) -> Result<HashMap<&'static str, PathBuf>, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("建 shader 目录失败: {e}"))?;
@@ -257,6 +276,57 @@ mod tests {
         for id in ["modeA", "modeB", "modeC"] {
             assert_eq!(count(id), 1, "单档 {id} 只该挂一遍去噪");
         }
+    }
+
+    /// WHEN_RATIO 必须等于 shader 源里真写的那个数,不能是我拍脑袋的常量。
+    ///
+    /// 只查**对 MAIN 的门槛**(`//!WHEN OUTPUT.w MAIN.w / 1.200 > ...`)—— 那才是
+    /// 「这条链到底跑不跑」的总闸,也是 will_run/提示文案依据的那个数。
+    /// 故意**不查** AutoDownscalePre 的 `NATIVE` 条件:那两个是区间闸
+    /// (x2 管 1.2~2.0 倍、x4 管 2.4~4.0 倍,负责把中间结果降回显示分辨率),
+    /// 是另一套机制,拿 WHEN_RATIO 去套它是我第一版测试写错的地方。
+    #[test]
+    fn when_ratio_matches_shader_source() {
+        let mut seen = 0;
+        for (name, body) in FILES {
+            for line in body
+                .lines()
+                .filter(|l| l.starts_with("//!WHEN") && l.contains("MAIN.w"))
+            {
+                let nums: Vec<f64> = line
+                    .split_whitespace()
+                    .filter_map(|t| t.parse::<f64>().ok())
+                    .collect();
+                assert!(!nums.is_empty(), "{name} 的 WHEN 行没解析出阈值: {line}");
+                for n in nums {
+                    assert!(
+                        (n - WHEN_RATIO).abs() < 1e-6,
+                        "{name} 的 MAIN 门槛是 {n},但 WHEN_RATIO={WHEN_RATIO} —— \
+                         提示文案会报错误的数字,will_run 也会判错"
+                    );
+                    seen += 1;
+                }
+            }
+        }
+        assert!(seen > 0, "一个 MAIN 门槛都没扫到 —— 这条测试等于没跑,先查 shader 是不是换格式了");
+    }
+
+    /// will_run 的判据。窗口没比源大 1.2 倍 = 一帧都不跑(2026-07-15 真机就是这个数)。
+    #[test]
+    fn will_run_needs_output_bigger_than_source() {
+        // 真机现场:1770×1080 窗口播 1920×1080 → 不跑
+        assert_eq!(will_run(Some((1920.0, 1080.0)), Some((1770.0, 1080.0))), Some(false));
+        // 同屏全屏 2560×1600 → 1.33×/1.48× 都过线 → 跑
+        assert_eq!(will_run(Some((1920.0, 1080.0)), Some((2560.0, 1600.0))), Some(true));
+        // 只有一边过线也不行(WHEN 是 宽 AND 高)
+        assert_eq!(will_run(Some((1920.0, 1080.0)), Some((3840.0, 1080.0))), Some(false));
+        // 恰好等于 1.2 倍:shader 用的是 `>` 不是 `>=`
+        assert_eq!(will_run(Some((1000.0, 1000.0)), Some((1200.0, 1200.0))), Some(false));
+        // 没在播 → 不下结论,别瞎报
+        assert_eq!(will_run(None, Some((2560.0, 1600.0))), None);
+        assert_eq!(will_run(Some((1920.0, 1080.0)), None), None);
+        // 源尺寸是 0(mpv 还没 reconfig)→ 别除零除出 inf 说「能跑」
+        assert_eq!(will_run(Some((0.0, 0.0)), Some((2560.0, 1600.0))), None);
     }
 
     /// 嵌入的内容不能是空的(include_str! 路径写错会静默给出空串?不会,但文件本身可能被清空)。

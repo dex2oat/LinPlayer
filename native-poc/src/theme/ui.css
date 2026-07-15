@@ -454,6 +454,9 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
   padding: 11px 18px; border-radius: 12px; font-size: 13px;
   box-shadow: var(--card-shadow);
   animation: toast-in var(--dur-med) var(--ease);
+  /* 有的提示是整句解释(如超分为何不生效,带真实数字),不限宽会横着捅出屏幕两边。 */
+  max-width: min(560px, calc(100vw - 48px));
+  line-height: 1.55;
 }
 .toast.error { border-color: var(--danger); color: var(--danger); }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, -8px); } }
