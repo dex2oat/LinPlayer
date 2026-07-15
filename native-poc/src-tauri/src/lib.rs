@@ -2,6 +2,21 @@ mod mpv;
 mod plugins_host;
 mod shaders;
 
+/* 双显卡笔记本切独显。NVIDIA Optimus / AMD Enduro 在**加载进程时**读主 exe 导出表里的
+   这两个符号,非 0 = 「这个程序要用独显」。配套的 /EXPORT 在 build.rs(Rust exe 默认
+   没有导出表,少了那半这里就是白写,且**不报错、继续用核显**)。
+   为什么要它:见 [[hybrid-gpu-must-pin-dgpu]] —— 用户真机 mpv 一直跑在 Intel UHD 上,
+   5060 全程没参与,超分自然「非常非常卡」。
+   #[used] 不能少:静态量没人读,LTO 会把它整个丢掉,导出表里就空了。 */
+#[cfg(windows)]
+#[used]
+#[no_mangle]
+pub static NvOptimusEnablement: u32 = 0x0000_0001;
+#[cfg(windows)]
+#[used]
+#[no_mangle]
+pub static AmdPowerXpressRequestHighPerformance: u32 = 0x0000_0001;
+
 use linplayer_core::config::{Account, AppConfig, DanmakuServer, Prefs};
 use linplayer_core::plugins::PluginManager;
 use linplayer_core::danmaku::{self, DanmakuAuthType, DanmakuComment, DanmakuSourceConfig};
