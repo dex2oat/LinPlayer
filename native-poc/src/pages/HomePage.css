@@ -32,9 +32,11 @@
 /* ---------- Hero logo 标题(标注 6:「大幅剧照 + logo 标题」) ---------- */
 /* logo 是带透明底的 PNG,尺寸各片差得很多 → 限高 + max-width 收着,object-fit:contain 不变形。
    浅色主题下白色 logo 会糊在米黄底上 → 补一层暗投影把边缘勾出来。 */
+/* 艺术字缩小(用户 2026-07-15:「艺术字太大了 缩小点」):92 → 52px。
+   请求侧 logoUrl 仍取 h=150,显示上限 52,余量给高分屏,不糊。 */
 .hm-herologo {
-  max-height: 92px;
-  max-width: 100%;
+  max-height: 52px;
+  max-width: 68%;
   object-fit: contain;
   object-position: left bottom;
   display: block;

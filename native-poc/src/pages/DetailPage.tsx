@@ -442,14 +442,13 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
       <div className="cbody" style={{ paddingTop: 0 }}>
         {/* ① Hero:全宽出血,不受正文 max-width 约束 */}
         <div className="dt-hero">
+          {/* 背景走 Backdrop(剧集/电影覆盖率 100%/92%,分集用 SeriesId 的 —— 见 bgId)。
+              ★ 取不到就露出 .dt-hero 的纯色底(--panel-2),**不再回落 poster** ——
+              海报现在是左边那张独立封面,背景再放一张海报就重复了。这就是决定「不提供就纯色」。 */}
           <img
             className="dt-hero-bg"
             src={backdropUrl(session, bgId)}
-            onError={(e) => {
-              const el = e.target as HTMLImageElement;
-              if (item.has_primary) el.src = posterUrl(session, item.id, 720);
-              else el.style.opacity = "0";
-            }}
+            onError={(e) => ((e.target as HTMLImageElement).style.opacity = "0")}
           />
           <div className="dt-hero-grad" />
           <button className="dt-hero-back" onClick={onBack} title="返回">
@@ -483,22 +482,35 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
               </span>
             </button>
           </div>
-          <div className="dt-hero-body">
-            {isEpisode && d?.episode_no != null && (
-              <div className="hero-eyebrow">
-                第 {d.episode_no} 集{d.name ? ` · ${d.name}` : ""}
+          {/* ★ 左侧独立封面 + 右侧信息(用户 2026-07-15 定,草稿已过审)。
+              封面完整显示不裁不缩:剧集/电影用竖版 2:3,集详情用横版剧照 16:9。
+              背景该裁就裁(object-fit:cover),封面不动 —— 这就是「不想裁封面,大可背景不用封面」。 */}
+          <div className="dt-hero-inner">
+            <div className={`dt-hero-cover ${isEpisode ? "wide" : ""}`}>
+              {/* 集详情用分集自己的横版剧照(Primary,实测 22/22 有);剧集/电影用竖版海报。 */}
+              <img
+                src={isEpisode ? thumbUrl(session, item.id, 480) : posterUrl(session, item.id, 480)}
+                alt={title}
+                onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")}
+              />
+            </div>
+            <div className="dt-hero-body">
+              {isEpisode && d?.episode_no != null && (
+                <div className="hero-eyebrow">
+                  第 {d.episode_no} 集{d.name ? ` · ${d.name}` : ""}
+                </div>
+              )}
+              <div className="dt-hero-title">{title}</div>
+              <div className="chipbar dt-hero-chips">
+                {d?.rating != null && <span className="genre">★ {d.rating.toFixed(1)}</span>}
+                {d?.year != null && <span className="genre">{d.year}</span>}
+                {d?.genres.slice(0, 3).map((g) => (
+                  <span className="genre" key={g}>
+                    {g}
+                  </span>
+                ))}
+                {isSeries && episodes.length > 0 && <span className="genre">{episodes.length} 集</span>}
               </div>
-            )}
-            <div className="dt-hero-title">{title}</div>
-            <div className="chipbar dt-hero-chips">
-              {d?.rating != null && <span className="genre">★ {d.rating.toFixed(1)}</span>}
-              {d?.year != null && <span className="genre">{d.year}</span>}
-              {d?.genres.slice(0, 3).map((g) => (
-                <span className="genre" key={g}>
-                  {g}
-                </span>
-              ))}
-              {isSeries && episodes.length > 0 && <span className="genre">{episodes.length} 集</span>}
             </div>
           </div>
         </div>

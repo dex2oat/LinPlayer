@@ -378,13 +378,18 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
   position: absolute; inset: 0; z-index: -1;
   background: linear-gradient(0deg, color-mix(in srgb, var(--bg) 85%, transparent), transparent 55%);
 }
-.hero-body { position: absolute; left: 32px; bottom: 26px; max-width: 48%; }
-.hero-eyebrow { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
-.hero-title { font-size: clamp(24px, 3vw, 34px); font-weight: 720; letter-spacing: -0.02em; color: var(--ink); line-height: 1.08; text-wrap: balance; }
-.hero-meta { font-size: 13px; color: var(--ink-2); margin-top: 10px; }
-.hero-cta { display: flex; gap: 10px; margin-top: 16px; }
-.hero-ghost { width: 40px; height: 40px; border-radius: 8px; border: 1px solid var(--line-strong); background: rgba(20, 25, 34, 0.5); color: var(--ink-2); display: grid; place-items: center; cursor: pointer; }
-.hero-ghost.on { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, var(--line)); }
+.hero-body { position: absolute; left: 32px; bottom: 26px; max-width: 52%; }
+.hero-title { font-size: clamp(22px, 2.6vw, 30px); font-weight: 720; letter-spacing: -0.02em; color: var(--ink); line-height: 1.1; text-wrap: balance; }
+/* 艺术字下面的条目标题(用户 2026-07-15 版式)。回落文字标题时这行不渲染,不重复。 */
+.hero-subtitle { margin-top: 10px; font-size: 15px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
+/* 标题下面的标签行:年份 · 类型 · 评分。 */
+.hero-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+.hero-tag {
+  font-family: var(--mono); font-size: 11px; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--line-strong); background: rgba(20, 25, 34, 0.55); color: var(--ink-2);
+}
+.hero-tag.y { color: var(--warn); }
+/* .hero-eyebrow / .hero-meta / .hero-cta / .hero-ghost 已删:eyebrow「随机推荐」+ 三键都去掉了。 */
 .hero-dots { position: absolute; right: 26px; bottom: 24px; display: flex; gap: 6px; z-index: 1; }
 .hero-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); cursor: pointer; transition: width var(--dur-med) var(--ease), background var(--dur-med) var(--ease); }
 .hero-dots i.on { background: var(--accent); width: 16px; border-radius: 3px; }

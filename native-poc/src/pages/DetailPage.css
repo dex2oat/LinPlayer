@@ -2,25 +2,51 @@
    全局类(.cbody/.rowlab/.rail/.genre/.chipbar/.btn/.sel/.dd/.li/.rad/.rt/.caption-note/.ctxmenu/.toast)
    直接复用 ui.css,这里只写 .dt- 前缀的增量。色值一律走 token。 */
 
-/* ---------- ① Hero(草稿 741-755):全宽出血,不进正文 max-width ---------- */
+/* ---------- ① Hero(草稿 PAGE 2/3,2026-07-15 重做):全宽出血,不进正文 max-width ---------- */
+/* ★★ 「全屏后背景右边缺一块」的根治点。
+   旧版:`aspect-ratio: 24/8` + `max-height: 380px`。**盒子有 aspect-ratio 时,一个轴上的
+   max 约束会顺着比例传到另一个轴** —— max-height:380 被换算成隐式的 max-width:1140,
+   于是 Hero 宽度被永久锁死在 1140px,窗口再宽也不长,右边空一大块。
+   实测截图验证:Hero 实宽 1140.7px = 380×3,误差 0.7px。
+   现在:**只给 height,不写 aspect-ratio** —— 没有比例就没有约束传递,背景 100% 铺满。
+   封面自己是独立元素,它的 2:3 / 16:9 由它自己管,和 Hero 高度无关。 */
 .dt-hero {
   position: relative;
   margin: 0 -18px;
-  aspect-ratio: 24 / 8;
-  max-height: 380px;
-  border-radius: 0;
+  height: clamp(240px, 30vw, 300px);
   overflow: hidden;
   background: var(--panel-2);
   isolation: isolate;
 }
 .dt-hero-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -2; }
-/* 同首页 Hero:只压底部一条。左侧 90deg 渐变已删 —— 它把大半张剧照糊掉了,见 ui.css .hero-grad。 */
+/* 渐变改「左浓右淡 + 底部一条」双层。
+   ★ 决定 B(用户 2026-07-15:「背景压暗浓度要更亮」):左 88% → 右 12%,比草稿初版(97%→32%)亮一档。
+   左边浓是为了让独立封面和文字读得清,右边淡让剧照露出来。别加回那种糊掉大半张的均匀暗层。 */
 .dt-hero-grad {
   position: absolute; inset: 0; z-index: -1;
-  background: linear-gradient(0deg, var(--bg), transparent 55%);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--bg) 88%, transparent) 0%,
+                            color-mix(in srgb, var(--bg) 62%, transparent) 44%,
+                            color-mix(in srgb, var(--bg) 12%, transparent) 100%),
+    linear-gradient(0deg, var(--bg) 0%, transparent 34%);
 }
-.dt-hero-body { position: absolute; left: 20px; bottom: 22px; max-width: 52%; }
-.dt-hero-title { font-size: clamp(26px, 3.4vw, 40px); font-weight: 720; letter-spacing: -0.02em; color: var(--ink); line-height: 1.06; text-wrap: balance; }
+/* Hero 内部:左封面 + 右信息,整体上对齐、留出顶部返回/操作按钮的空间。 */
+.dt-hero-inner {
+  position: absolute; inset: 0; z-index: 1;
+  display: flex; gap: 20px; align-items: flex-start;
+  padding: 52px 24px 22px;
+}
+/* 独立封面:竖版 2:3(剧集/电影)。完整显示,object-fit:contain 不裁。 */
+.dt-hero-cover {
+  flex: none; width: clamp(96px, 11vw, 128px); aspect-ratio: 2 / 3;
+  border-radius: 9px; overflow: hidden; border: 1px solid var(--line-strong);
+  background: var(--panel-2); box-shadow: 0 14px 34px -10px rgba(0, 0, 0, 0.6);
+}
+/* 集详情:横版剧照 16:9,更宽。 */
+.dt-hero-cover.wide { width: clamp(180px, 20vw, 236px); aspect-ratio: 16 / 9; }
+.dt-hero-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.dt-hero-body { min-width: 0; flex: 1; align-self: center; }
+.dt-hero-title { font-size: clamp(22px, 3vw, 34px); font-weight: 720; letter-spacing: -0.02em; color: var(--ink); line-height: 1.1; text-wrap: balance; }
 .dt-hero-chips { margin-top: 10px; }
 .dt-hero-back {
   position: absolute; left: 16px; top: 14px; z-index: 2;

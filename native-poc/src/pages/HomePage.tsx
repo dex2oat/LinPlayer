@@ -10,7 +10,6 @@ import {
   type Item,
   type LoginResult,
   backdropUrl,
-  fmtTime,
   listCollections,
   listFavorites,
   listLatest,
@@ -30,9 +29,6 @@ import {
   IconChevronRight,
   IconHeart,
   IconLibrary,
-  IconPlay,
-  IconPlus,
-  IconInfo,
   IconRefresh,
   IconSearch,
 } from "../app/icons";
@@ -136,7 +132,6 @@ export default function HomePage({
   session,
   onOpenLibrary,
   onOpenItem,
-  onPlay,
   onSearch,
   onRefresh,
   reloadKey,
@@ -289,11 +284,14 @@ export default function HomePage({
   const step = (d: 1 | -1) =>
     setHeroIdx((i) => (i + d + featured.length) % featured.length);
   // Item 里只有类型/时长是实的(年份/简介在 ItemDetail,首页不为 5 张 Hero 各拉一次详情)。
-  const heroMeta = hero
-    ? [typeLabel(hero.type_), hero.runtime_secs > 0 ? fmtTime(hero.runtime_secs) : ""]
-        .filter(Boolean)
-        .join(" · ")
-    : "";
+  /** Hero 标签(草稿:艺术字/标题下面一行)。年份 · 类型 · 评分 —— 和详情页 chips 口径一致。 */
+  const heroTags = hero
+    ? [
+        hero.year ? String(hero.year) : "",
+        typeLabel(hero.type_),
+        hero.rating != null && hero.rating > 0 ? `★ ${hero.rating.toFixed(1)}` : "",
+      ].filter(Boolean)
+    : [];
 
   return (
     <>
@@ -368,9 +366,11 @@ export default function HomePage({
             )}
 
             <div className="hero-body">
-              <div className="hero-eyebrow">随机推荐</div>
-              {/* 标注 6:有 logo 用 logo,取不到就回落文字标题(见 logoUrl 上的注释)。 */}
+              {/* 用户 2026-07-15 定的版式:艺术字(缩小) → 条目标题 → 标签。
+                  「随机推荐」eyebrow 删了(没必要);播放/＋/详情 三键删了 —— 整块单击进详情。 */}
               {logoFail.has(hero.id) ? (
+                /* ★ 决定 A:艺术字取不到 → 回落成文字标题,**此时隐藏下面那行标题**,
+                   否则和它自己重复。所以这里直接把 hero-title 当唯一标题,下面那行加 !logoFail 守卫。 */
                 <div className="hero-title">{hero.name}</div>
               ) : (
                 <img
@@ -381,38 +381,17 @@ export default function HomePage({
                   onError={() => setLogoFail((s) => new Set(s).add(hero.id))}
                 />
               )}
-              {heroMeta && <div className="hero-meta">{heroMeta}</div>}
-              <div className="hero-cta">
-                <button
-                  className="btn primary big"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onPlay(hero);
-                  }}
-                >
-                  <IconPlay size={16} /> 播放
-                </button>
-                <button
-                  className={`hero-ghost${favIds.has(hero.id) ? " on" : ""}`}
-                  title={favIds.has(hero.id) ? "取消收藏" : "收藏"}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleFav(hero);
-                  }}
-                >
-                  <IconPlus size={17} />
-                </button>
-                <button
-                  className="hero-ghost"
-                  title="详情"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenItem(hero);
-                  }}
-                >
-                  <IconInfo size={17} />
-                </button>
-              </div>
+              {/* 条目标题:只在「用了艺术字」时出现;回落文字标题时上面那行已经是标题了,不重复。 */}
+              {!logoFail.has(hero.id) && <div className="hero-subtitle">{hero.name}</div>}
+              {heroTags.length > 0 && (
+                <div className="hero-tags">
+                  {heroTags.map((t) => (
+                    <span className={`hero-tag${t.startsWith("★") ? " y" : ""}`} key={t}>
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="hero-dots">
