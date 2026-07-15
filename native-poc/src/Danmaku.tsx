@@ -5,18 +5,28 @@ export type TimeSync = { base: number; stamp: number; paused: boolean };
 
 type Active = { text: string; color: string; mode: number; born: number; width: number; lane: number; speed: number };
 
-const DURATION = 8; // 滚动弹幕在屏时长(秒)
+const DURATION = 8; // 滚动弹幕在屏时长(秒)——不传 duration 时的默认,改它会改默认观感
 const FIXED_DUR = 5; // 顶/底弹幕停留时长
 
-/** Canvas 弹幕层:自跑 rAF,时间从 timeSync 插值(平滑于 500ms 轮询),同步 mpv 播放。 */
+/** Canvas 弹幕层:自跑 rAF,时间从 timeSync 插值(平滑于 500ms 轮询),同步 mpv 播放。
+ *
+ *  弹幕的「显示速度 / 字体大小」是**前端渲染参数**(核层 danmaku_filter 只管过滤/去重,
+ *  文档里写明渲染归前端),所以调节点在这儿,不是缺核层命令。
+ *  两个 props 都可省:省略时行为与开放 props 之前逐像素一致,用户不动就不变。 */
 export function DanmakuLayer({
   comments,
   timeSync,
   enabled,
+  duration = DURATION,
+  fontSize,
 }: {
   comments: DanmakuComment[];
   timeSync: MutableRefObject<TimeSync>;
   enabled: boolean;
+  /** 滚动弹幕横穿屏幕的秒数,越小越快。省略 = DURATION(8s)。 */
+  duration?: number;
+  /** 弹幕字号(CSS px)。省略 = 按画面高自适应(canvas.height/22,原行为)。 */
+  fontSize?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef({ cursor: 0, active: [] as Active[], lastT: -1 });
@@ -41,7 +51,11 @@ export function DanmakuLayer({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (!enabled || !comments.length) { stateRef.current.active = []; return; }
 
-      const fs = Math.max(18, Math.round(canvas.height / 22));
+      // canvas 是 dpr 放大过的位图,故 CSS px 的 fontSize 要乘 dpr 才是画布里的字号;
+      // 自适应那支本就以画布像素算,不用乘。
+      const fs = fontSize != null
+        ? Math.max(10, Math.round(fontSize * dpr))
+        : Math.max(18, Math.round(canvas.height / 22));
       ctx.font = `${fs}px "Microsoft YaHei", sans-serif`;
       const laneH = Math.round(fs * 1.4);
       const numLanes = Math.max(1, Math.floor(canvas.height / laneH));
@@ -65,7 +79,7 @@ export function DanmakuLayer({
         if (!c.text) continue;
         const width = ctx.measureText(c.text).width;
         const color = `#${(c.color & 0xffffff).toString(16).padStart(6, "0")}`;
-        const speed = (canvas.width + width) / DURATION;
+        const speed = (canvas.width + width) / duration;
         let lane = 0;
         if (c.mode === 4 || c.mode === 5) {
           const used = new Set(st.active.filter((a) => a.mode === c.mode).map((a) => a.lane));
@@ -112,7 +126,8 @@ export function DanmakuLayer({
 
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [comments, enabled, timeSync]);
+    // duration/fontSize 进依赖:改档位要立刻重建 frame 闭包,否则调了没反应。
+  }, [comments, enabled, timeSync, duration, fontSize]);
 
   return <canvas ref={canvasRef} className="danmaku-canvas" />;
 }

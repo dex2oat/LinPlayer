@@ -1,22 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  type Filters,
   type Item,
   type LoginResult,
+  downloadEnqueue,
+  getFilters,
   listFavorites,
-  listItems,
+  listItemsPage,
   posterUrl,
   setFavorite,
+  setPlayed,
   thumbUrl,
   views,
 } from "../lib/api";
 import Poster from "../components/Poster";
 import {
+  IconCheck,
   IconChevronDown,
   IconChevronRight,
+  IconDownload,
   IconHeart,
   IconInfo,
   IconLibrary,
-  IconList,
   IconPlay,
   IconRefresh,
   IconSearch,
@@ -29,31 +34,29 @@ type Props = {
   onPickView: (v: Item) => void;
   onBack: () => void;
   onOpenItem: (it: Item) => void;
+  onPlay: (it: Item) => void;
   onSearch: () => void;
 };
 
-/* 本地排序档位(服务端不透传 dateCreated/年份/评分,只做诚实的本地排序)。 */
+/* 排序档位。by/order 是 Emby 的真值,直接透传给 list_items_page 让**服务端**排 ——
+   服务端排的是整个库,本地排只能排到已加载的那一页,翻页后顺序就乱了。 */
 const SORTS = [
-  { id: "added", label: "加入时间" },
-  { id: "name-asc", label: "名称 A→Z" },
-  { id: "name-desc", label: "名称 Z→A" },
+  { id: "added", label: "加入时间", by: "DateCreated", order: "Descending" },
+  { id: "name-asc", label: "名称 A→Z", by: "SortName", order: "Ascending" },
+  { id: "name-desc", label: "名称 Z→A", by: "SortName", order: "Descending" },
+  { id: "year", label: "年份", by: "ProductionYear", order: "Descending" },
+  { id: "rating", label: "评分", by: "CommunityRating", order: "Descending" },
 ] as const;
 type SortId = (typeof SORTS)[number]["id"];
 
-/* Emby type_ → 中文;筛选只按数据里真实存在的类型分面(不造假)。 */
-const TYPE_LABEL: Record<string, string> = {
-  Movie: "电影",
-  Series: "剧集",
-  Season: "季",
-  Episode: "单集",
-  BoxSet: "合集",
-  Folder: "文件夹",
-  Video: "视频",
-  MusicVideo: "MV",
-};
-const typeName = (t: string) => TYPE_LABEL[t] ?? t;
+/* 评分档:CommunityRating 是 0-10 连续值,没有「分面」可列(getFilters 给的
+   official_ratings 是 PG-13 那种分级,不是评分)。所以这里给固定的下限档,
+   走 list_items_page 的 ratingMin —— 参数是真的,档位是我们定的。 */
+const RATINGS = [9, 8, 7, 6] as const;
 
-/* 内联描边网格/列表图标(icons.tsx 里没有且不许改,禁 emoji)。
+const PAGE = 120;
+
+/* 内联描边网格/列表图标(icons.tsx 里没有,禁 emoji)。
    收藏页要同一套视图切换图标 → 从这里 export 复用,不重画一遍。 */
 export const IconGrid = ({ size = 15 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} aria-hidden>
@@ -69,24 +72,45 @@ export const IconRows = ({ size = 15 }: { size?: number }) => (
   </svg>
 );
 
-export default function LibraryPage({ session, view, onPickView, onBack, onOpenItem, onSearch }: Props) {
+/** 数组型筛选的增删(多选分面共用)。 */
+const toggle = <T,>(arr: T[], v: T): T[] =>
+  arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
+
+export default function LibraryPage({ session, view, onPickView, onBack, onOpenItem, onPlay, onSearch }: Props) {
   const [libs, setLibs] = useState<Item[] | null>(null);
   const [items, setItems] = useState<Item[] | null>(null);
+  /** 库里符合当前筛选的**总数**(不是已加载条数)—— 面包屑那个「· 1,284」要的就是它。 */
+  const [total, setTotal] = useState(0);
+  const [more, setMore] = useState(false);
   const [err, setErr] = useState("");
   const [reload, setReload] = useState(0);
 
+  /** 真·服务端分面(类型/标签/年份/工作室/分级),不是从已加载条目里猜的。 */
+  const [facets, setFacets] = useState<Filters | null>(null);
+  const [facetErr, setFacetErr] = useState("");
+
   const [sort, setSort] = useState<SortId>("added");
-  const [filterTypes, setFilterTypes] = useState<Set<string>>(new Set());
+  const [fGenres, setFGenres] = useState<string[]>([]);
+  const [fTags, setFTags] = useState<string[]>([]);
+  const [fYears, setFYears] = useState<number[]>([]);
+  const [fRating, setFRating] = useState<number | null>(null);
+
   const [openDD, setOpenDD] = useState<null | "sort" | "filter">(null);
   const [layout, setLayout] = useState<"grid" | "list">("grid");
   const [ctx, setCtx] = useState<{ x: number; y: number; item: Item } | null>(null);
   const [toast, setToast] = useState("");
-  // Item 上没有收藏标记字段 → 单独拉一次收藏表,右键菜单才能显示「收藏/取消收藏」的真实状态(同首页做法)。
+  // Item 上没有收藏标记字段 → 单独拉一次收藏表,海报心形/右键菜单才能显示真实状态(同首页做法)。
   const [favIds, setFavIds] = useState<Set<string>>(new Set());
+
+  const nFilters = fGenres.length + fTags.length + fYears.length + (fRating != null ? 1 : 0);
 
   // 切库时清筛选/下拉状态。
   useEffect(() => {
-    setFilterTypes(new Set());
+    setFGenres([]);
+    setFTags([]);
+    setFYears([]);
+    setFRating(null);
+    setSort("added");
     setOpenDD(null);
   }, [view?.id]);
 
@@ -120,6 +144,95 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
     return () => window.clearTimeout(t);
   }, [toast]);
 
+  // ---------------- 取数 ----------------
+  const viewId = view?.id;
+  // 数组不能直接进依赖数组(每次渲染都是新引用 → 死循环),压成字符串。
+  const filterKey = `${fGenres.join("")}|${fTags.join("")}|${fYears.join("")}|${fRating}`;
+
+  /** 库列表(view == null)。 */
+  useEffect(() => {
+    if (viewId) return;
+    let alive = true;
+    setErr("");
+    setLibs(null);
+    views()
+      .then((vs) => alive && setLibs(vs))
+      .catch((e) => alive && setErr(String(e)));
+    return () => {
+      alive = false;
+    };
+  }, [viewId, session.server, reload]);
+
+  /** 分面。跟着库/刷新走,不跟着筛选走 —— Emby 的 /Items/Filters 给的是整库分面,
+      不随已选条件收窄,重复拉只是白费一个往返。 */
+  useEffect(() => {
+    if (!viewId) return;
+    let alive = true;
+    setFacets(null);
+    setFacetErr("");
+    getFilters(viewId)
+      .then((f) => alive && setFacets(f))
+      // 分面拉不到 → 筛选面板里明说,不静默变成「此库没有分面」。
+      .catch((e) => alive && setFacetErr(String(e)));
+    return () => {
+      alive = false;
+    };
+  }, [viewId, session.server, reload]);
+
+  /** 库内条目。排序/筛选/分页全在服务端做。 */
+  useEffect(() => {
+    if (!viewId) return;
+    let alive = true;
+    setErr("");
+    setItems(null);
+    const s = SORTS.find((x) => x.id === sort)!;
+    listItemsPage(viewId, {
+      startIndex: 0,
+      limit: PAGE,
+      sortBy: s.by,
+      sortOrder: s.order,
+      genres: fGenres.length ? fGenres : undefined,
+      tags: fTags.length ? fTags : undefined,
+      years: fYears.length ? fYears : undefined,
+      ratingMin: fRating ?? undefined,
+    })
+      .then((p) => {
+        if (!alive) return;
+        setItems(p.items);
+        setTotal(p.total);
+      })
+      .catch((e) => alive && setErr(String(e)));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewId, session.server, reload, sort, filterKey]);
+
+  async function loadMore() {
+    if (!viewId || !items || more || items.length >= total) return;
+    setMore(true);
+    const s = SORTS.find((x) => x.id === sort)!;
+    try {
+      const p = await listItemsPage(viewId, {
+        startIndex: items.length,
+        limit: PAGE,
+        sortBy: s.by,
+        sortOrder: s.order,
+        genres: fGenres.length ? fGenres : undefined,
+        tags: fTags.length ? fTags : undefined,
+        years: fYears.length ? fYears : undefined,
+        ratingMin: fRating ?? undefined,
+      });
+      setItems((cur) => (cur ? [...cur, ...p.items] : p.items));
+      setTotal(p.total);
+    } catch (e) {
+      setToast(`加载更多失败:${e}`);
+    } finally {
+      setMore(false);
+    }
+  }
+
+  // ---------------- 动作 ----------------
   const toggleFav = (it: Item) => {
     setFavIds((s) => {
       const next = !s.has(it.id);
@@ -140,47 +253,55 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
     });
   };
 
+  /**
+   * 标注 11:标记已看/未看。
+   * 只改本地那一条,不整库重拉:重拉会把 items 打回 null → 已翻的几页全丢、滚回第一屏,
+   * 用户标记第 300 项的代价是回到第 1 项。
+   * ★ 这不是「本地猜」—— setPlayed 成功返回就意味着服务端已经是这个值了,是已知不是假设。
+   */
+  async function markPlayed(it: Item, played: boolean) {
+    setCtx(null);
+    try {
+      await setPlayed(it.id, played);
+      setItems((cur) => cur?.map((x) => (x.id === it.id ? { ...x, played } : x)) ?? cur);
+    } catch (e) {
+      setToast(`标记失败:${e}`);
+    }
+  }
+
+  function download(it: Item) {
+    setCtx(null);
+    // container 传 "mkv":Item 上没有容器字段(容器在 MediaSource 里),详情页的下载也是这么传的。
+    downloadEnqueue(it.id, it.type_, it.name, "mkv", posterUrl(session, it.id))
+      .then(() => setToast("已加入下载"))
+      .catch((e) => setToast(`下载失败:${e}`));
+  }
+
   const openCtx = (e: { preventDefault: () => void; clientX: number; clientY: number }, it: Item) => {
     e.preventDefault();
     setCtx({ x: e.clientX, y: e.clientY, item: it });
   };
 
-  useEffect(() => {
-    let alive = true;
-    setErr("");
-    (async () => {
-      try {
-        if (view) {
-          setItems(null);
-          const list = await listItems(view.id);
-          if (alive) setItems(list);
-        } else {
-          setLibs(null);
-          const vs = await views();
-          if (alive) setLibs(vs);
-        }
-      } catch (e) {
-        if (alive) setErr(String(e));
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [view?.id, session.server, reload]);
+  /** 已选筛选胶囊(标注 10):[显示文本, 移除动作]。 */
+  const chips = useMemo(() => {
+    const out: { key: string; text: string; drop: () => void }[] = [];
+    for (const g of fGenres)
+      out.push({ key: `g:${g}`, text: `类型: ${g}`, drop: () => setFGenres((v) => toggle(v, g)) });
+    for (const t of fTags)
+      out.push({ key: `t:${t}`, text: `标签: ${t}`, drop: () => setFTags((v) => toggle(v, t)) });
+    for (const y of fYears)
+      out.push({ key: `y:${y}`, text: `年份: ${y}`, drop: () => setFYears((v) => toggle(v, y)) });
+    if (fRating != null)
+      out.push({ key: "r", text: `评分: ${fRating}+`, drop: () => setFRating(null) });
+    return out;
+  }, [fGenres, fTags, fYears, fRating]);
 
-  const types = useMemo(() => {
-    const s = new Set<string>();
-    items?.forEach((it) => s.add(it.type_));
-    return [...s];
-  }, [items]);
-
-  const shown = useMemo(() => {
-    if (!items) return [];
-    let r = filterTypes.size ? items.filter((it) => filterTypes.has(it.type_)) : items;
-    if (sort === "name-asc") r = [...r].sort((a, b) => a.name.localeCompare(b.name, "zh"));
-    else if (sort === "name-desc") r = [...r].sort((a, b) => b.name.localeCompare(a.name, "zh"));
-    return r; // "added" = 服务端返回顺序(诚实,不伪造时间戳)
-  }, [items, filterTypes, sort]);
+  const clearAll = () => {
+    setFGenres([]);
+    setFTags([]);
+    setFYears([]);
+    setFRating(null);
+  };
 
   // ---------------- 库列表(view == null) ----------------
   if (!view) {
@@ -237,6 +358,28 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
   // ---------------- 库内(view != null) ----------------
   const sortLabel = SORTS.find((s) => s.id === sort)!.label;
 
+  /** 分面小节(多选)。空分面不画小节 —— 画个空标题比不画更让人以为坏了。 */
+  const facetSec = <T extends string | number>(
+    label: string,
+    all: T[],
+    chosen: T[],
+    set: (fn: (v: T[]) => T[]) => void,
+  ) =>
+    all.length === 0 ? null : (
+      <div key={label}>
+        <div className="lib-dd-sec">{label}</div>
+        {all.map((v) => {
+          const on = chosen.includes(v);
+          return (
+            <div key={String(v)} className={`li${on ? " on" : ""}`} onClick={() => set((cur) => toggle(cur, v))}>
+              <span className="chk" />
+              {String(v)}
+            </div>
+          );
+        })}
+      </div>
+    );
+
   return (
     <>
       <div className="cbar">
@@ -246,7 +389,8 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
           </button>
           <span className="sep">›</span>
           <b>{view.name}</b>
-          {items != null && <span className="count">· {items.length}</span>}
+          {/* 总数用服务端的 total,不是 items.length —— items 只是已加载的那几页。 */}
+          {items != null && <span className="count">· {total.toLocaleString()}</span>}
         </span>
         <span className="push">
           <button className="searchbox" onClick={onSearch}>
@@ -280,39 +424,40 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
             )}
           </span>
 
-          {/* 筛选(锚定下拉,只列数据里真实存在的类型分面) */}
+          {/* 筛选(锚定下拉,类型/标签/年份/评分 —— 标注 9) */}
           <span className="lib-ddwrap">
             <button
-              className={`pill${filterTypes.size ? " on" : ""}`}
+              className={`pill${nFilters ? " on" : ""}`}
               onClick={() => setOpenDD((d) => (d === "filter" ? null : "filter"))}
             >
-              筛选{filterTypes.size ? ` · ${filterTypes.size}` : ""} <IconChevronDown size={13} />
+              筛选{nFilters ? ` · ${nFilters}` : ""} <IconChevronDown size={13} />
             </button>
             {openDD === "filter" && (
               <div className="dd lib-dd">
-                {types.length <= 1 ? (
-                  <div className="lib-dd-note">此库无可筛选的类型分面。年份/标签/评分需服务端分面接口,暂未接。</div>
+                {facetErr ? (
+                  <div className="lib-dd-note">分面加载失败:{facetErr}</div>
+                ) : facets == null ? (
+                  <div className="lib-dd-note">加载分面…</div>
                 ) : (
-                  types.map((t) => {
-                    const on = filterTypes.has(t);
-                    return (
+                  <>
+                    {/* 分面为空的小节自己不画(facetSec 返回 null)。评分不依赖分面,恒在 ——
+                        所以没有「整个筛选面板都空」这种状态,不需要那句「此库无分面」。 */}
+                    {facetSec("类型", facets.genres, fGenres, setFGenres)}
+                    {facetSec("标签", facets.tags, fTags, setFTags)}
+                    {/* 年份倒序:新片在最上面,不然 1920 打头要滚一百多行才看到今年。 */}
+                    {facetSec("年份", [...facets.years].sort((a, b) => b - a), fYears, setFYears)}
+                    <div className="lib-dd-sec">评分</div>
+                    {RATINGS.map((r) => (
                       <div
-                        key={t}
-                        className={`li${on ? " on" : ""}`}
-                        onClick={() =>
-                          setFilterTypes((prev) => {
-                            const next = new Set(prev);
-                            if (on) next.delete(t);
-                            else next.add(t);
-                            return next;
-                          })
-                        }
+                        key={r}
+                        className={`li${fRating === r ? " on" : ""}`}
+                        onClick={() => setFRating((cur) => (cur === r ? null : r))}
                       >
                         <span className="rad" />
-                        {typeName(t)}
+                        {r} 分以上
                       </div>
-                    );
-                  })
+                    ))}
+                  </>
                 )}
               </div>
             )}
@@ -335,27 +480,18 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
       {openDD && <div className="lib-ddscrim" onClick={() => setOpenDD(null)} />}
 
       <div className="scroll">
-        {/* 已选筛选胶囊行 */}
-        {filterTypes.size > 0 && (
+        {/* 已选筛选胶囊行(标注 10) */}
+        {chips.length > 0 && (
           <div className="chipbar" style={{ margin: "2px 18px 6px" }}>
-            {[...filterTypes].map((t) => (
-              <span className="genre" key={t}>
-                类型: {typeName(t)}
-                <span
-                  className="x"
-                  onClick={() =>
-                    setFilterTypes((prev) => {
-                      const next = new Set(prev);
-                      next.delete(t);
-                      return next;
-                    })
-                  }
-                >
+            {chips.map((c) => (
+              <span className="genre" key={c.key}>
+                {c.text}
+                <span className="x" onClick={c.drop}>
                   ✕
                 </span>
               </span>
             ))}
-            <span className="genre" style={{ cursor: "pointer" }} onClick={() => setFilterTypes(new Set())}>
+            <span className="genre" style={{ cursor: "pointer" }} onClick={clearAll}>
               清除
             </span>
           </div>
@@ -369,17 +505,19 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
               <div className="pcard poster-ar skeleton" key={i} />
             ))}
           </div>
-        ) : shown.length === 0 ? (
-          <div className="empty">{items.length === 0 ? "这个库还没有内容" : "没有符合筛选的内容"}</div>
+        ) : items.length === 0 ? (
+          <div className="empty">{nFilters ? "没有符合筛选的内容" : "这个库还没有内容"}</div>
         ) : layout === "grid" ? (
           <div className="dense-grid">
-            {shown.map((it, i) => (
+            {items.map((it, i) => (
               <Poster
                 key={it.id}
                 item={it}
                 session={session}
                 onOpen={onOpenItem}
-                onPlay={onOpenItem}
+                onPlay={onPlay}
+                fav={favIds.has(it.id)}
+                onToggleFav={toggleFav}
                 index={i}
                 onContextMenu={openCtx}
               />
@@ -387,7 +525,7 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
           </div>
         ) : (
           <div className="lib-list">
-            {shown.map((it) => (
+            {items.map((it) => (
               <button
                 className="lib-row enter"
                 key={it.id}
@@ -407,18 +545,36 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
             ))}
           </div>
         )}
+
+        {/* 分页:服务端一页 120,不做无限滚动 —— 一次拉完整库正是这页原来的毛病。 */}
+        {items != null && items.length < total && (
+          <div className="lib-more">
+            <button className="btn" disabled={more} onClick={() => void loadMore()}>
+              {more ? "加载中…" : `加载更多 · 还有 ${(total - items.length).toLocaleString()} 项`}
+            </button>
+          </div>
+        )}
         <div style={{ height: 40 }} />
       </div>
 
-      {/* 标注 11:海报右键菜单。
-          没有「播放」项 —— Shell 没给媒体库传 onPlay(只有 onOpenItem),
-          硬塞一个点了只会跳详情的「播放」就又是个假按钮。 */}
+      {/* 标注 11:海报右键菜单(播放/标记/收藏/下载/查看详情)。 */}
       {ctx && (
         <div
           className="ctxmenu"
           style={{ left: ctx.x, top: ctx.y }}
           onClick={(e) => e.stopPropagation()}
         >
+          {!ctx.item.is_folder && (
+            <div
+              className="mi"
+              onClick={() => {
+                onPlay(ctx.item);
+                setCtx(null);
+              }}
+            >
+              <IconPlay size={15} /> 播放
+            </div>
+          )}
           <div
             className="mi"
             onClick={() => {
@@ -428,15 +584,8 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
           >
             <IconInfo size={15} /> 查看详情
           </div>
-          <div
-            className="mi"
-            onClick={() => {
-              // 后端没有 markPlayed 命令 → 诚实告知,不给假反馈。
-              setToast("「标记已看」后端待接");
-              setCtx(null);
-            }}
-          >
-            <IconList size={15} /> 标记已看
+          <div className="mi" onClick={() => void markPlayed(ctx.item, !ctx.item.played)}>
+            <IconCheck size={15} /> {ctx.item.played ? "标记未看" : "标记已看"}
           </div>
           <div
             className="mi"
@@ -447,6 +596,11 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
           >
             <IconHeart size={15} /> {favIds.has(ctx.item.id) ? "取消收藏" : "收藏"}
           </div>
+          {!ctx.item.is_folder && (
+            <div className="mi" onClick={() => download(ctx.item)}>
+              <IconDownload size={15} /> 下载
+            </div>
+          )}
         </div>
       )}
 

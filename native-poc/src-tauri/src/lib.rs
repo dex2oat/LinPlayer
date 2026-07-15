@@ -957,6 +957,7 @@ async fn play(
     state: State<'_, AppState>,
     item_id: String,
     resume_secs: f64,
+    media_source_id: Option<String>,
 ) -> Result<f64, String> {
     let s = session_of(&state)?;
 
@@ -988,7 +989,7 @@ async fn play(
     // 第一集的去重键还在,同一台服务器会被判成"已回传过"而跳过 —— 静默漏传。
     state.wh_done.lock().unwrap().clear();
 
-    let target = emby::resolve_stream(&state.http, &s, &item_id).await?;
+    let target = emby::resolve_stream(&state.http, &s, &item_id, media_source_id.as_deref()).await?;
     poclog(&format!(
         "PLAY item={item_id} resume={resume_secs} psid={} url={} method={}",
         target.play_session_id, target.url, target.play_method
@@ -1005,10 +1006,16 @@ async fn play(
             let http = state.http.clone();
             let sess = s.clone();
             let iid = item_id.clone();
+            // ★ 必须把 media_source_id 一起带上重签:不带的话 URL 过期重签会
+            //   悄悄退回默认版本 —— 用户选的 4K 播到一半变 1080p,且无任何提示。
+            let msid = target.media_source_id.clone();
             Arc::new(move || {
-                let (http, sess, iid) = (http.clone(), sess.clone(), iid.clone());
+                let (http, sess, iid, msid) = (http.clone(), sess.clone(), iid.clone(), msid.clone());
                 Box::pin(async move {
-                    emby::resolve_stream(&http, &sess, &iid).await.ok().map(|t| t.url)
+                    emby::resolve_stream(&http, &sess, &iid, Some(&msid))
+                        .await
+                        .ok()
+                        .map(|t| t.url)
                 })
             })
         };
@@ -2966,9 +2973,12 @@ fn download_clear_completed(state: State<'_, AppState>) -> usize {
         .filter(|i| i.status == linplayer_core::download::DownloadStatus::Completed)
         .map(|i| i.id)
         .collect();
-    let n = done.len();
+    let mut n = 0;
     for id in done {
-        state.download.remove(&id);
+        // forget 而非 remove:remove 会 delete_files 把已下好的片子删掉,与本命令的契约相反。
+        if state.download.forget(&id) {
+            n += 1;
+        }
     }
     n
 }

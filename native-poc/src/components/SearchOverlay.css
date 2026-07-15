@@ -62,3 +62,9 @@
   padding: 8px 2px;
 }
 .ovl-body .rail { padding: 4px 0 8px; }
+
+/* 搜索历史 chip(标注 34):文字点了重搜,✕ 只删这一条 —— 两个热区得分开,
+   否则想删一条却触发了重搜。 */
+.ovl-chip { padding-right: 6px; }
+.ovl-chip-t { cursor: pointer; }
+.ovl-chip:hover { border-color: var(--ink-3); color: var(--ink); }

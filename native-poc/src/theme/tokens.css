@@ -40,8 +40,9 @@
   --r-lg: 16px;
   --r-xl: 22px;
 
-  --sidebar-w: 216px;
-  --sidebar-w-collapsed: 72px;
+  /* 草稿标的就是这两个数(「展开态 186px」/「折叠态 64px」),别再往回调宽。 */
+  --sidebar-w: 186px;
+  --sidebar-w-collapsed: 64px;
   --titlebar-h: 40px;
   /* 正文可读宽上限(草稿 .wrap)。超宽屏(2560+)不封顶的话表单行会拉到 2000px、
      设置项的开关甩到屏幕最右、中间全空 —— 封顶居中才有对称版式。

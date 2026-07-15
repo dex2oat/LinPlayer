@@ -1161,10 +1161,15 @@ fn abs_url(s: &Session, path: &str) -> String {
 
 /// 正确解析播放地址:POST PlaybackInfo -> 用服务器给的 DirectStreamUrl/TranscodingUrl。
 /// 返回 PlaybackTarget(含 PlaySessionId,供上报三件套贯穿使用)。
+///
+/// `media_source_id`:选哪个版本(草稿页 03/04 的「版本」选择器)。
+/// None = 服务器返回的第一个。**指定了却找不到就报错,不静默回落第一个** ——
+/// 那会让用户以为在看 4K,实际放的是 1080p,且毫无提示。
 pub async fn resolve_stream(
     http: &reqwest::Client,
     s: &Session,
     item_id: &str,
+    media_source_id: Option<&str>,
 ) -> Result<PlaybackTarget, String> {
     let url = format!(
         "{}/Items/{}/PlaybackInfo?UserId={}",
@@ -1202,11 +1207,18 @@ pub async fn resolve_stream(
         .play_session_id
         .filter(|x| !x.is_empty())
         .unwrap_or_else(|| format!("{}-{}", s.device_id, item_id));
-    let ms = info
-        .media_sources
-        .into_iter()
-        .next()
-        .ok_or("该条目无可播放源")?;
+    let ms = match media_source_id {
+        Some(want) => info
+            .media_sources
+            .into_iter()
+            .find(|m| m.id == want)
+            .ok_or_else(|| format!("该条目没有版本 {want}(服务器可能已改动媒体源)"))?,
+        None => info
+            .media_sources
+            .into_iter()
+            .next()
+            .ok_or("该条目无可播放源")?,
+    };
     let media_source_id = ms.id.clone();
 
     let (url, play_method) = if let Some(d) = ms.direct_stream_url.filter(|x| !x.is_empty()) {

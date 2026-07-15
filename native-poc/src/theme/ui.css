@@ -56,8 +56,25 @@
   transition: width var(--dur-med) var(--ease);
 }
 .sidebar.collapsed { width: var(--sidebar-w-collapsed); align-items: center; }
+/* 侧栏是 .srv-dd / .ctxmenu 的定位祖先候选,别让它裁掉浮层。 */
+.sidebar { position: relative; }
+
+/* 顶栏汉堡(草稿:折叠开关在顶,不在底) */
+.sb-top { display: flex; align-items: center; padding: 0 2px 6px; }
+.sidebar.collapsed .sb-top { justify-content: center; padding: 0 0 6px; }
 
 /* 服务器切换器 */
+.srv-wrap { position: relative; }
+/* 下拉锚在切换器正下方;侧栏窄,浮层要比侧栏宽才放得下名字+账号。 */
+.srv-dd { top: calc(100% + 4px); left: 0; min-width: 250px; }
+.sidebar.collapsed .srv-dd { left: calc(100% + 6px); top: 0; }
+.srv-dd-nm {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.srv-dd-note { padding: 8px 9px; font-size: 11.5px; color: var(--ink-3); }
+.srv-dd-sep { height: 1px; background: var(--line); margin: 5px 4px; }
+
 .srv-switch {
   display: flex;
   align-items: center;
@@ -123,6 +140,8 @@
 /* cbar 自己不画背景/边框(只有内边距),所以直接封顶居中即可 —— 不用再套一层 .wrap。
    和正文容器用同一个 --content-max + 同样的 18px 内水槽 ⇒ 面包屑(最左)和
    搜索/按钮(最右)与正文左右边缘严格对齐,2560px 下不会中间空一条。 */
+/* --cbar-fade:标注 4「顶部这条随内容滚动淡出」。页面自己 onScroll 写这个变量;
+   不写的页面拿到回落值 1 = 常驻不淡,所以不影响别的页。 */
 .cbar {
   position: relative;
   z-index: 2;
@@ -134,6 +153,7 @@
   width: 100%;
   max-width: var(--content-max);
   margin-inline: auto;
+  opacity: var(--cbar-fade, 1);
 }
 .crumb { font-size: 13px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
 .crumb b { color: var(--ink); font-weight: 600; }

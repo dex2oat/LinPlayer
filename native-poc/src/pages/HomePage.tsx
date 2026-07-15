@@ -1,32 +1,53 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import {
   type Item,
   type LoginResult,
   backdropUrl,
   fmtTime,
+  listCollections,
   listFavorites,
   listLatest,
   listRandom,
   listResume,
   posterUrl,
   setFavorite,
+  setPlayed,
   thumbUrl,
   views,
 } from "../lib/api";
 import Poster from "../components/Poster";
 import {
+  IconCheck,
   IconChevronLeft,
   IconChevronRight,
   IconClose,
   IconHeart,
-  IconInfo,
   IconLibrary,
   IconPlay,
   IconPlus,
+  IconInfo,
   IconRefresh,
   IconSearch,
 } from "../app/icons";
 import "./HomePage.css";
+
+/**
+ * Hero 的 logo 标题(标注 6:「大幅剧照 + logo 标题」)。
+ * Emby 的 /Items/{id}/Images/Logo 和 posterUrl 同形状,只是 Logo 而非 Primary。
+ * 就地放不进 api.ts:那份文件不归这里改,而且目前只有首页 Hero 用得上。
+ * ★ 核层 Item 没有 has_logo 之类的标志位 → 只能靠 <img onError> 兜底回文字标题,
+ *   没有别的诚实判据(先 HEAD 探一次纯属多一个往返)。
+ */
+function logoUrl(session: LoginResult, itemId: string, maxHeight = 150): string {
+  return `${session.server}/Items/${itemId}/Images/Logo?maxHeight=${maxHeight}&quality=90&api_key=${session.token}`;
+}
 
 type Props = {
   session: LoginResult;
@@ -125,32 +146,40 @@ export default function HomePage({
   const [libs, setLibs] = useState<Item[]>([]);
   const [byLib, setByLib] = useState<Record<string, Item[]>>({});
   const [resume, setResume] = useState<Item[]>([]);
+  const [collections, setCollections] = useState<Item[]>([]);
   const [featured, setFeatured] = useState<Item[]>([]);
   const [favIds, setFavIds] = useState<Set<string>>(new Set());
   const [heroIdx, setHeroIdx] = useState(0);
+  /** 取 Logo 失败的条目 id。按 id 记而不是一个 bool —— 否则翻到下一张 Hero 还顶着上一张的失败态。 */
+  const [logoFail, setLogoFail] = useState<Set<string>>(new Set());
   const [ctx, setCtx] = useState<{ x: number; y: number; item: Item } | null>(null);
   const [toast, setToast] = useState("");
   const [err, setErr] = useState("");
   const hover = useRef(false);
+  const cbarRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let alive = true;
     setByLib({});
     setFeatured([]);
     setHeroIdx(0);
+    setLogoFail(new Set());
     (async () => {
       try {
         // Hero 走 list_random(服务端 SortBy=Random 且只回有剧照的),不再拿继续观看凑数。
-        const [vs, rz, rnd, favs] = await Promise.all([
+        const [vs, rz, rnd, favs, cols] = await Promise.all([
           views(),
           listResume(12).catch(() => [] as Item[]),
           listRandom(5).catch(() => [] as Item[]),
           listFavorites().catch(() => [] as Item[]),
+          // 合集轨道(草稿 L643-649)。没有合集的服务器就是空数组,不是错误 → 静默空。
+          listCollections().catch(() => [] as Item[]),
         ]);
         if (!alive) return;
         setLibs(vs);
         setResume(rz);
         setFeatured(rnd);
+        setCollections(cols);
         // 心形要显真状态,不能一律画成未收藏。
         setFavIds(new Set(favs.map((f) => f.id)));
         for (const v of vs) {
@@ -216,6 +245,46 @@ export default function HomePage({
     });
   }, []);
 
+  const openCtx = useCallback((e: MouseEvent, it: Item) => {
+    e.preventDefault();
+    setCtx({ x: e.clientX, y: e.clientY, item: it });
+  }, []);
+
+  /** 标注 7:标记已看/未看。反显靠 Item.played(服务端给的),不在本地猜 → 改完重拉。 */
+  async function markPlayed(it: Item, played: boolean) {
+    setCtx(null);
+    try {
+      await setPlayed(it.id, played);
+      onRefresh();
+    } catch (e) {
+      setToast(`标记失败:${e}`);
+    }
+  }
+
+  /**
+   * 标注 7:移出继续观看。
+   * ★ Emby 没有「从 Resume 列表删掉」这种端点 —— 继续观看就是 Resume 查询的结果,
+   *   条目一旦标记已看就自动掉出去。所以「移出」= setPlayed(id, true),这不是变通,就是正解。
+   * 本地直接摘掉卡片,不整页刷新:整页刷新会把 Hero 也换掉,用户只是想收拾一张卡。
+   */
+  async function removeFromResume(it: Item) {
+    setCtx(null);
+    try {
+      await setPlayed(it.id, true);
+      setResume((r) => r.filter((x) => x.id !== it.id));
+    } catch (e) {
+      setToast(`移出失败:${e}`);
+    }
+  }
+
+  /** 顶栏随内容滚动淡出(标注 4)。直接写 DOM 上的 CSS 变量,不走 state ——
+      滚动每帧 setState 会把整页(含所有海报)重渲一遍。 */
+  const onScroll = (e: { currentTarget: HTMLDivElement }) => {
+    const el = cbarRef.current;
+    if (!el) return;
+    el.style.setProperty("--cbar-fade", String(Math.max(0, 1 - e.currentTarget.scrollTop / 140)));
+  };
+
   const hero = featured[heroIdx];
   const step = (d: 1 | -1) =>
     setHeroIdx((i) => (i + d + featured.length) % featured.length);
@@ -228,7 +297,9 @@ export default function HomePage({
 
   return (
     <>
-      <div className="cbar">
+      {/* 不写 inline style 设默认值:那样 React 每次重渲都可能把 --cbar-fade 抹回 1,
+          滚到一半弹个 toast 顶栏就闪回来。默认值交给 CSS 的 var(--cbar-fade, 1) 回落。 */}
+      <div className="cbar" ref={cbarRef}>
         <span className="crumb">
           <b>首页</b>
         </span>
@@ -242,7 +313,7 @@ export default function HomePage({
         </span>
       </div>
 
-      <div className="scroll">
+      <div className="scroll" onScroll={onScroll}>
         {err && <div className="empty">加载失败：{err}</div>}
 
         {hero && (
@@ -292,7 +363,18 @@ export default function HomePage({
 
             <div className="hero-body">
               <div className="hero-eyebrow">随机推荐</div>
-              <div className="hero-title">{hero.name}</div>
+              {/* 标注 6:有 logo 用 logo,取不到就回落文字标题(见 logoUrl 上的注释)。 */}
+              {logoFail.has(hero.id) ? (
+                <div className="hero-title">{hero.name}</div>
+              ) : (
+                <img
+                  key={hero.id}
+                  className="hm-herologo"
+                  src={logoUrl(session, hero.id)}
+                  alt={hero.name}
+                  onError={() => setLogoFail((s) => new Set(s).add(hero.id))}
+                />
+              )}
               {heroMeta && <div className="hero-meta">{heroMeta}</div>}
               <div className="hero-cta">
                 <button
@@ -351,14 +433,7 @@ export default function HomePage({
               {/* 继续观看基本都是剧集,封面本来就是 16:9 剧照 → thumb 横版,不用竖海报。 */}
               <Rail>
                 {resume.map((it, i) => (
-                  <div
-                    className="r-wide"
-                    key={it.id}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      setCtx({ x: e.clientX, y: e.clientY, item: it });
-                    }}
-                  >
+                  <div className="r-wide" key={it.id}>
                     <Poster
                       item={it}
                       session={session}
@@ -368,6 +443,33 @@ export default function HomePage({
                       fav={favIds.has(it.id)}
                       onToggleFav={toggleFav}
                       index={i}
+                      onContextMenu={openCtx}
+                    />
+                  </div>
+                ))}
+              </Rail>
+            </section>
+          )}
+
+          {/* 合集轨道(草稿 L643-649:16:9 卡)。BoxSet 是文件夹 → 卡片单击就是进合集详情。 */}
+          {collections.length > 0 && (
+            <section>
+              <div className="rowlab">
+                <span className="h">合集</span>
+              </div>
+              <Rail>
+                {collections.map((c, i) => (
+                  <div className="r-wide" key={c.id}>
+                    <Poster
+                      item={c}
+                      session={session}
+                      variant="thumb"
+                      onOpen={onOpenItem}
+                      onPlay={onPlay}
+                      fav={favIds.has(c.id)}
+                      onToggleFav={toggleFav}
+                      index={i}
+                      onContextMenu={openCtx}
                     />
                   </div>
                 ))}
@@ -442,6 +544,7 @@ export default function HomePage({
                           fav={favIds.has(it.id)}
                           onToggleFav={toggleFav}
                           index={i}
+                          onContextMenu={openCtx}
                         />
                       </div>
                     ))}
@@ -454,30 +557,42 @@ export default function HomePage({
         </div>
       </div>
 
-      {/* 标注 7:海报卡右键菜单。 */}
+      {/* 标注 7:海报卡右键菜单(移出继续观看 / 标记已看 / 收藏)。 */}
       {ctx && (
         <div
           className="ctxmenu"
           style={{ left: ctx.x, top: ctx.y }}
           onClick={(e) => e.stopPropagation()}
         >
+          {/* 每项都得自己 setCtx(null):菜单容器 stopPropagation 了,关菜单的 window click 到不了这。 */}
+          {!ctx.item.is_folder && (
+            <div
+              className="mi"
+              onClick={() => {
+                onPlay(ctx.item);
+                setCtx(null);
+              }}
+            >
+              <IconPlay size={15} /> 播放
+            </div>
+          )}
           <div
             className="mi"
             onClick={() => {
-              setToast("「移出继续观看」后端待接");
+              onOpenItem(ctx.item);
               setCtx(null);
             }}
           >
-            <IconClose size={15} /> 移出继续观看
+            <IconInfo size={15} /> 查看详情
           </div>
-          <div
-            className="mi"
-            onClick={() => {
-              setToast("「标记已看」后端待接");
-              setCtx(null);
-            }}
-          >
-            <IconPlay size={15} /> 标记已看
+          {/* 只有真在继续观看里的条目才给这项 —— 对一张「最新」轨道上的卡说「移出继续观看」是假的。 */}
+          {resume.some((x) => x.id === ctx.item.id) && (
+            <div className="mi" onClick={() => void removeFromResume(ctx.item)}>
+              <IconClose size={15} /> 移出继续观看
+            </div>
+          )}
+          <div className="mi" onClick={() => void markPlayed(ctx.item, !ctx.item.played)}>
+            <IconCheck size={15} /> {ctx.item.played ? "标记未看" : "标记已看"}
           </div>
           <div
             className="mi"

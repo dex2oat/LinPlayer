@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  type Item,
   type RankingCategory,
   type RankingEntry,
+  type ServerGroup,
+  aggregateSearch,
+  itemLabel,
   rankingCategories,
   rankingFetch,
+  setActiveServer,
 } from "../lib/api";
-import { IconRanking, IconRefresh } from "../app/icons";
+import { IconClose, IconRanking, IconRefresh } from "../app/icons";
 import "./RankingsPage.css";
 
 // 榜单分组 → 左栏小标题(anime=追番榜,movie/tv=影视热榜)。
@@ -19,6 +24,8 @@ export default function RankingsPage() {
   const [entries, setEntries] = useState<RankingEntry[] | null>(null);
   const [err, setErr] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  // 点开的榜单项标题 → 跨服找可播源弹窗(草稿 33)。
+  const [pick, setPick] = useState<string | null>(null);
 
   // 分类清单只取一次(空数组 = 未注入凭据 → 整页诚实空态)。
   useEffect(() => {
@@ -165,7 +172,7 @@ export default function RankingsPage() {
             ) : (
               <div className="rankgrid">
                 {entries.map((e) => (
-                  <RankCell key={e.id} entry={e} />
+                  <RankCell key={e.id} entry={e} onPick={() => setPick(e.title)} />
                 ))}
               </div>
             )}
@@ -173,15 +180,137 @@ export default function RankingsPage() {
         </div>
         <div style={{ height: 40 }} />
       </div>
+
+      {pick && <SourcePicker title={pick} onClose={() => setPick(null)} />}
     </>
   );
 }
 
-// 榜单项 = 外部数据、非可播放条目 → 不绑跳转(cursor default),只保留悬停轻浮起。
-function RankCell({ entry }: { entry: RankingEntry }) {
+/* ============================================================
+   跨服找可播源弹窗 —— 榜单(草稿 33)与日历(草稿 44)共用一份。
+   榜单/日历条目来自**外部数据源**(弹弹Play / TMDB / Trakt / Bangumi),
+   它本身不是任何一台服务器上的条目 —— 正因如此才需要这个弹窗:
+   拿标题去 aggregateSearch 反查「我的哪台服务器上有这片」。
+   这不是「非可播放所以不绑跳转」,弹窗本身就是那次跨服查找。
+   ============================================================ */
+export function SourcePicker({
+  title,
+  onOpenItem,
+  onClose,
+}: {
+  title: string;
+  /** Shell 给了才能真跳详情/起播;没给就只切活跃服务器并如实说明(见文件末注)。 */
+  onOpenItem?: (item: Item, serverId: string) => void;
+  onClose: () => void;
+}) {
+  const [groups, setGroups] = useState<ServerGroup[] | null>(null);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const g = await aggregateSearch(title);
+        // 空组不占位:没有结果的服务器列出来只是噪音。
+        if (alive) setGroups(g.filter((x) => x.items.length > 0));
+      } catch (e) {
+        if (alive) {
+          setGroups([]);
+          setErr(String(e));
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [title]);
+
+  // Esc 关(与全站右键菜单同约定)。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  async function pick(item: Item, g: ServerGroup) {
+    try {
+      // 先切活跃服务器:后续 item_detail / play 都打活跃服务器,不切就会去错服务器找 id。
+      await setActiveServer(g.server_id);
+    } catch (e) {
+      setErr(String(e));
+      return;
+    }
+    if (onOpenItem) {
+      onOpenItem(item, g.server_id);
+      onClose();
+      return;
+    }
+    // 没有跳转回调时不装作跳过去了 —— 活跃服务器**确实**切了,只把下一步如实说清。
+    setNote(`已切换到「${g.server_name}」。可在 媒体库 / 搜索 中打开「${item.name}」。`);
+  }
+
+  const total = (groups ?? []).reduce((n, g) => n + g.items.length, 0);
+
+  return (
+    <div className="scrim" onClick={onClose}>
+      <div className="dlg wide" onClick={(e) => e.stopPropagation()}>
+        <div className="dhd">
+          跨服查找可播源 · {title}
+          <button className="x" onClick={onClose}>
+            <IconClose size={15} />
+          </button>
+        </div>
+        <div className="dbd">
+          {groups == null ? (
+            <div className="empty">
+              <span className="spinner" />
+            </div>
+          ) : err ? (
+            <div className="empty">查找失败：{err}</div>
+          ) : total === 0 ? (
+            <div className="empty">你的服务器上没有找到「{title}」。</div>
+          ) : (
+            <>
+              {note && <div className="caption-note rk-pick-note">{note}</div>}
+              {groups.map((g) => (
+                <div key={g.server_id}>
+                  <div className="rk-pick-srv">
+                    {g.server_name}
+                    <span className="c">· {g.items.length}</span>
+                  </div>
+                  {g.items.map((it) => (
+                    <div
+                      className="rk-pick-row"
+                      key={`${g.server_id}:${it.id}`}
+                      onClick={() => pick(it, g)}
+                    >
+                      <span className="rk-pick-t">{itemLabel(it)}</span>
+                      <span className="rk-pick-m">
+                        {[it.type_, it.year].filter(Boolean).join(" · ")}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+        <div className="dft">
+          <button className="btn" onClick={onClose}>
+            关闭
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 名次角标(前三金银铜)+ 评分 + 悬停浮起;点海报 → 跨服找可播源弹窗(草稿 33)。
+function RankCell({ entry, onPick }: { entry: RankingEntry; onPick: () => void }) {
   const medal = entry.rank <= 3 ? ` g${entry.rank}` : "";
   return (
-    <div className="rankcell poster" title={entry.title}>
+    <div className="rankcell poster tap" title={entry.title} onClick={onPick}>
       {entry.image_url ? (
         <img
           className="rk-img"

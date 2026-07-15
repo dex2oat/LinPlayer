@@ -266,6 +266,24 @@ impl DownloadManager {
         self.process_queue();
     }
 
+    /// 只清记录,保留已下好的文件(下载页「清除已完成」)。
+    /// 与 remove 的唯一区别就是不 delete_files —— 别把这两个合并回去。
+    pub fn forget(&self, id: &str) -> bool {
+        let gone = {
+            let mut st = self.state.lock().unwrap();
+            // 正在下的条目没有「完整文件」可留,交给 remove 走取消+清理,别在这里半路截胡。
+            if st.active_id.as_deref() == Some(id) {
+                false
+            } else {
+                st.items.remove(id).is_some()
+            }
+        };
+        if gone {
+            self.persist_blocking();
+        }
+        gone
+    }
+
     pub fn remove(&self, id: &str) {
         let (active, item) = {
             let mut st = self.state.lock().unwrap();
@@ -680,6 +698,56 @@ mod tests {
             received_bytes: 0,
             progress: 0.0,
         }
+    }
+
+    /* forget 与 remove 的分界是「清除已完成」这条命令的全部意义:
+       remove 会 delete_files 把片子删了,forget 不能。这两个测试是那条分界线的护栏。 */
+
+    async fn mgr_with_completed(dir: &std::path::Path, file: &std::path::Path) -> DownloadManager {
+        tokio::fs::write(file, b"video").await.unwrap();
+        let m = DownloadManager::new(dir.to_path_buf()).await;
+        let mut it = item(5, false);
+        it.id = "done1".into();
+        it.status = DownloadStatus::Completed;
+        it.file_path = file.to_string_lossy().into_owned();
+        m.state.lock().unwrap().items.insert(it.id.clone(), it);
+        m
+    }
+
+    #[tokio::test]
+    async fn forget_drops_record_but_keeps_file() {
+        let dir = std::env::temp_dir().join("lp_forget_keep");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let file = dir.join("keep.mkv");
+        let m = mgr_with_completed(&dir, &file).await;
+
+        assert!(m.forget("done1"), "已完成的条目应能被 forget");
+        assert!(m.list().is_empty(), "记录应已清掉");
+        /* 必须先等一会儿再断言:delete_files 是 spawn 出去的,立刻断言 exists() 会
+           在 bug 存在时也「赢下竞态」而假绿 —— 这个 sleep 才是这条测试有效的原因。 */
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(file.exists(), "forget 绝不能删已下好的文件");
+    }
+
+    #[tokio::test]
+    async fn remove_deletes_file() {
+        let dir = std::env::temp_dir().join("lp_forget_del");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let file = dir.join("gone.mkv");
+        let m = mgr_with_completed(&dir, &file).await;
+
+        m.remove("done1");
+        assert!(m.list().is_empty());
+        // delete_files 是 spawn 出去的,给它落地的时间。
+        for _ in 0..50 {
+            if !file.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!file.exists(), "remove 的既有语义就是连文件一起删,别改坏");
     }
 
     #[test]

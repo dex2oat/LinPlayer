@@ -134,18 +134,130 @@
 .ar-empty-act {
   margin-top: 14px;
 }
-.ar-empty-err {
-  margin-top: 12px;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--ink-3);
-  word-break: break-all;
-}
 .ar-pane .empty {
   padding: 32px 0;
 }
-.ar-dbd {
+
+/* ---------- 删除确认 ---------- */
+.ar-del-note {
+  padding: 0;
+}
+/* .btn 没有 danger 变体,且这条规则不该由某个页面往全局塞 —— 本页自己收着。 */
+.ar-btn-danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--line));
+}
+.ar-btn-danger:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+/* ---------- 搜索并添加订阅 ---------- */
+.ar-add-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.ar-add-row .field {
+  flex: 1;
+}
+.ar-add-err {
+  margin-bottom: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--danger);
+  word-break: break-all;
+}
+.ar-add-note {
+  margin-top: 0;
+  padding: 0;
+}
+.ar-add-hit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  margin-bottom: 6px;
+}
+.ar-add-cv {
+  flex: none;
+  width: 34px;
+  height: 46px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: var(--panel-2);
+}
+.ar-add-nm {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+.ar-add-nm b {
   font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ar-add-nm i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- 设置:镜像服务端 Config 表单 ---------- */
+.ar-cfg-tools {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.ar-cfg-tools .field {
+  flex: 1;
+}
+.ar-cfg {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ar-cfg-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+/* 键名定宽:配置项上百条,右侧输入不对齐会看得人眼晕。 */
+.ar-cfg-k {
+  flex: none;
+  width: 240px;
+  font-family: var(--mono);
+  font-size: 11.5px;
   color: var(--ink-2);
-  line-height: 1.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ar-cfg-row .field {
+  flex: 1;
+  min-width: 0;
+}
+.ar-cfg-row .field[readonly] {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+/* 缺 id 的订阅:管理项禁用(诚实挡住,不打必失败的请求)。 */
+.ctxmenu .mi.ar-mi-off {
+  opacity: 0.45;
+  cursor: default;
+}
+.ctxmenu .mi.ar-mi-off:hover {
+  background: none;
+  color: var(--ink-2);
 }

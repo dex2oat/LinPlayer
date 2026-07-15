@@ -74,6 +74,17 @@
 .p-scrub .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; }
 .p-scrub .knob { position: absolute; top: 50%; width: 13px; height: 13px; border-radius: 50%; background: #fff; transform: translate(-50%, -50%); box-shadow: 0 0 8px rgba(0, 0, 0, 0.5); }
 .p-scrub input { position: absolute; inset: -6px 0; width: 100%; opacity: 0; cursor: pointer; }
+/* 悬停时间气泡(草稿 pin 18 的 .prev)。缩略图那半需服务端 trickplay/BIF,核层没有该能力
+   → 按草稿「没有就不显示、不硬凑」,这里只做时间读数。
+   pointer-events:none 必须有 —— 否则气泡挡在 input 上,鼠标一到气泡下方 seek 就点不动。 */
+.p-scrub .prev {
+  position: absolute; bottom: 16px; transform: translateX(-50%);
+  pointer-events: none; white-space: nowrap;
+  padding: 3px 7px; border-radius: 6px;
+  background: rgba(12, 15, 20, 0.92); border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+.p-scrub .prev .tc { font-family: var(--mono); font-size: 11px; color: #fff; }
 
 .p-ctrls { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .p-grp { display: flex; align-items: center; gap: 6px; }
@@ -127,6 +138,8 @@
 /* 选集行:缩略图 + 两行文字(草稿 E1 序章 / 2160p · 45M · 18.4G) */
 .p-li .thumb { width: 52px; aspect-ratio: 16 / 9; border-radius: 5px; background: rgba(255, 255, 255, 0.1); flex: none; overflow: hidden; }
 .p-li .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 弹幕搜索结果的番剧封面是方图,不是 16:9 剧照(草稿 L1121 画的就是 22px 小方块) */
+.p-li .thumb.sq { width: 22px; aspect-ratio: 1; border-radius: 4px; }
 .p-li .col { display: flex; flex-direction: column; gap: 2px; min-width: 0; text-align: left; }
 .p-li .col .t1 { font-size: 12.5px; color: inherit; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .p-li .col .t2 { font-family: var(--mono); font-size: 10px; color: rgba(255, 255, 255, 0.42); }

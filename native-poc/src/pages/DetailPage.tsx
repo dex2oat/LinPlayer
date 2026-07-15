@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  type AccountInfo,
   type Item,
   type ItemDetail,
+  type LineProbe,
   type LoginResult,
   type MediaVersion,
+  type Prefs,
   type StreamInfo,
   backdropUrl,
   downloadEnqueue,
@@ -11,11 +14,17 @@ import {
   fmtRes,
   fmtSize,
   fmtTime,
+  getPrefs,
   itemDetail,
   itemMedia,
+  listAccounts,
   personUrl,
   posterUrl,
+  probeLines,
+  setActiveLine,
   setFavorite,
+  setPlayed,
+  setPrefs,
   thumbUrl,
 } from "../lib/api";
 import {
@@ -33,9 +42,15 @@ import "./DetailPage.css";
 type Props = {
   session: LoginResult;
   item: Item;
-  onPlay: (it: Item) => void;
+  /** 第二参 = 版本选择器选中的 MediaSource id,已一路透传到核层 play()(Shell → App.playItem)。
+      注意 TS 上少参函数可赋给多参形参 —— 这条链断了编译期也不报错,只会静默放默认版本,
+      所以别把 Shell/App 那两处的第二参「顺手简化掉」。 */
+  onPlay: (it: Item, mediaSourceId?: string | null) => void;
   onOpenChild: (it: Item) => void;
   onBack: () => void;
+  /** 切线路后必须回调:核层只改自己那份会话,前端 session.server 不刷新的话,
+      poster/backdrop 等 URL 会继续打刚被判死的那条线。 */
+  onSessionChange: () => void;
 };
 
 /** 哪个下拉是打开态(同一时刻只开一个)。 */
@@ -56,6 +71,15 @@ function toItem(d: ItemDetail): Item {
     video_height: null,
     bitrate: null,
     size_bytes: null,
+    // ItemDetail 有的照搬,没有的给中性值(这条 Item 只用于起播/收藏,不参与列表排序)。
+    played: false,
+    genres: d.genres,
+    year: d.year,
+    rating: d.rating,
+    provider_ids: {},
+    presentation_unique_key: null,
+    path: null,
+    series_id: d.series_id,
   };
 }
 
@@ -93,12 +117,21 @@ function MiCard({ cap, tag, children }: { cap: string; tag?: boolean; children: 
   );
 }
 
-export default function DetailPage({ session, item, onPlay, onOpenChild, onBack }: Props) {
+export default function DetailPage({ session, item, onPlay, onOpenChild, onBack, onSessionChange }: Props) {
   const [d, setD] = useState<ItemDetail | null>(null);
   const [err, setErr] = useState("");
   const [fav, setFav] = useState(false);
+  // ItemDetail 没有 played 字段,只有 Item 有 → 已看态从 item 起,标记后本地跟。
+  const [played, setPlayedLocal] = useState(item.played);
   const [expand, setExpand] = useState(false);
   const [toast, setToast] = useState("");
+
+  // 线路:属服务器(账号)不属条目 → 从活跃账号取。probes 按需(开下拉才测)。
+  const [acct, setAcct] = useState<AccountInfo | null>(null);
+  const [probes, setProbes] = useState<LineProbe[] | null>(null);
+  const [probing, setProbing] = useState(false);
+  // 选轨偏好:set_prefs 三项一起写,必须先有当前值才能只改一项(见 patchPrefs)。
+  const [prefs, setPrefsLocal] = useState<Prefs | null>(null);
 
   const [versions, setVersions] = useState<MediaVersion[]>([]);
   const [verIdx, setVerIdx] = useState(0);
@@ -124,11 +157,13 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack 
     setD(null);
     setErr("");
     setExpand(false);
+    setPlayedLocal(item.played);
     setVersions([]);
     setVerIdx(0);
     setAudioIdx(null);
     setSubIdx(null);
     setDd(null);
+    setProbes(null);
     setSeason(null);
     setEpCtx(null);
     setMoreMenu(null);
@@ -140,6 +175,16 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack 
         setFav(x.is_favorite);
       })
       .catch((e) => alive && setErr(String(e)));
+
+    // 线路清单的来源。失败不能静默 —— 否则线路选择器凭空消失,没人知道为什么。
+    listAccounts()
+      .then((as) => alive && setAcct(as.find((a) => a.active) ?? null))
+      .catch((e) => alive && setToast(`读取服务器线路失败:${e}`));
+
+    // 音轨/字幕偏好的基线(patchPrefs 要在它之上改单项)。
+    getPrefs()
+      .then((p) => alive && setPrefsLocal(p))
+      .catch(() => {});
 
     if (item.type_ !== "Series") {
       itemMedia(item.id)
@@ -212,6 +257,87 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack 
     }
   }
 
+  /* ---------- 线路(标注 14) ----------
+     ★ 传给 probe_lines / set_active_line 的 server_id 是**账号键**(Account.server,
+     即 AccountInfo.server),**不是** session.server:set_active_line 会把活跃会话的
+     session.server 改写成所选线路的 URL,切过一次后两者就不相等了,再拿 session.server
+     当键去 cfg.find() 必然「找不到该服务器」。核层实测见 lib.rs:619-634 / 866-875。 */
+  const lines = acct?.lines ?? [];
+  const activeLine = acct?.active_line ?? 0;
+  const lineName = (i: number) => lines[i]?.name || `线路 ${i + 1}`;
+
+  /** 开线路下拉时才测速:进详情页就并发探 N 条线是白花的流量。 */
+  function openLineDd() {
+    const next = dd === "line" ? null : "line";
+    setDd(next);
+    if (next !== "line" || !acct || probing) return;
+    setProbing(true);
+    probeLines(acct.server)
+      .then(setProbes)
+      .catch((e) => setToast(`线路测速失败:${e}`))
+      .finally(() => setProbing(false));
+  }
+
+  async function pickLine(i: number) {
+    setDd(null);
+    if (!acct || i === activeLine) return;
+    try {
+      await setActiveLine(acct.server, i);
+      setAcct({ ...acct, active_line: i });
+      /* 核层改的是它自己那份会话;前端这份 session.server 还是旧线路,而剧照/海报 URL
+         都是拿它现拼的 —— 不刷新的话,用户正因旧线不通才切线路,切完图片继续打死线。 */
+      onSessionChange();
+      setToast(`已切到 ${lineName(i)}`);
+    } catch (e) {
+      setToast(`切换线路失败:${e}`);
+    }
+  }
+
+  /* ---------- 音轨/字幕偏好(标注 14) ----------
+     核层 play() 不收轨道参数,起播后由 App 的 afterStart → apply_prefs() 按**语言**选轨
+     (pick_tracks/match_lang:拿 prefs 的 lang 去 contains 匹配 track 的 lang/title)。
+     所以详情页「选音轨/字幕」的正确落点是写偏好,而不是当场 set_track(此刻还没起播)。 */
+
+  /** set_prefs 是三项一起覆写:不带上当前值就会把另两项悄悄清成 null
+      —— 选个音轨顺手把用户的字幕语言偏好抹了,且两头都不报错。故先取基线再改单项。 */
+  async function patchPrefs(patch: Partial<Prefs>) {
+    try {
+      const base = prefs ?? (await getPrefs());
+      const next = { ...base, ...patch };
+      setPrefsLocal(next);
+      await setPrefs(next);
+    } catch (e) {
+      setToast(`偏好保存失败:${e}`);
+    }
+  }
+
+  /** 偏好只认语言。没有语言标记的轨道无法表达成偏好 → 明说,不假装选上了。 */
+  function pickStream(s: StreamInfo, kind: "audio" | "sub") {
+    if (kind === "audio") setAudioIdx(s.index);
+    else setSubIdx(s.index);
+    setDd(null);
+    if (!s.language) {
+      setToast(`该${kind === "audio" ? "音轨" : "字幕"}没有语言标记,选择无法记入偏好,起播仍用默认轨`);
+      return;
+    }
+    patchPrefs(kind === "audio" ? { audio_lang: s.language } : { sub_lang: s.language, sub_enabled: true });
+  }
+
+  /* ---------- 标记已看/未看(标注 13 / 16) ---------- */
+  async function markPlayed(id: string, next: boolean) {
+    setMoreMenu(null);
+    setEpCtx(null);
+    try {
+      await setPlayed(id, next);
+      if (id === item.id) setPlayedLocal(next);
+      // 分集的已看态藏在 d.children[].played 里 → 重取详情才反显得出来。
+      setD(await itemDetail(item.id));
+      setToast(next ? "已标记已看" : "已标记未看");
+    } catch (e) {
+      setToast(`标记失败:${e}`);
+    }
+  }
+
   /** 播放/续播目标:剧集挑第一条有进度的,否则第一集;电影/单集就是自己。 */
   const target: Item | null = (() => {
     if (isSeries) return episodes.find((c) => c.resume_secs > 0) ?? episodes[0] ?? null;
@@ -234,10 +360,33 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack 
 
   const title = isEpisode && d?.series_name ? d.series_name : d?.name ?? item.name;
 
+  const enqueueOne = (it: { id: string; type_: string; name: string }) =>
+    downloadEnqueue(it.id, it.type_, it.name, "mkv", posterUrl(session, it.id));
+
   function enqueue(it: { id: string; type_: string; name: string }) {
-    downloadEnqueue(it.id, it.type_, it.name, "mkv", posterUrl(session, it.id))
+    enqueueOne(it)
       .then(() => setToast("已加入下载"))
       .catch((e) => setToast(`下载失败:${e}`));
+  }
+
+  /** 下载整季(标注 13):当前季的每一集入队。
+      ponytail: 串行入队 —— 入队本身只是写队列记录,真正的并发由下载引擎(download_set_threads)管;
+      这里并发发 24 个 invoke 只会给核层添堵。单集失败不中断其余,最后统一报数。 */
+  async function enqueueSeason() {
+    if (shownEps.length === 0) return;
+    setToast(`正在加入 ${shownEps.length} 集…`);
+    let ok = 0;
+    let firstErr = "";
+    for (const ep of shownEps) {
+      try {
+        await enqueueOne(ep);
+        ok++;
+      } catch (e) {
+        if (!firstErr) firstErr = String(e);
+      }
+    }
+    const failed = shownEps.length - ok;
+    setToast(failed === 0 ? `已加入 ${ok} 集下载` : `已加入 ${ok}/${shownEps.length} 集,${failed} 集失败:${firstErr}`);
   }
 
   /** 媒体信息卡片区左右拖动横滑(标注 20:和 Emby 官端一致)。 */
@@ -271,16 +420,22 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack 
     onPlay(ep);
   }
 
-  const notWired = (what: string) => () => {
-    setToast(`${what} — 待接`);
-    setEpCtx(null);
-    setMoreMenu(null);
-  };
-
   const chev = <IconChevronDown size={12} />;
 
   return (
-    <div className="scroll detail">
+    <>
+      {/* 面包屑(标注 12):草稿要求返回除了玻璃 ‹ 还有面包屑这条路。
+          和别的页一样 cbar 在 .scroll 外 —— 放里面会跟着正文滚走,就不是「常驻返回路径」了。 */}
+      <div className="cbar">
+        <span className="crumb">
+          <button className="crumb-btn" onClick={onBack}>
+            媒体库
+          </button>
+          <span className="sep">›</span>
+          <b>{title}</b>
+        </span>
+      </div>
+      <div className="scroll detail">
       <div className="cbody" style={{ paddingTop: 0 }}>
         {/* ① Hero:全宽出血,不受正文 max-width 约束 */}
         <div className="dt-hero">
@@ -303,9 +458,9 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack 
             </button>
             <button
               className="dt-ghost sm"
-              title="下载"
-              disabled={isSeries}
-              onClick={() => d && !isSeries && enqueue(d)}
+              title={isSeries ? "下载整季" : "下载"}
+              disabled={isSeries ? shownEps.length === 0 : !d}
+              onClick={() => (isSeries ? enqueueSeason() : d && enqueue(d))}
             >
               <IconDownload size={16} />
             </button>
@@ -349,8 +504,14 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack 
         <div className="dt-body">
           {/* ② 大播放按钮 */}
           <div className="dt-playbar">
+            {/* 版本选择器选中的 MediaSource 一并交给起播方(剧集起播的是分集,版本选择器不适用 → null)。
+                ⚠️ 现阶段 App.playItem 只收第一参,这个 id 会被丢掉 —— 详见 Props.onPlay 的注释。 */}
             {(!isSeries || episodes.length > 0) && (
-              <button className="btn primary big" onClick={() => target && onPlay(target)} disabled={!target}>
+              <button
+                className="btn primary big"
+                onClick={() => target && onPlay(target, isSeries ? null : ver?.id ?? null)}
+                disabled={!target}
+              >
                 <IconPlay size={16} /> {playLabel}
               </button>
             )}
@@ -359,9 +520,9 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack 
             </button>
             <button
               className="dt-ghost"
-              title="下载"
-              disabled={isSeries}
-              onClick={() => d && !isSeries && enqueue(d)}
+              title={isSeries ? "下载整季" : "下载"}
+              disabled={isSeries ? shownEps.length === 0 : !d}
+              onClick={() => (isSeries ? enqueueSeason() : d && enqueue(d))}
             >
               <IconDownload size={17} />
             </button>
@@ -399,129 +560,135 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack 
             </>
           )}
 
-          {/* ④ 选择器:线路 / 版本 / 音轨 / 字幕(Series 无 MediaSource → 整段不渲染) */}
-          {!isSeries && versions.length > 0 && (
+          {/* ④ 选择器:线路 / 版本 / 音轨 / 字幕。
+              线路属服务器(剧集页也该有),版本/音轨/字幕要 MediaSource(Series 没有)→ 两段各自把门。 */}
+          {(lines.length > 1 || (!isSeries && versions.length > 0)) && (
             <div className="dt-selrow" style={{ marginTop: 16 }}>
-              {/* 线路:多线路是服务器级功能,核层没有 → 只列主线,诚实标注 */}
-              <span className="dt-selwrap" onClick={(e) => e.stopPropagation()}>
-                <span className={`sel${dd === "line" ? " on" : ""}`} onClick={() => setDd(dd === "line" ? null : "line")}>
-                  线路 · 主线 {chev}
-                </span>
-                {dd === "line" && (
-                  <div className="dd">
-                    <div className="li on">
-                      <span className="rad" />
-                      主线
-                    </div>
-                    <div className="caption-note" style={{ padding: "4px 9px 2px", margin: 0 }}>
-                      多线路待接
-                    </div>
-                  </div>
-                )}
-              </span>
-
-              {/* 版本:真数据。>1 个版本时按草稿 776 行用 accent 边框标当前生效项 */}
-              <span className="dt-selwrap" onClick={(e) => e.stopPropagation()}>
-                <span
-                  className={`sel${dd === "ver" ? " on" : ""}`}
-                  style={versions.length > 1 ? { borderColor: "var(--accent)", color: "var(--ink)" } : undefined}
-                  onClick={() => setDd(dd === "ver" ? null : "ver")}
-                >
-                  版本 · {ver?.name ?? "—"} {chev}
-                </span>
-                {dd === "ver" && (
-                  <div className="dd">
-                    {versions.map((v, i) => (
-                      <div
-                        key={v.id}
-                        className={`li${i === verIdx ? " on" : ""}`}
-                        onClick={() => {
-                          setVerIdx(i);
-                          setDd(null);
-                        }}
-                      >
-                        <span className="rad" />
-                        {v.name}
-                        <span className="rt">{fmtSize(v.size_bytes)}</span>
-                      </div>
-                    ))}
-                    <div className="caption-note" style={{ padding: "4px 9px 2px", margin: 0 }}>
-                      选择暂不回传播放器,待接
-                    </div>
-                  </div>
-                )}
-              </span>
-
-              {/* 音轨:选中版本的 Audio 流 */}
-              {audios.length > 0 && (
+              {/* 线路:真接 probe_lines / set_active_line(核层 lib.rs:619,866 —— 一直都在)。
+                  只有一条线时整个不显示:草稿 979「没有就不显示、不硬凑」,没得选的下拉是摆设。 */}
+              {lines.length > 1 && (
                 <span className="dt-selwrap" onClick={(e) => e.stopPropagation()}>
-                  <span
-                    className={`sel${dd === "audio" ? " on" : ""}`}
-                    onClick={() => setDd(dd === "audio" ? null : "audio")}
-                  >
-                    音轨 · {audios.find((s) => s.index === audioIdx) ? streamLabel(audios.find((s) => s.index === audioIdx)!) : "—"} {chev}
+                  <span className={`sel${dd === "line" ? " on" : ""}`} onClick={openLineDd}>
+                    线路 · {lineName(activeLine)} {chev}
                   </span>
-                  {dd === "audio" && (
+                  {dd === "line" && (
                     <div className="dd">
-                      {audios.map((s) => (
-                        <div
-                          key={s.index}
-                          className={`li${s.index === audioIdx ? " on" : ""}`}
-                          onClick={() => {
-                            setAudioIdx(s.index);
-                            setDd(null);
-                          }}
-                        >
-                          <span className="rad" />
-                          {streamLabel(s)}
-                          {fmtBitrate(s.bitrate) && <span className="rt">{fmtBitrate(s.bitrate)}</span>}
-                        </div>
-                      ))}
-                      <div className="caption-note" style={{ padding: "4px 9px 2px", margin: 0 }}>
-                        选择暂不回传播放器,待接
-                      </div>
+                      {lines.map((l, i) => {
+                        const p = probes?.find((x) => x.index === i);
+                        return (
+                          <div
+                            key={l.id}
+                            className={`li${i === activeLine ? " on" : ""}`}
+                            title={l.remark ?? undefined}
+                            onClick={() => pickLine(i)}
+                          >
+                            <span className="rad" />
+                            {lineName(i)}
+                            {/* ms=null 是「探过,不通」,和「还没探」不同义 → 前者「—」,后者留空。 */}
+                            <span className="rt" title={p && p.ms == null ? "不通" : undefined}>
+                              {probing && !probes ? "测速中…" : p ? (p.ms == null ? "—" : `${p.ms} ms`) : ""}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </span>
               )}
 
-              {/* 字幕:选中版本的 Subtitle 流 + 关闭字幕 */}
-              <span className="dt-selwrap" onClick={(e) => e.stopPropagation()}>
-                <span className={`sel${dd === "sub" ? " on" : ""}`} onClick={() => setDd(dd === "sub" ? null : "sub")}>
-                  {/* 换版本时本帧 subIdx 可能还是旧版本的 → 查不到就按「关闭」显示,等 effect 校正 */}
-                  字幕 · {subs.find((s) => s.index === subIdx) ? streamLabel(subs.find((s) => s.index === subIdx)!) : "关闭"} {chev}
+              {!isSeries && versions.length > 0 && (
+                <>
+                {/* 版本:真数据。>1 个版本时按草稿 776 行用 accent 边框标当前生效项 */}
+                <span className="dt-selwrap" onClick={(e) => e.stopPropagation()}>
+                  <span
+                    className={`sel${dd === "ver" ? " on" : ""}`}
+                    style={versions.length > 1 ? { borderColor: "var(--accent)", color: "var(--ink)" } : undefined}
+                    onClick={() => setDd(dd === "ver" ? null : "ver")}
+                  >
+                    版本 · {ver?.name ?? "—"} {chev}
+                  </span>
+                  {dd === "ver" && (
+                    <div className="dd">
+                      {versions.map((v, i) => (
+                        <div
+                          key={v.id}
+                          className={`li${i === verIdx ? " on" : ""}`}
+                          onClick={() => {
+                            setVerIdx(i);
+                            setDd(null);
+                          }}
+                        >
+                          <span className="rad" />
+                          {v.name}
+                          <span className="rt">{fmtSize(v.size_bytes)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </span>
-                {dd === "sub" && (
-                  <div className="dd">
-                    {subs.map((s) => (
+
+                {/* 音轨:选中版本的 Audio 流 */}
+                {audios.length > 0 && (
+                  <span className="dt-selwrap" onClick={(e) => e.stopPropagation()}>
+                    <span
+                      className={`sel${dd === "audio" ? " on" : ""}`}
+                      onClick={() => setDd(dd === "audio" ? null : "audio")}
+                    >
+                      音轨 · {audios.find((s) => s.index === audioIdx) ? streamLabel(audios.find((s) => s.index === audioIdx)!) : "—"} {chev}
+                    </span>
+                    {dd === "audio" && (
+                      <div className="dd">
+                        {audios.map((s) => (
+                          <div
+                            key={s.index}
+                            className={`li${s.index === audioIdx ? " on" : ""}`}
+                            onClick={() => pickStream(s, "audio")}
+                          >
+                            <span className="rad" />
+                            {streamLabel(s)}
+                            {fmtBitrate(s.bitrate) && <span className="rt">{fmtBitrate(s.bitrate)}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </span>
+                )}
+
+                {/* 字幕:选中版本的 Subtitle 流 + 关闭字幕 */}
+                <span className="dt-selwrap" onClick={(e) => e.stopPropagation()}>
+                  <span className={`sel${dd === "sub" ? " on" : ""}`} onClick={() => setDd(dd === "sub" ? null : "sub")}>
+                    {/* 换版本时本帧 subIdx 可能还是旧版本的 → 查不到就按「关闭」显示,等 effect 校正 */}
+                    字幕 · {subs.find((s) => s.index === subIdx) ? streamLabel(subs.find((s) => s.index === subIdx)!) : "关闭"} {chev}
+                  </span>
+                  {dd === "sub" && (
+                    <div className="dd">
+                      {subs.map((s) => (
+                        <div
+                          key={s.index}
+                          className={`li${s.index === subIdx ? " on" : ""}`}
+                          onClick={() => pickStream(s, "sub")}
+                        >
+                          <span className="rad" />
+                          {streamLabel(s)}
+                        </div>
+                      ))}
                       <div
-                        key={s.index}
-                        className={`li${s.index === subIdx ? " on" : ""}`}
+                        className={`li${subIdx == null ? " on" : ""}`}
                         onClick={() => {
-                          setSubIdx(s.index);
+                          setSubIdx(null);
                           setDd(null);
+                          // 关字幕能直接表达成偏好(sub_enabled=false → pick_tracks 返回 "no"),无需语言。
+                          patchPrefs({ sub_enabled: false });
                         }}
                       >
                         <span className="rad" />
-                        {streamLabel(s)}
+                        关闭字幕
                       </div>
-                    ))}
-                    <div
-                      className={`li${subIdx == null ? " on" : ""}`}
-                      onClick={() => {
-                        setSubIdx(null);
-                        setDd(null);
-                      }}
-                    >
-                      <span className="rad" />
-                      关闭字幕
                     </div>
-                    <div className="caption-note" style={{ padding: "4px 9px 2px", margin: 0 }}>
-                      选择暂不回传播放器,待接
-                    </div>
-                  </div>
-                )}
-              </span>
+                  )}
+                </span>
+                </>
+              )}
             </div>
           )}
 
@@ -739,31 +906,27 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack 
         <div style={{ height: 40 }} />
       </div>
 
-      {/* Hero/播放条的「更多」锚定菜单(标注 13) */}
+      {/* Hero/播放条的「更多」锚定菜单(标注 13)。
+          草稿列的是「投屏 / 换源 / 标记 / 外部 MPV」,这里只剩「标记」:
+          投屏(DLNA)、换源、外部 MPV 三项**核层 197 个 tauri::command 里一个都没有**
+          (grep '#[tauri::command]' 全表核过:无 cast/dlna/external/open_with)。
+          按草稿 979 自己立的规矩「没有就不显示、不硬凑」——弹个「待接」toast 的假菜单项
+          比没有更坏:用户以为坏了,下一个人以为接过了。核层补齐命令后再加回来。 */}
       {moreMenu && (
         <div className="ctxmenu" style={{ left: moreMenu.x, top: moreMenu.y }} onClick={(e) => e.stopPropagation()}>
-          <div className="mi" onClick={notWired("投屏")}>
-            <IconInfo size={15} /> 投屏
-          </div>
-          <div className="mi" onClick={notWired("换源")}>
-            <IconInfo size={15} /> 换源
-          </div>
-          <div className="mi" onClick={notWired("标记已看")}>
-            <IconInfo size={15} /> 标记已看
-          </div>
-          <div className="mi" onClick={notWired("外部 MPV 打开")}>
-            <IconInfo size={15} /> 外部 MPV 打开
+          <div className="mi" onClick={() => markPlayed(item.id, !played)}>
+            <IconInfo size={15} /> {played ? "标记未看" : "标记已看"}
           </div>
         </div>
       )}
 
-      {/* 分集右键菜单(标注 16) */}
+      {/* 分集右键菜单(标注 16)。「换源」同上:核层无此命令 → 不摆假项。 */}
       {epCtx && (
         <div className="ctxmenu" style={{ left: epCtx.x, top: epCtx.y }} onClick={(e) => e.stopPropagation()}>
-          <div className="mi" onClick={notWired("标记已看")}>
+          <div className="mi" onClick={() => markPlayed(epCtx.ep.id, true)}>
             <IconInfo size={15} /> 标记已看
           </div>
-          <div className="mi" onClick={notWired("标记未看")}>
+          <div className="mi" onClick={() => markPlayed(epCtx.ep.id, false)}>
             <IconInfo size={15} /> 标记未看
           </div>
           <div
@@ -775,13 +938,11 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack 
           >
             <IconDownload size={15} /> 下载本集
           </div>
-          <div className="mi" onClick={notWired("换源")}>
-            <IconInfo size={15} /> 换源
-          </div>
         </div>
       )}
 
       {toast && <div className="toast">{toast}</div>}
-    </div>
+      </div>
+    </>
   );
 }

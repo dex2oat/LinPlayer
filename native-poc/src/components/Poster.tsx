@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import { useEffect, useRef, type MouseEvent } from "react";
 import { type Item, type LoginResult, itemLabel, posterUrl, thumbUrl } from "../lib/api";
 import { IconPlay, IconLibrary, IconHeart } from "../app/icons";
 
@@ -16,7 +16,8 @@ type Props = {
   onContextMenu?: (e: MouseEvent, it: Item) => void;
 };
 
-/** 海报卡:草稿的悬停浮起 + 显现 ▶播放 / ♥收藏 + 进度条。卡身点击=进详情。 */
+/** 海报卡:草稿的悬停浮起 + 显现 ▶播放 / ♥收藏 + 进度条 + 评分角标。
+    卡身单击=播放、双击=进详情(草稿标注 11/36:「双击 = 直接进详情」)。 */
 export default function Poster({
   item,
   session,
@@ -36,6 +37,31 @@ export default function Poster({
   const src = thumb ? thumbUrl(session, item.id) : posterUrl(session, item.id);
   const label = itemLabel(item);
 
+  /* 草稿标注 11/36 要「双击 = 进详情」。单击不能也进详情 —— 第一下就把页面换走了,
+     双击永远触发不到。所以单击延后一拍,双击到了就撤销(手法同 DetailPage.epClick)。
+     单击落「播放」:媒体卡的主操作就是播;文件夹播不了 → 退回进详情。 */
+  const timer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
+
+  const click = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      if (item.is_folder) onOpen(item);
+      else onPlay(item);
+    }, 220);
+  };
+  const dblClick = () => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    onOpen(item);
+  };
+
   return (
     <div
       className="pitem"
@@ -45,8 +71,9 @@ export default function Poster({
       <div
         className={`pcard ${thumb ? "thumb-ar" : "poster-ar"} enter`}
         style={{ animationDelay: `${Math.min(index, 12) * 24}ms` }}
-        onClick={() => onOpen(item)}
-        title={label}
+        onClick={click}
+        onDoubleClick={dblClick}
+        title={item.is_folder ? label : `${label}\n单击播放 · 双击进详情`}
       >
         {item.has_primary ? (
           <img
@@ -57,6 +84,15 @@ export default function Poster({
         ) : (
           <div className="fallback">
             {item.is_folder ? <IconLibrary size={30} /> : <IconPlay size={26} />}
+          </div>
+        )}
+        {/* 评分角标(草稿标注 11)。核层 Item.rating 一直在传 —— 之前 .badge-tr 这条 CSS
+            零调用方就是因为这里没渲染。
+            「未看角标」需要 UserData.UnplayedItemCount,核层 Item 上没有这个字段 →
+            不编,宁可缺角标也不显假数字。要补先给 Rust 的 emby::Item 加字段。 */}
+        {item.rating != null && item.rating > 0 && (
+          <div className="badge-tr" title={`评分 ${item.rating}`}>
+            {item.rating.toFixed(1)}
           </div>
         )}
         <div className="overlay">

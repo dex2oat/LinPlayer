@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  type AccountInfo,
+  type DanmakuEpisode,
+  type DanmakuMatchCandidate,
+  type DanmakuMatchInput,
+  type DanmakuSourceGroup,
+  type DownloadItem,
   type Item,
+  type LineProbe,
   type LoginResult,
   type MediaVersion,
   type Prefs,
@@ -12,6 +18,12 @@ import {
   addSubtitle,
   applyPrefs,
   currentSession,
+  danmakuAutoLoad,
+  danmakuLoad,
+  danmakuMatch,
+  danmakuMinAutoScore,
+  danmakuSearch,
+  defaultDanmakuFilter,
   fmtBitrate,
   fmtRes,
   fmtSize,
@@ -19,12 +31,16 @@ import {
   getPrefs,
   itemDetail,
   itemMedia,
+  listAccounts,
   play,
+  playLocal,
   playerOpts,
   posterUrl,
+  probeLines,
   reportProgress,
   screenshot,
   seek as seekApi,
+  setActiveLine,
   setAspectRatio as setAspectRatioApi,
   setAudioDelay,
   setHwdec as setHwdecApi,
@@ -68,9 +84,6 @@ import "./theme/tokens.css";
 import "./theme/ui.css";
 import "./theme/player.css";
 
-type DmEpisode = { episode_id: string; episode_title: string; episode_number: string | null };
-type DmAnime = { anime_id: string; anime_title: string; episodes: DmEpisode[] };
-type DmConfig = { api_url: string; auth_type: string; token: string };
 type Panel = null | "eps" | "audio" | "sub" | "danmaku" | "super" | "line" | "version" | "speed" | "more";
 /** 竖条弹出态:kind 决定调音量还是亮度,x 是按钮中心(贴着按钮弹,草稿 21)。 */
 type VBar = null | { kind: "vol" | "bright"; x: number };
@@ -79,6 +92,14 @@ type VBar = null | { kind: "vol" | "bright"; x: number };
 const SPEEDS = [0.5, 1.0, 1.5, 2.0, 3.0];
 /** 弹幕显示区域档位 → 占屏高百分比(草稿 stepper「1/2 屏」)。 */
 const DM_AREAS = [25, 50, 75, 100];
+/* 弹幕「显示速度 / 字体大小」是前端渲染参数(核层 danmaku_filter 文档写明渲染归前端),
+   不是缺核层命令 —— 档位在这儿定,值透传给 DanmakuLayer 的 duration / fontSize props。
+   两张表的默认下标(DM_DEFAULT)都对着组件原本写死的常量,不动档位 = 观感与以前一模一样。 */
+/** 滚动弹幕横穿屏幕的秒数(越小越快)。「中」=8s = Danmaku.tsx 的 DURATION。 */
+const DM_SPEEDS: [number, string][] = [[14, "极慢"], [11, "慢"], [8, "中"], [6, "快"], [4.5, "极快"]];
+/** 弹幕字号(CSS px);null =「按画面高自适应」,即组件不传 fontSize 时的原行为。 */
+const DM_SIZES: [number | null, string][] = [[16, "极小"], [20, "小"], [null, "中"], [28, "大"], [34, "极大"]];
+const DM_DEFAULT = 2; // 两张表的「中」都在下标 2
 /** 解码档位 → mpv hwdec 值。零拷贝(d3d11va)是 Win 最佳,软解(no)排查用。 */
 const HWDECS: [string, string][] = [["auto-safe", "硬解"], ["d3d11va", "零拷贝"], ["no", "软解"]];
 /** 定时关闭档位(分钟)。照搬旧 Flutter 端既有档位(player_screen_state _showTimerDialog),不另造一套。 */
@@ -118,6 +139,11 @@ export default function App() {
   // 播放器 OSD 态
   const [siblings, setSiblings] = useState<Item[]>([]); // 当前剧全部分集(上/下一集 + 选集)
   const [versions, setVersions] = useState<MediaVersion[] | null>(null); // 版本面板(item_media)
+  const [curMsId, setCurMsId] = useState<string | null>(null); // 当前在播的 media_source_id(版本高亮的真依据)
+  // 线路面板(probe_lines / set_active_line 都真接)
+  const [lineProbes, setLineProbes] = useState<LineProbe[] | null>(null);
+  const [acct, setAcct] = useState<AccountInfo | null>(null);
+  const [lineErr, setLineErr] = useState<string | null>(null);
   const [vbar, setVbar] = useState<VBar>(null);
   const [volume, setVol] = useState(70); // 真接 set_volume;起播后由 player_opts 覆盖成真值
   const [muted, setMuted] = useState(false);
@@ -125,6 +151,9 @@ export default function App() {
 
   // 播放器可调项:初值都是占位,起播后 player_opts() 拉真值覆盖(否则滑块位置是假的)
   const [speed, setSpd] = useState(1);
+  /* 长按连调的 interval 里拿不到 speed state 的最新值(闭包快照的是按下那刻的),
+     故 applySpeed 同步往这份 ref 记一手,连调只读 ref。 */
+  const speedRef = useRef(1);
   const [aDelay, setADelay] = useState(0);
   const [sDelay, setSDelay] = useState(0);
   const [hwdec, setHw] = useState("auto-safe");
@@ -153,22 +182,32 @@ export default function App() {
   const titleRef = useRef<HTMLSpanElement>(null);
   const toastTimer = useRef<number | null>(null);
 
-  // 弹幕
+  // 弹幕。源的增删改查在设置页(多源 CRUD),这儿只管「搜索 / 选源 / 显示」(草稿 L1119)。
   const [dmComments, setDmComments] = useState<DanmakuComment[]>([]);
   const [dmOn, setDmOn] = useState(false);
-  const [dmResults, setDmResults] = useState<DmAnime[] | null>(null);
+  const [dmResults, setDmResults] = useState<DanmakuSourceGroup[] | null>(null);
   const [dmKw, setDmKw] = useState("");
-  const [dmCfg, setDmCfg] = useState<DmConfig>({ api_url: "", auth_type: "none", token: "" });
   const [dmOpacity, setDmOpacity] = useState(80); // 纯 CSS,真生效
   const [dmArea, setDmArea] = useState(1); // DM_AREAS 下标,纯 CSS 裁剪,真生效
+  const [dmSpeed, setDmSpeed] = useState(DM_DEFAULT); // DM_SPEEDS 下标 → DanmakuLayer duration
+  const [dmSize, setDmSize] = useState(DM_DEFAULT); // DM_SIZES 下标 → DanmakuLayer fontSize
   const timeSync = useRef<TimeSync>({ base: 0, stamp: performance.now(), paused: false });
+
+  // 进度条悬停时间气泡(草稿 pin 18);x 是条内像素偏移。
+  const [hoverT, setHoverT] = useState<{ x: number; t: number } | null>(null);
+
+  /* 长按 +/− 连调的句柄。必须放 ref —— 放 state 一重渲染就换了新值,松手时 clear 的是旧句柄,
+     结果按一次停不下来,一路调到底。 */
+  const repeat = useRef<number | null>(null);
 
   useEffect(() => {
     (async () => {
       const s = await currentSession().catch(() => null);
       if (s) setSession(s);
       getPrefs().then(setPrefs2).catch(() => {});
-      invoke<DmConfig>("get_danmaku_config").then(setDmCfg).catch(() => {});
+      /* 这里原本 invoke<DmConfig>("get_danmaku_config") 把 Vec<DanmakuServer> 读成单对象
+         (api_url 恒 undefined),而弹幕源的增删改现已归设置页 —— 播放器不需要读它,直接删。
+         真要读请走 api.ts 的 getDanmakuConfig(): DanmakuServer[],别再退回单对象。 */
       // 超分档位是核层静态清单(不依赖播放器),开机拉一次即可。
       shaderLevels().then(setShaderList).catch(() => {});
       setBooted(true);
@@ -204,10 +243,41 @@ export default function App() {
   /** 真调用失败一律如实说,不静默吞(尤其超分:吞掉就成了「以为开了其实没开」)。 */
   const fail = (what: string, e: unknown) => say(`${what}失败:${e}`);
 
-  async function afterStart(name: string) {
+  /* 弹幕自动匹配。核层的 danmaku_auto_load 是一整套(多源并行 + 分数门槛 + 下一集锚点快路径),
+     以前 afterStart 只 setDmKw 就完事,等于把这套子系统整个晾着,用户每集都得手搜一遍。
+     anchor_key 传剧 id:核层据此走「紧邻上一集的下一集」快路径,省掉一整轮全网匹配。
+     全程 catch:弹幕挂不上绝不能反向污染起播链路 —— 但也绝不静默,退化成手动挑并说清原因
+     (弹幕最常见的失败是「没配源」,吞掉的话用户只会看见弹幕莫名其妙不出来)。 */
+  async function autoDanmaku(it: Item) {
+    const input: DanmakuMatchInput = {
+      title: it.series_name ?? it.name, // 剧集要用剧名,Episode.name 是「第 35 集」搜不到
+      episode_no: it.episode_no,
+      file_name: it.name,
+      duration_secs: it.runtime_secs > 0 ? it.runtime_secs : null,
+    };
+    try {
+      const auto = await danmakuAutoLoad(input, defaultDanmakuFilter(), null, it.series_id ?? null);
+      if (auto) { setDmComments(auto); setDmOn(true); return; } // 够可信 → 静默挂上,不打扰
+      // null = 核层认为没有够格自动挂的匹配。再看一眼候选:够门槛就挂,不够就把面板留给用户。
+      const cands = await danmakuMatch(input);
+      const top = cands.reduce<DanmakuMatchCandidate | null>((a, b) => (!a || b.score > a.score ? b : a), null);
+      if (top && top.score >= (await danmakuMinAutoScore())) {
+        setDmComments(await danmakuLoad(top.episode_id));
+        setDmOn(true);
+        say(`弹幕已自动匹配 · ${top.source_name} · ${top.anime_title}`);
+        return;
+      }
+      say(cands.length ? "弹幕候选可信度不足,请在弹幕面板手动挑选" : "未找到匹配的弹幕,可在弹幕面板手动搜索");
+    } catch (e) {
+      say(`弹幕自动匹配失败:${e} · 可在弹幕面板手动搜索`);
+    }
+  }
+
+  async function afterStart(it: Item) {
     setDmComments([]);
     setDmOn(false);
-    setDmKw(name);
+    setDmKw(it.series_name ?? it.name); // 手搜的预填也用剧名,和自动匹配同一口径
+    setDmResults(null);
     setPanel(null);
     setVersions(null);
     // 换片重置前端侧样式态(核层是新播放器实例,旧的延迟/次字幕都没了)。
@@ -217,6 +287,7 @@ export default function App() {
     setSubSize(55); setSubPos(100); setSubFont("sans-serif");
     setAspect(""); setShaderLv("off");
     setSleepMin(null); setSleepOpen(false); setDolby(false); // 定时句柄由 [playing] 的 cleanup 清
+    autoDanmaku(it); // 不 await:弹幕匹配要打网络,不能拖住起播后的 OSD 初始化
     setTimeout(async () => {
       await applyPrefs().catch(() => {});
       setTracks(await tracksApi().catch(() => []));
@@ -226,6 +297,7 @@ export default function App() {
         setVol(Math.round(o.volume));
         setMuted(o.muted);
         setSpd(o.speed);
+        speedRef.current = o.speed; // 连调基准也得跟着回读的真值走,否则长按会从 1.0 起跳
         setADelay(round1(o.audio_delay));
         setSDelay(round1(o.sub_delay));
         setHw(normHwdec(o.hwdec));
@@ -234,12 +306,39 @@ export default function App() {
     }, 1200);
   }
 
-  async function playItem(it: Item) {
+  /** mediaSourceId = 详情页版本选择器选中的版本;省略 = 服务端给的第一个。
+      ★ 这个第二参必须一路透传到 play():少了它,用户在详情页选了 4K 起播仍是
+      默认版本,且**不报错** —— TS 上少参函数可赋给多参形参,编译期抓不到。 */
+  async function playItem(it: Item, mediaSourceId?: string | null) {
     try {
-      const resume = await play(it.id, it.resume_secs);
+      const resume = await play(it.id, it.resume_secs, mediaSourceId ?? null);
       setPlaying(it);
+      // 版本:详情页指定了就照它高亮,否则等 item_media 回来按服务端第一个初始化。
+      setCurMsId(mediaSourceId ?? null);
       setStatus({ time: resume, duration: it.runtime_secs, paused: false, buffered: 0 });
-      afterStart(it.name);
+      afterStart(it);
+    } catch (e) {
+      alert(String(e));
+    }
+  }
+
+  /** 播放已下载完成的本地文件(下载页 ▶ / 双击)。
+      必须由 App 起播:mpv 的视频窗口压在 Tauri 窗口之下,只有 setPlaying 触发的
+      .app-root.hidden 才让它露出来 —— 页面自己调 playLocal 只会有声音没画面。 */
+  async function playDownload(d: DownloadItem) {
+    try {
+      const resume = await playLocal(d.id, 0);
+      const synth: Item = {
+        id: d.item_id || d.id, name: d.title, type_: "Video", is_folder: false, has_primary: false,
+        runtime_secs: 0, resume_secs: resume, series_name: d.series_name, episode_no: d.episode_number,
+        season_no: d.season_number, video_height: null, bitrate: null, size_bytes: d.total_bytes,
+        played: false, genres: [], year: null, rating: null, provider_ids: {},
+        presentation_unique_key: null, path: d.file_path, series_id: d.series_id,
+      };
+      setPlaying(synth);
+      setCurMsId(null);
+      setStatus({ time: resume, duration: 0, paused: false, buffered: 0 });
+      afterStart(synth);
     } catch (e) {
       alert(String(e));
     }
@@ -249,10 +348,11 @@ export default function App() {
     try {
       const start = await sourcePlay(entry, 0);
       // 网盘文件不是 Emby 条目:剧集号/规格字段一律 null。
-      const synth: Item = { id: entry.id, name: entry.name, type_: "Video", is_folder: false, has_primary: false, runtime_secs: 0, resume_secs: 0, series_name: null, episode_no: null, season_no: null, video_height: null, bitrate: null, size_bytes: null };
+      const synth: Item = { id: entry.id, name: entry.name, type_: "Video", is_folder: false, has_primary: false, runtime_secs: 0, resume_secs: 0, series_name: null, episode_no: null, season_no: null, video_height: null, bitrate: null, size_bytes: null, played: false, genres: [], year: null, rating: null, provider_ids: {}, presentation_unique_key: null, path: null, series_id: null };
       setPlaying(synth);
+      setCurMsId(null);
       setStatus({ time: start, duration: 0, paused: false, buffered: 0 });
-      afterStart(entry.name);
+      afterStart(synth);
     } catch (e) {
       alert(String(e));
     }
@@ -355,8 +455,71 @@ export default function App() {
   // 版本面板用的 MediaSources:开面板时才拉,省一次请求。
   useEffect(() => {
     if (panel !== "version" || !playing || versions) return;
-    itemMedia(playing.id).then(setVersions).catch(() => setVersions([]));
+    itemMedia(playing.id)
+      .then((vs) => {
+        setVersions(vs);
+        // play() 不传 mediaSourceId 时核层用服务端给的第一个,故没切过版本时就高亮它。
+        // 以前这里写死 i===0,切完版本高亮还赖在第一行 —— 别再用下标当选中态。
+        setCurMsId((id) => id ?? vs[0]?.id ?? null);
+      })
+      .catch(() => setVersions([]));
   }, [panel, playing, versions]);
+
+  /* 线路探测。★ server_id 是**账号键**(list_accounts().server),不是 session.server:
+     set_active_line 切完会把 session.server 改写成那条线路的 URL,此后 session.server
+     就不再等于账号键,再拿它去 probe_lines 只会得到「找不到该服务器」。踩过,别改回去。
+     草稿 L1037 要求「进入服务器自动探测 · 缓存至退出程序清空」→ 探到就存着不重探。 */
+  useEffect(() => {
+    if (panel !== "line" || lineProbes) return;
+    let dead = false;
+    (async () => {
+      try {
+        const a = (await listAccounts()).find((x) => x.active);
+        if (dead) return;
+        if (!a) { setLineErr("没有活跃的服务器账号"); return; }
+        setAcct(a);
+        setLineErr(null);
+        setLineProbes(await probeLines(a.server)); // ← a.server = 账号键
+      } catch (e) {
+        if (!dead) setLineErr(String(e));
+      }
+    })();
+    return () => { dead = true; };
+  }, [panel, lineProbes]);
+
+  /** 切线路:立即生效无需重启(核层会同步刷新活跃会话地址)。 */
+  async function switchLine(index: number) {
+    if (!acct) return;
+    try {
+      await setActiveLine(acct.server, index); // 同上:必须是账号键
+      setAcct({ ...acct, active_line: index });
+      /* ★ 必须把前端 session 也拉一遍:核层改的是它自己那份会话,前端这份 session.server
+         还是旧线路 —— 而 poster/backdrop/thumb/person 的 URL 全是拿 session.server 现拼的。
+         不刷的话,用户正因为旧线不通才切线路,切完图片却继续打那条死线,看起来「切了跟没切一样」。 */
+      await refreshSession();
+      say(`已切到${lineName(acct, index)}`);
+    } catch (e) { fail("切换线路", e); }
+  }
+
+  /** 切版本:mpv 一次只开一路流,没有热换源 → 只能 stop 再 play。
+      先 stop_playback 把进度落库(不然这一段观看记录直接丢),再用当前位置起播新 MediaSource。 */
+  async function switchVersion(v: MediaVersion) {
+    if (!playing || v.id === curMsId) return;
+    const at = status.time;
+    try {
+      await stopPlayback(at);
+      const resume = await play(playing.id, at, v.id);
+      setCurMsId(v.id);
+      setStatus((s) => ({ ...s, time: resume, paused: false }));
+      // 新版本 = 新的音/字轨表,得重拉;沿用 afterStart 的 1.2s 等播放器就绪。
+      // 但不走整个 afterStart:同一集重开,弹幕不该重置更不该再匹配一次。
+      setTimeout(async () => {
+        await applyPrefs().catch(() => {});
+        setTracks(await tracksApi().catch(() => []));
+      }, 1200);
+      say(`已切换版本 · 从 ${fmtTime(resume)} 继续`);
+    } catch (e) { fail("切换版本", e); }
+  }
 
   // 标题溢出才跑马灯,短标题白晃眼(草稿标注 17)。
   useEffect(() => {
@@ -407,9 +570,20 @@ export default function App() {
   /** 倍速:草稿范围 0.25×–5.0×(核层再 clamp 到 0.1–6)。 */
   async function applySpeed(v: number) {
     const s = Math.max(0.25, Math.min(5, round1(v * 100) / 100));
+    speedRef.current = s; // 先记 ref:连调下一拍(120ms 后)靠它,等 state 回来就晚了
     setSpd(s);
     try { await setSpeedApi(s); } catch (e) { fail("倍速", e); }
   }
+  /** 长按 +/− 连调(草稿 L1086):按下先走一步,之后每 120ms 一步,松手/移出即停。 */
+  const stopRepeat = () => { if (repeat.current) { window.clearInterval(repeat.current); repeat.current = null; } };
+  const holdRepeat = (step: () => void) => {
+    step();
+    stopRepeat(); // 防上一次 mouseup 丢了(比如在窗口外松的手)留下野 interval
+    repeat.current = window.setInterval(step, 120);
+  };
+  const bumpSpeed = (d: number) => applySpeed(speedRef.current + d);
+  // 组件卸载兜底:连调途中被卸载,interval 还在调一个不存在的播放器。
+  useEffect(() => stopRepeat, []);
   async function applyADelay(v: number) {
     const s = round1(v);
     setADelay(s);
@@ -564,18 +738,22 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [playing, status, panel, vbar, ctx, prevEp, nextEp, volume, muted, speed]);
 
+  /* ★ danmaku_search 回的是 Vec<DanmakuSourceGroup>(一源一组),**不是**番剧数组:
+     曾经这里按 {anime_id, anime_title, episodes} 收,渲染时 a.episodes.map() 直接
+     TypeError 把整个播放器渲染打挂(白屏)。分组结构见 api.ts DanmakuSourceGroup,别再拍平。 */
   async function doDmSearch() {
     const q = dmKw.trim();
     if (!q) return;
-    try { setDmResults(await invoke<DmAnime[]>("danmaku_search", { keyword: q })); } catch (e) { alert(String(e)); }
+    try { setDmResults(await danmakuSearch(q)); } catch (e) { fail("弹幕搜索", e); }
   }
-  async function loadDmEpisode(ep: DmEpisode) {
+  async function loadDmEpisode(ep: DanmakuEpisode) {
     try {
-      const cs = await invoke<DanmakuComment[]>("danmaku_load", { episodeId: ep.episode_id });
-      setDmComments(cs); setDmOn(true); setDmResults(null);
-    } catch (e) { alert(String(e)); }
+      setDmComments(await danmakuLoad(ep.episode_id));
+      setDmOn(true);
+      setDmResults(null);
+      say(`弹幕已加载 · ${ep.episode_title || ep.episode_number || ""}`);
+    } catch (e) { fail("加载弹幕", e); }
   }
-  const saveDmCfg = () => invoke("set_danmaku_config", { apiUrl: dmCfg.api_url, authType: dmCfg.auth_type, token: dmCfg.token }).catch(() => {});
 
   if (!booted) return null;
   if (!session) return <LoginPage onLoggedIn={setSession} />;
@@ -623,9 +801,9 @@ export default function App() {
       <div className={`app-root${playing ? " hidden" : ""}`}>
         <Shell
           session={session}
-          connected
           onPlay={playItem}
           onPlaySource={playSource}
+          onPlayDownload={playDownload}
           onSessionChange={refreshSession}
           searchOpen={searchOpen && !playing}
           onSearch={() => setSearchOpen(true)}
@@ -645,7 +823,14 @@ export default function App() {
           className="p-dmwrap"
           style={{ opacity: dmOpacity / 100, clipPath: `inset(0 0 ${100 - DM_AREAS[dmArea]}% 0)` }}
         >
-          <DanmakuLayer comments={dmComments} timeSync={timeSync} enabled={dmOn} />
+          {/* 速度/字号:核层只管过滤去重,渲染参数本就是前端的事 → 直接透传 props。 */}
+          <DanmakuLayer
+            comments={dmComments}
+            timeSync={timeSync}
+            enabled={dmOn}
+            duration={DM_SPEEDS[dmSpeed][0]}
+            fontSize={DM_SIZES[dmSize][0] ?? undefined}
+          />
         </div>
       )}
 
@@ -680,10 +865,23 @@ export default function App() {
           <div className="p-bot">
             <div className="p-scrubrow">
               <span className="p-tc l">{fmtTime(curTime)}</span>
-              <div className="p-scrub">
+              {/* 悬停时间提示(草稿 pin 18)。缩略图那半要服务端 trickplay/BIF,核层确实没有
+                  → 按草稿「没有就不显示、不硬凑」,只给时间读数,不画假缩略图。 */}
+              <div
+                className="p-scrub"
+                onMouseMove={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  const x = Math.max(0, Math.min(r.width, e.clientX - r.left));
+                  setHoverT({ x, t: (x / r.width) * status.duration });
+                }}
+                onMouseLeave={() => setHoverT(null)}
+              >
                 <span className="buf" style={{ width: `${bufPct}%` }} />
                 <span className="fill" style={{ width: `${pct}%` }} />
                 <span className="knob" style={{ left: `${pct}%` }} />
+                {hoverT && status.duration > 0 && (
+                  <span className="prev" style={{ left: hoverT.x }}><span className="tc">{fmtTime(hoverT.t)}</span></span>
+                )}
                 <input
                   type="range" min={0} max={Math.max(1, status.duration)} step={0.5}
                   value={curTime}
@@ -889,20 +1087,35 @@ export default function App() {
                       <div className="grp-lab">弹幕源 · 先搜索匹配</div>
                       <input className="dmq" placeholder="搜索片名 / 手动匹配…" value={dmKw} onChange={(e) => setDmKw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doDmSearch()} />
                       <button className="p-li" onClick={doDmSearch}><span className="rad" /> 搜索</button>
-                      {dmResults?.map((a) => (
-                        <div key={a.anime_id}>
-                          <div className="grp-lab">{a.anime_title}</div>
-                          {a.episodes.map((ep) => (
-                            <button key={ep.episode_id} className="p-li" onClick={() => loadDmEpisode(ep)}>
-                              <span className="rad" /> {ep.episode_title || ep.episode_number || "?"}
-                            </button>
+                      {/* 一源一组:g.animes → 每部番的 g.animes[].episodes 才是可点的集。
+                          g.error 必须露出来 —— 单源挂了和单源没结果长得一样,吞了就没人知道该去修哪个源。 */}
+                      {dmResults?.map((g) => (
+                        <div key={g.source_id}>
+                          <div className="grp-lab">{g.source_name}</div>
+                          {g.error && <div className="p-note">该源失败:{g.error}</div>}
+                          {!g.error && g.animes.length === 0 && <div className="p-note">该源没有结果</div>}
+                          {g.animes.map((a) => (
+                            <div key={`${g.source_id}:${a.anime_id}`}>
+                              <div className="grp-lab">{a.anime_title}{a.year ? ` · ${a.year}` : ""}</div>
+                              {a.episodes.map((ep) => (
+                                <button key={ep.episode_id} className="p-li" onClick={() => loadDmEpisode(ep)}>
+                                  <span className="thumb sq">
+                                    {a.image_url && <img src={a.image_url} alt="" loading="lazy" />}
+                                  </span>
+                                  <span className="col">
+                                    <span className="t1">{ep.episode_title || ep.episode_number || "?"}</span>
+                                  </span>
+                                  <span className="rt">{g.source_name}</span>
+                                </button>
+                              ))}
+                            </div>
                           ))}
                         </div>
                       ))}
-                      {dmResults && dmResults.length === 0 && <div className="p-note">没有找到弹幕</div>}
-                      <div className="grp-lab">弹幕源设置</div>
-                      <input className="dmq" placeholder="弹幕服务器 http://host" value={dmCfg.api_url} onChange={(e) => setDmCfg({ ...dmCfg, api_url: e.target.value })} />
-                      <button className="p-li" onClick={saveDmCfg}><span className="rad" /> 保存源</button>
+                      {dmResults && dmResults.length === 0 && <div className="p-note">没有可用的弹幕源(去设置页添加)。</div>}
+                      {/* 弹幕源的增删改查在设置页(多源 CRUD);草稿 L1119 这里只要「搜索 / 选源」,
+                          不再放 api_url 输入框 —— 它当年还把 Vec<DanmakuServer> 当单对象存,存了个寂寞。 */}
+                      <div className="p-note">起播时会自动匹配弹幕;没匹配上或想换,在这儿搜片名手动挑。源的增删改在「设置 · 弹幕源」。</div>
                     </div>
                     <div className="col">
                       <div className="grp-lab">显示设置</div>
@@ -913,9 +1126,16 @@ export default function App() {
                       {stepper("显示区域", DM_AREAS[dmArea] === 100 ? "全屏" : `${DM_AREAS[dmArea] / 25}/4 屏`,
                         () => setDmArea((i) => Math.max(0, i - 1)),
                         () => setDmArea((i) => Math.min(DM_AREAS.length - 1, i + 1)))}
-                      {stepper("显示速度", "中", () => soon("弹幕速度"), () => soon("弹幕速度"))}
-                      {stepper("字体大小", "中", () => soon("弹幕字号"), () => soon("弹幕字号"))}
-                      <div className="p-note">速度/字号在 Danmaku 画布内部固定,需该组件开放 props,待接。</div>
+                      {stepper("显示速度", DM_SPEEDS[dmSpeed][1],
+                        () => setDmSpeed((i) => Math.max(0, i - 1)),
+                        () => setDmSpeed((i) => Math.min(DM_SPEEDS.length - 1, i + 1)))}
+                      {stepper("字体大小", DM_SIZES[dmSize][1],
+                        () => setDmSize((i) => Math.max(0, i - 1)),
+                        () => setDmSize((i) => Math.min(DM_SIZES.length - 1, i + 1)))}
+                      <div className="p-note">
+                        显示速度 = 滚动弹幕横穿屏幕的秒数(「中」=8s);字体大小「中」= 按画面高自适应。
+                        这两项是前端渲染参数,核层 danmaku_filter 只管过滤/去重。
+                      </div>
                     </div>
                   </>
                 )}
@@ -925,11 +1145,11 @@ export default function App() {
                   versions == null ? <div className="p-note">读取中…</div>
                     : versions.length === 0 ? <div className="p-note">没有取到版本信息。</div>
                       : <>
-                        {versions.map((v, i) => {
+                        {versions.map((v) => {
                           const vid = v.streams.find((s) => s.type_ === "Video");
                           const spec = [fmtRes(vid?.height ?? null), vid?.video_range && vid.video_range !== "SDR" ? vid.video_range : null].filter(Boolean).join(" ");
                           return (
-                            <button key={v.id} className={`p-li${i === 0 ? " on" : ""}`} onClick={() => say("切换版本需重新起播,核层暂无该命令")}>
+                            <button key={v.id} className={`p-li${v.id === curMsId ? " on" : ""}`} onClick={() => switchVersion(v)}>
                               <span className="rad" />
                               <span className="col">
                                 <span className="t1">{spec || v.name}</span>
@@ -939,7 +1159,7 @@ export default function App() {
                             </button>
                           );
                         })}
-                        <div className="p-note">列表为服务端真实版本;切换版本需重新起播(核层 play 只认 item_id),待接。</div>
+                        <div className="p-note">列表为服务端真实版本(item_media)。点击即切换:先落进度再按当前位置用该版本重新起播(mpv 不支持热换源,必然有一次短暂重载)。</div>
                       </>
                 )}
 
@@ -963,23 +1183,48 @@ export default function App() {
                   )
                 )}
 
-                {/* ---- 线路:核层无探测命令 ---- */}
+                {/* ---- 线路:probe_lines / set_active_line 全真接 ---- */}
                 {panel === "line" && (
-                  <>
-                    <button className="p-li on" onClick={() => soon("线路")}><span className="rad" /> 主线 <span className="rt">—</span></button>
-                    <div className="grp-lab">进入服务器自动探测(GET /public,非 ping)· 缓存至退出程序清空 · 无需手动测速</div>
-                    <div className="p-note">多线路探测需核层命令,待接。</div>
-                  </>
+                  lineErr ? <div className="p-note">线路探测失败:{lineErr}</div>
+                    : !lineProbes || !acct ? <div className="p-note">探测中…</div>
+                      : <>
+                        {lineProbes.map((p) => (
+                          <button
+                            key={p.index}
+                            className={`p-li${acct.active_line === p.index ? " on" : ""}`}
+                            onClick={() => switchLine(p.index)}
+                          >
+                            <span className="rad" />
+                            <span className="col">
+                              <span className="t1">{lineName(acct, p.index)}</span>
+                              <span className="t2">{p.url}</span>
+                            </span>
+                            {/* ms=null 是「探过、确实不通」,按草稿显示「—」,不装成 0ms */}
+                            <span className="rt">{p.ms == null ? "—" : `${p.ms}ms`}</span>
+                          </button>
+                        ))}
+                        <div className="grp-lab">进入服务器自动探测(GET /public,非 ping)· 缓存至退出程序清空 · 无需手动测速</div>
+                      </>
                 )}
 
                 {/* ---- 倍速:set_speed 真接 ---- */}
                 {panel === "speed" && (
                   <>
+                    {/* 长按连调(草稿 L1086):mousedown 起跳并起 interval,松手/移出即停。
+                        没有 onClick —— mousedown 已经走了第一步,再加 onClick 会一按走两格。 */}
                     <div className="p-li static center">
                       <span className="p-stepper">
-                        <button className="b" onClick={() => applySpeed(speed - 0.25)}>−</button>
+                        <button
+                          className="b"
+                          onMouseDown={() => holdRepeat(() => bumpSpeed(-0.25))}
+                          onMouseUp={stopRepeat} onMouseLeave={stopRepeat}
+                        >−</button>
                         <b className="big">{speed.toFixed(2)}×</b>
-                        <button className="b" onClick={() => applySpeed(speed + 0.25)}>＋</button>
+                        <button
+                          className="b"
+                          onMouseDown={() => holdRepeat(() => bumpSpeed(0.25))}
+                          onMouseUp={stopRepeat} onMouseLeave={stopRepeat}
+                        >＋</button>
                       </span>
                     </div>
                     <div className="grp-lab">常用</div>
@@ -988,7 +1233,7 @@ export default function App() {
                         <span className="rad" /> {s.toFixed(1)}×
                       </button>
                     ))}
-                    <div className="grp-lab">范围 0.25×–5.0× · 步进 0.25 · 快捷键 [ / ]</div>
+                    <div className="grp-lab">范围 0.25×–5.0× · 步进 0.25 · 长按 +/− 连调 · 快捷键 [ / ]</div>
                   </>
                 )}
 
@@ -1073,6 +1318,11 @@ export default function App() {
       {toast && <div className="toast">{toast}</div>}
     </>
   );
+}
+
+/** 线路显示名:用户起的名优先,没起名(或压根没配 lines,probe_lines 会回落单条)按草稿叫「主线 / 备线 N」。 */
+function lineName(a: AccountInfo, i: number): string {
+  return a.lines[i]?.name || (i === 0 ? "主线" : `备线 ${i}`);
 }
 
 function panelTitle(p: Panel): string {

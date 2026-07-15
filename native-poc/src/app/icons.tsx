@@ -80,3 +80,9 @@ export const IconVolume = ({ size = 20, className }: P) =>
   svg(size, className, <><path d="M4 9v6h3l5 4V5L7 9H4Z" /><path d="M16 8.5a4 4 0 0 1 0 7" /></>);
 export const IconList = ({ size = 20, className }: P) =>
   svg(size, className, <path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" />);
+/** 侧栏折叠汉堡(草稿:「侧栏可折叠为窄图标条(顶栏汉堡切换)」)。 */
+export const IconMenu = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="M4 7h16M4 12h16M4 17h16" />);
+/** 已看/未看勾(海报右键菜单的「标记已看」)。 */
+export const IconCheck = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="m4 12.5 5 5L20 6.5" />);

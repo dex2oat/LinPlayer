@@ -1,5 +1,11 @@
-import { useState } from "react";
-import { type Item, type LoginResult, type SourceEntry, setActiveServer } from "../lib/api";
+import { useEffect, useState } from "react";
+import {
+  type DownloadItem,
+  type Item,
+  type LoginResult,
+  type SourceEntry,
+  setActiveServer,
+} from "../lib/api";
 import SearchOverlay from "../components/SearchOverlay";
 import { useTheme } from "../theme/theme";
 import Sidebar from "./Sidebar";
@@ -19,20 +25,25 @@ import CalendarPage from "../pages/CalendarPage";
 
 type Props = {
   session: LoginResult;
-  connected: boolean;
-  onPlay: (it: Item) => void;
+  /** 第二参 = 详情页版本选择器选中的 MediaSource id,必须一路透传到 play()。 */
+  onPlay: (it: Item, mediaSourceId?: string | null) => void;
   onPlaySource: (entry: SourceEntry) => void;
+  /** 播放已下载完成的本地文件 —— 必须由 App 起播(mpv 窗口压在 Tauri 之下,
+      只有 App 的 setPlaying 才会让画面露出来),页面自己调只会有声无画。 */
+  onPlayDownload: (d: DownloadItem) => void;
   onSessionChange: () => void;
   searchOpen: boolean;
   onSearch: () => void;
   onCloseSearch: () => void;
 };
 
+/* 这里曾有个 connected: boolean,App 传的是写死的 true —— 拿它画状态点等于永远绿灯,
+   状态点从来没反映过现实。已删。真状态由 Sidebar 自己 probeAccounts() 探(草稿标注 3/25 三态点)。 */
 export default function Shell({
   session,
-  connected,
   onPlay,
   onPlaySource,
+  onPlayDownload,
   onSessionChange,
   searchOpen,
   onSearch,
@@ -59,6 +70,27 @@ export default function Shell({
   const openDetail = (it: Item) => setDetailStack([it]);
   const pushDetail = (it: Item) => setDetailStack((s) => [...s, it]);
   const backDetail = () => setDetailStack((s) => s.slice(0, -1));
+
+  /* 通用规则 legend:「下拉刷新 → 工具栏刷新按钮 · F5」;标注 12:「Alt+← = 返回」。
+     挂在 Shell 不挂 App:reloadKey / detailStack 都是 Shell 的状态。
+     搜索浮层开着时不接管 —— 那时 F5 该由浮层自己管,而且 Alt+← 更没意义。 */
+  useEffect(() => {
+    if (searchOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "F5") {
+        e.preventDefault();
+        setReloadKey((k) => k + 1);
+        return;
+      }
+      // 只在详情栈非空时吃掉 Alt+←,否则用户在别处按会以为没反应。
+      if (e.altKey && e.key === "ArrowLeft" && detailStack.length > 0) {
+        e.preventDefault();
+        backDetail();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [searchOpen, detailStack.length]);
 
   /**
    * 聚合搜索的结果可能属于别的服务器。核层 item_detail/play 都走「当前活跃服务器」,
@@ -100,6 +132,8 @@ export default function Shell({
             onPickView={setLibTarget}
             onBack={() => setLibTarget(null)}
             onOpenItem={openDetail}
+            /* 不传 onPlay 的话媒体库的悬停 ▶ 只能回落成「开详情」= 假按钮。收藏页一直有,这里漏了。 */
+            onPlay={onPlay}
             onSearch={onSearch}
           />
         );
@@ -108,7 +142,7 @@ export default function Shell({
       case "rankings":
         return <RankingsPage />;
       case "downloads":
-        return <DownloadsPage />;
+        return <DownloadsPage onPlayLocal={onPlayDownload} />;
       case "netdisk":
         return <NetdiskPage onPlay={onPlaySource} onBack={() => nav("servers")} />;
       case "anirss":
@@ -122,6 +156,9 @@ export default function Shell({
             activeServer={session.server}
             onChanged={onSessionChange}
             onGoAdd={() => nav("addserver")}
+            /* 草稿 L1216:点 Emby 卡 → 进首页;点网盘/文件源卡 → 进文件浏览。
+               不接这个 prop 的话切了服务器仍停在服务器页,pin 25 就是半截的。 */
+            onEnter={(src) => nav(src ?? "home")}
           />
         );
       case "addserver":
@@ -149,9 +186,8 @@ export default function Shell({
           onNav={nav}
           collapsed={collapsed}
           onToggleCollapse={() => setCollapsed((v) => !v)}
-          serverName={session.server.replace(/^https?:\/\//, "")}
-          connected={connected}
-          onServerClick={() => nav("servers")}
+          activeServer={session.server}
+          onSwitched={onSessionChange}
           theme={theme}
           onToggleTheme={toggle}
         />
@@ -165,6 +201,7 @@ export default function Shell({
                 onPlay={onPlay}
                 onOpenChild={pushDetail}
                 onBack={backDetail}
+                onSessionChange={onSessionChange}
               />
             ) : (
               body

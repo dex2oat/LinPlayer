@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   type CalendarEntry,
   afdianVerify,
@@ -6,6 +7,7 @@ import {
   traktCalendar,
 } from "../lib/api";
 import { IconChevronLeft, IconChevronRight } from "../app/icons";
+import { SourcePicker } from "./RankingsPage";
 import "./CalendarPage.css";
 
 type Props = { onBack: () => void };
@@ -14,6 +16,8 @@ type Source = "trakt" | "bangumi";
 const WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 // 软锁:存校验通过的订单号即视为已解锁,不每次联网重校(爱发电校验要网络)。
 const LOCK_KEY = "cal:afdian";
+/** 赞助下单页。爱发电校验走 afdianVerify(订单号),这里只负责把人送到下单页。 */
+const kAfdianSponsorUrl = "https://afdian.com/a/linplayer";
 
 /** 周一为一周首日:getDay() 0=周日 → 挪到末位。 */
 function mondayOf(base: Date, weekOffset: number): Date {
@@ -67,6 +71,8 @@ export default function CalendarPage({ onBack }: Props) {
   );
   const [orderNo, setOrderNo] = useState("");
   const [verifying, setVerifying] = useState(false);
+  // 点卡片 → 跨服找可播源(草稿 44),与排行榜共用同一个弹窗。
+  const [pick, setPick] = useState<string | null>(null);
 
   const say = useCallback((msg: string, error?: boolean) => {
     setToast({ msg, error });
@@ -214,8 +220,23 @@ export default function CalendarPage({ onBack }: Props) {
                   解锁
                 </button>
               </div>
+              <div className="cal-gate-row">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() =>
+                    // 外部浏览器打开:app 内没有浏览器壳,塞进 webview 只会把人困在 webview 里。
+                    // 失败要说出来 —— 静默失败会让用户以为按钮是坏的(本仓最烂的 bug 类型)。
+                    openUrl(kAfdianSponsorUrl).catch((e) =>
+                      say(`打不开浏览器：${e}。请手动访问 ${kAfdianSponsorUrl}`, true),
+                    )
+                  }
+                >
+                  前往爱发电赞助
+                </button>
+              </div>
               <div className="caption-note cal-gate-note">
-                赞助入口链接待接（dev 待办），暂无法从这里直接跳转下单。
+                赞助后在爱发电订单详情复制订单号，填入上方解锁本机。
               </div>
             </div>
           ) : entries == null ? (
@@ -250,9 +271,9 @@ export default function CalendarPage({ onBack }: Props) {
                           <EvtCard
                             key={`${ev.entry.title}-${j}`}
                             evt={ev}
-                            onClick={() =>
-                              say("跨服查找可播源需聚合搜索接线，后端待接")
-                            }
+                            // 用剧名而非「剧名 + 集号」去查:集号是放送表的信息,
+                            // 服务器上的条目名里未必带,带上反而搜不到。
+                            onClick={() => setPick(ev.entry.title)}
                           />
                         ))}
                       </div>
@@ -264,6 +285,8 @@ export default function CalendarPage({ onBack }: Props) {
           )}
         </div>
       </div>
+
+      {pick && <SourcePicker title={pick} onClose={() => setPick(null)} />}
 
       {toast && (
         <div className={toast.error ? "toast error" : "toast"}>{toast.msg}</div>

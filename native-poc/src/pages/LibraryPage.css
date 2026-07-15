@@ -58,12 +58,41 @@
 
 /* ---------- 顶栏锚定下拉(排序/筛选,复用全局 .dd/.li) ---------- */
 .lib-ddwrap { position: relative; display: inline-flex; }
-.lib-dd { top: calc(100% + 6px); right: 0; left: auto; }
+/* 分面(尤其年份)能有上百项 → 浮层自己滚,别把顶栏撑穿屏幕。 */
+.lib-dd { top: calc(100% + 6px); right: 0; left: auto; max-height: 60vh; overflow-y: auto; }
 .lib-dd .lib-dd-note {
   padding: 8px 9px;
   font-size: 11.5px;
   color: var(--ink-3);
   line-height: 1.5;
+}
+/* 分面小节标题(类型/标签/年份/评分) */
+.lib-dd-sec {
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 10px 9px 4px;
+}
+/* 多选用方框,单选(排序/评分)才用 .rad 圆点 —— 形状就得告诉用户能不能多选。 */
+.lib-dd .li .chk {
+  width: 13px; height: 13px;
+  border-radius: 3px;
+  border: 1px solid var(--line-strong);
+  flex: 0 0 auto;
+}
+.lib-dd .li.on .chk {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--bg);
+}
+
+/* 「加载更多」(服务端分页,不做无限滚动) */
+.lib-more {
+  display: flex;
+  justify-content: center;
+  padding: 8px 18px 4px;
 }
 /* 关下拉的透明背板,置于 .dd(z 30) 之下 */
 .lib-ddscrim { position: fixed; inset: 0; z-index: 29; }

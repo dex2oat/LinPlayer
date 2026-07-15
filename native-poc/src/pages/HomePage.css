@@ -29,6 +29,18 @@
 .hm-rail:hover .hm-arrow { opacity: 1; }
 .hm-arrow:hover { color: var(--ink); border-color: var(--accent); }
 
+/* ---------- Hero logo 标题(标注 6:「大幅剧照 + logo 标题」) ---------- */
+/* logo 是带透明底的 PNG,尺寸各片差得很多 → 限高 + max-width 收着,object-fit:contain 不变形。
+   浅色主题下白色 logo 会糊在米黄底上 → 补一层暗投影把边缘勾出来。 */
+.hm-herologo {
+  max-height: 92px;
+  max-width: 100%;
+  object-fit: contain;
+  object-position: left bottom;
+  display: block;
+  filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.55));
+}
+
 /* ---------- Hero 左右热区翻页(标注 6) ---------- */
 .hm-hot {
   position: absolute; top: 0; bottom: 0;

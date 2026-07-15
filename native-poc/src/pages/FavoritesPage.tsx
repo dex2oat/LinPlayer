@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { type Item, type LoginResult, listFavorites, posterUrl, setFavorite } from "../lib/api";
+import { type Item, type LoginResult, listFavorites, posterUrl, setFavorite, setPlayed } from "../lib/api";
 import Poster from "../components/Poster";
 // 视图切换图标复用媒体库那套(icons.tsx 没有网格/列表图标且不许改,不重画一遍)。
 // 顺带把 LibraryPage.css 显式带进来:收藏页复用 .lib-ddwrap/.lib-dd/.lib-list/.lib-row —— 草稿说收藏页「和媒体库同款」。
 import { IconGrid, IconRows } from "./LibraryPage";
 import "./LibraryPage.css";
 import {
+  IconCheck,
   IconChevronDown,
   IconChevronRight,
   IconHeart,
   IconInfo,
-  IconList,
   IconPlay,
 } from "../app/icons";
 
@@ -80,6 +80,18 @@ export default function FavoritesPage({ session, onOpenItem, onPlay }: Props) {
         .then(setItems)
         .catch(() => {});
     });
+  }
+
+  /** 标注 36:标记已看/未看。反显靠 Item.played(服务端给的)→ 改完重拉收藏表。
+      收藏表不会因为标记已看而变化,所以这里重拉是纯粹为了拿新的 played 值。 */
+  async function markPlayed(it: Item, played: boolean) {
+    setCtx(null);
+    try {
+      await setPlayed(it.id, played);
+      setItems(await listFavorites());
+    } catch (e) {
+      setToast(`标记失败:${e}`);
+    }
   }
 
   const shown = useMemo(() => {
@@ -221,15 +233,8 @@ export default function FavoritesPage({ session, onOpenItem, onPlay }: Props) {
           >
             <IconInfo size={15} /> 查看详情
           </div>
-          <div
-            className="mi"
-            onClick={() => {
-              // 后端没有 markPlayed 命令 → 诚实告知,不给假反馈。
-              setToast("「标记已看」后端待接");
-              setCtx(null);
-            }}
-          >
-            <IconList size={15} /> 标记已看
+          <div className="mi" onClick={() => void markPlayed(ctx.item, !ctx.item.played)}>
+            <IconCheck size={15} /> {ctx.item.played ? "标记未看" : "标记已看"}
           </div>
           <div
             className="mi danger"
