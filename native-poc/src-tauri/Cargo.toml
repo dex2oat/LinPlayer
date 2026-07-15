@@ -14,6 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 linplayer-core = { path = "../crates/core" }
+dirs = "5"                                   # 截图/shader 落盘目录(与 core 的 config_path 同源)
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }

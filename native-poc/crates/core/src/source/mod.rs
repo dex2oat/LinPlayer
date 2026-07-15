@@ -9,9 +9,10 @@ pub mod openlist;
 pub mod quark;
 pub mod quark_tv;
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceKind {
+    #[default]
     Emby,
     Openlist,
     Quark,
@@ -100,7 +101,8 @@ impl std::fmt::Display for SourceError {
 }
 
 /// 一个浏览型源服务器的连接凭据。对齐 Dart ServerConfig 的相关字段。
-#[derive(Clone, Default)]
+/// serde:源服务器要随 AppConfig 落盘(重启免登 + 多源并存),故必须可序列化。
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct SourceServer {
     pub id: String,
     pub base_url: String, // activeLineUrl,后端内部 normalize

@@ -44,16 +44,30 @@ fn decrypt_config(b64s: &str, key: &[u8; 32]) -> Option<String> {
     Some(String::from_utf8_lossy(&pt).to_string())
 }
 
-// PoC Account(server/token/user_id/user_name)↔ CommonServiceConfig(snake_case)。
+// Account ↔ CommonServiceConfig(snake_case)。
+// CommonConfig 是跨客户端交换格式,所以通用字段(type/url/access_token…)保持原样;
+// LinPlayer 独有的服务器设置(线路/备注/图标/源类型)挂在 `linplayer` 子对象里 ——
+// 别的客户端读到未知键会忽略,而我们扫码搬家时不丢用户攒的线路和备注。
 fn account_to_common(a: &Account) -> serde_json::Value {
     serde_json::json!({
         "type": "emby",
-        "id": a.server,          // PoC 以 server 为身份(config.upsert 按 server 去重)
+        "id": a.server,          // 以 server 为身份(config.upsert 按 server 去重)
         "name": a.user_name,
         "url": a.server,
         "username": a.user_name,
         "user_id": a.user_id,
         "access_token": a.token,
+        "linplayer": {
+            "name": a.name,
+            "remark": a.remark,
+            "icon_url": a.icon_url,
+            "password": a.password,
+            "lines": a.lines,
+            "active_line": a.active_line,
+            "allow_insecure_tls": a.allow_insecure_tls,
+            "source_kind": a.source_kind,
+            "source": a.source,
+        },
     })
 }
 
@@ -62,11 +76,25 @@ fn common_to_account(j: &serde_json::Value) -> Option<Account> {
     if server.is_empty() {
         return None;
     }
+    // 别家客户端导出的配置没有 `linplayer` 段,整段缺失时全部走默认值。
+    let ext = &j["linplayer"];
+    fn field<T: serde::de::DeserializeOwned + Default>(ext: &serde_json::Value, k: &str) -> T {
+        serde_json::from_value(ext[k].clone()).unwrap_or_default()
+    }
     Some(Account {
         server,
         token: j["access_token"].as_str().unwrap_or("").to_string(),
         user_id: j["user_id"].as_str().unwrap_or("").to_string(),
         user_name: j["username"].as_str().or_else(|| j["name"].as_str()).unwrap_or("").to_string(),
+        name: field(ext, "name"),
+        remark: field(ext, "remark"),
+        icon_url: field(ext, "icon_url"),
+        password: field(ext, "password"),
+        lines: field(ext, "lines"),
+        active_line: field(ext, "active_line"),
+        allow_insecure_tls: field(ext, "allow_insecure_tls"),
+        source_kind: field(ext, "source_kind"),
+        source: field(ext, "source"),
     })
 }
 
@@ -151,6 +179,7 @@ pub fn merge(existing: &[Account], incoming: Vec<Account>) -> Vec<Account> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ServerLine;
 
     fn acc(server: &str, name: &str) -> Account {
         Account {
@@ -158,6 +187,7 @@ mod tests {
             token: "tok-secret".into(),
             user_id: "uid1".into(),
             user_name: name.into(),
+            ..Default::default()
         }
     }
 
@@ -173,6 +203,48 @@ mod tests {
         assert_eq!(decoded[0].server, "https://a.example.com");
         assert_eq!(decoded[0].token, "tok-secret");
         assert_eq!(decoded[1].user_name, "Bob");
+    }
+
+    #[test]
+    fn roundtrip_carries_linplayer_server_settings() {
+        // 回归:扫码搬家必须把用户攒的线路/备注/图标/源类型一起搬走,不能只搬 token。
+        let a = Account {
+            name: "我的服".into(),
+            remark: Some("家里那台".into()),
+            icon_url: Some("https://icon".into()),
+            allow_insecure_tls: true,
+            active_line: 1,
+            lines: vec![
+                ServerLine { id: "1".into(), name: "直连".into(), url: "https://d".into(), remark: None },
+                ServerLine { id: "2".into(), name: "CDN".into(), url: "https://c".into(), remark: Some("快".into()) },
+            ],
+            ..acc("https://a.example.com", "小明")
+        };
+        let decoded = decode(&encode(&[a], 1_700_000_000)).unwrap();
+        let g = &decoded[0];
+        assert_eq!(g.name, "我的服");
+        assert_eq!(g.remark.as_deref(), Some("家里那台"));
+        assert_eq!(g.icon_url.as_deref(), Some("https://icon"));
+        assert!(g.allow_insecure_tls);
+        assert_eq!(g.active_line, 1);
+        assert_eq!(g.lines.len(), 2, "线路不能在搬家路上丢");
+        assert_eq!(g.lines[1].url, "https://c");
+        assert_eq!(g.lines[1].remark.as_deref(), Some("快"));
+    }
+
+    #[test]
+    fn foreign_client_payload_without_linplayer_section_still_loads() {
+        // 别家客户端导出的 CommonConfig 没有 linplayer 段,必须能读且全走默认值。
+        let j = serde_json::json!({
+            "type": "emby", "id": "x", "url": "https://foreign/",
+            "name": "n", "username": "u", "user_id": "uid", "access_token": "t",
+        });
+        let a = common_to_account(&j).expect("别家配置必须能读进来");
+        assert_eq!(a.server, "https://foreign", "尾斜杠要归一化");
+        assert_eq!(a.token, "t");
+        assert!(a.lines.is_empty());
+        assert!(!a.allow_insecure_tls, "缺字段必须默认严格校验 TLS,不能默认放行");
+        assert!(matches!(a.source_kind, crate::source::SourceKind::Emby));
     }
 
     #[test]

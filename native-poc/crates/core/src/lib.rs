@@ -13,6 +13,8 @@ pub mod ranking;
 pub mod secrets;
 pub mod source;
 pub mod sync;
+pub mod translation;
+pub mod watch_history;
 
 pub use config::{Account, AppConfig, Prefs, ProxyConfig};
 pub use emby::{Item, LoginResult, PlaybackTarget, Session};

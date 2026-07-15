@@ -318,6 +318,154 @@ impl Player {
             self.set_str("sid", &s);
         }
     }
+
+    // ================= 播放器能力面 =================
+    // 对齐旧 Flutter 三端契约 lib/core/services/video_player_service.dart。
+    // 之前只搬了 load/pause/seek/track 这几样,草稿要的倍速/音量/截图/画面比例/延迟/
+    // 字幕样式/超分全没搬 → UI 上就是一排"点了没反应"的死按钮。这里补齐。
+
+    /// 通用属性读/写 + 命令。插件桥和一次性调参靠它(Flutter 的 mpvGetProperty/
+    /// mpvSetProperty/mpvCommand 同源);有专用方法的优先用专用方法。
+    pub fn get_property(&self, name: &str) -> Option<String> {
+        self.get_str(name)
+    }
+    pub fn set_property(&self, name: &str, value: &str) {
+        self.set_str(name, value);
+    }
+    pub fn command(&self, args: &[String]) -> Result<(), String> {
+        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        self.cmd(&refs)
+    }
+
+    /// 倍速。mpv 的 speed 同时变调,配 audio-pitch-correction(默认开)保音高。
+    pub fn set_speed(&self, speed: f64) {
+        self.set_str("speed", &speed.clamp(0.1, 6.0).to_string());
+    }
+    pub fn speed(&self) -> f64 {
+        let v = self.get_f64("speed");
+        if v <= 0.0 { 1.0 } else { v }
+    }
+
+    /// 音量 0..=130(mpv 上限 130 是软增益)。
+    pub fn set_volume(&self, vol: f64) {
+        self.set_str("volume", &vol.clamp(0.0, 130.0).to_string());
+    }
+    pub fn volume(&self) -> f64 {
+        self.get_f64("volume")
+    }
+    pub fn set_mute(&self, mute: bool) {
+        self.set_str("mute", if mute { "yes" } else { "no" });
+    }
+    pub fn muted(&self) -> bool {
+        self.get_str("mute").as_deref() == Some("yes")
+    }
+
+    /// 截图到文件。用 screenshot-to-file 而非 screenshot-raw:后者要走 mpv_node
+    /// 取原始像素再自己编码,而我们只需要落一个 png 给用户。
+    /// each-frame=no;"video" = 不带 OSD/字幕的原始画面。
+    pub fn screenshot_to(&self, path: &str) -> Result<(), String> {
+        self.cmd(&["screenshot-to-file", path, "video"])
+    }
+
+    /// 音画同步:音频延迟(秒,可负)。
+    pub fn set_audio_delay(&self, secs: f64) {
+        self.set_str("audio-delay", &secs.to_string());
+    }
+    pub fn audio_delay(&self) -> f64 {
+        self.get_f64("audio-delay")
+    }
+    /// 字幕延迟(秒,可负)。
+    pub fn set_sub_delay(&self, secs: f64) {
+        self.set_str("sub-delay", &secs.to_string());
+    }
+    pub fn sub_delay(&self) -> f64 {
+        self.get_f64("sub-delay")
+    }
+
+    /// 画面比例。"" / "-1" = 还原源比例(mpv 用 video-aspect-override=-1 复位)。
+    pub fn set_aspect_ratio(&self, ratio: &str) {
+        let v = if ratio.is_empty() || ratio == "auto" { "-1" } else { ratio };
+        self.set_str("video-aspect-override", v);
+    }
+
+    /// 硬解档位。零拷贝(d3d11va)在 Win 上是默认最佳;软解排查问题用 "no"。
+    /// 见 [[desktop-double-audio-orphan-player]]:Win 默认 d3d11va 零拷贝。
+    pub fn set_hwdec(&self, mode: &str) {
+        self.set_str("hwdec", mode);
+    }
+    pub fn hwdec(&self) -> String {
+        self.get_str("hwdec-current")
+            .or_else(|| self.get_str("hwdec"))
+            .unwrap_or_default()
+    }
+
+    // ---- 字幕样式(对齐 Flutter setSubtitleFont/Size/Position/Background/BlendMode)----
+    pub fn set_sub_font(&self, font: &str) {
+        // 「默认」是 UI 占位,不该塞给 libass(见 [[android-mpv-subtitle-fonts]] 同款守卫)。
+        if font.is_empty() || font == "默认" {
+            return;
+        }
+        self.set_str("sub-font", font);
+    }
+    pub fn set_sub_size(&self, size: f64) {
+        self.set_str("sub-font-size", &size.clamp(10.0, 200.0).to_string());
+    }
+    /// 字幕竖直位置 0(顶)..100(底)。mpv 只收整数(见 [[macos-no-video-hwdec]])。
+    pub fn set_sub_position(&self, pos: f64) {
+        self.set_str("sub-pos", &(pos.clamp(0.0, 100.0).round() as i64).to_string());
+    }
+    pub fn set_sub_background(&self, enabled: bool) {
+        // 半透明黑底 vs 全透明;ASS 自带样式的字幕不受此影响。
+        self.set_str("sub-back-color", if enabled { "#80000000" } else { "#00000000" });
+    }
+    pub fn set_sub_blend_mode(&self, mode: &str) {
+        self.set_str("blend-subtitles", mode);
+    }
+
+    // ---- 次字幕/双字幕(对齐 Flutter loadSecondarySubtitle/selectSecondary…)----
+    pub fn set_secondary_sub(&self, id: &str) {
+        self.set_str("secondary-sid", if id.is_empty() { "no" } else { id });
+    }
+    pub fn add_secondary_sub(&self, url: &str, title: &str) -> Result<(), String> {
+        // sub-add 挂上后再指给 secondary-sid;取新挂那条(sub 列表末尾)。
+        self.cmd(&["sub-add", url, "auto", title])?;
+        if let Some(id) = self.last_sub_id() {
+            self.set_secondary_sub(&id);
+        }
+        Ok(())
+    }
+    pub fn set_secondary_sub_delay(&self, secs: f64) {
+        self.set_str("secondary-sub-delay", &secs.to_string());
+    }
+    pub fn set_secondary_sub_position(&self, pos: f64) {
+        self.set_str("secondary-sub-pos", &(pos.clamp(0.0, 100.0).round() as i64).to_string());
+    }
+    /// 最后一条字幕轨的 id(sub-add 之后取新挂的那条)。
+    fn last_sub_id(&self) -> Option<String> {
+        self.tracks()
+            .into_iter()
+            .filter(|t| t.kind == "sub")
+            .next_back()
+            .map(|t| t.id)
+    }
+
+    /// 超分(Anime4K):按档位挂 glsl-shaders。空列表 = 关。
+    /// 传绝对路径列表;mpv 的 glsl-shaders 用 ; 分隔,路径里的 ; 和 " 需转义。
+    pub fn set_shaders(&self, paths: &[String]) {
+        if paths.is_empty() {
+            self.set_str("glsl-shaders", "");
+            return;
+        }
+        let joined = paths.join(";");
+        self.set_str("glsl-shaders", &joined);
+    }
+    /// 实际挂上的 shader 数(用于校验超分是否真生效 —— 见 [[superres-and-toast]]:
+    /// 旧 Flutter 桌面端软件纹理根本不跑 glsl-shader,回读才知道)。
+    pub fn shader_count(&self) -> usize {
+        self.get_str("glsl-shaders")
+            .map(|s| s.split(';').filter(|x| !x.trim().is_empty()).count())
+            .unwrap_or(0)
+    }
 }
 
 impl Drop for Player {

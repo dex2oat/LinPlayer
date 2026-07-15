@@ -1,10 +1,16 @@
 // 弹幕核:弹弹Play 官方源(签名)+ 自建源(none/pathToken/headerToken/queryToken)统一由 config 驱动。
-// 对齐 Dart lib/core/api/danmaku/(dandan_signing + danmaku_source)。
+// 对齐 Dart lib/core/api/danmaku/(dandan_signing + danmaku_source)、lib/core/utils/
+// (danmaku_matcher + danmaku_filter + danmaku_postprocess)、danmaku_cache。
 // 签名:X-Signature = Base64(SHA256(AppId + Timestamp + Path + AppSecret))。
 use base64::Engine;
+use md5::Md5;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -30,8 +36,8 @@ pub struct DanmakuSourceConfig {
     pub app_secret: Option<String>,
 }
 
-/// 一条弹幕(归一化)。
-#[derive(Serialize, Clone)]
+/// 一条弹幕(归一化)。Deserialize 供磁盘缓存回读。
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct DanmakuComment {
     pub time: f64,
     pub text: String,
@@ -40,16 +46,22 @@ pub struct DanmakuComment {
     pub source: String,
     pub cid: Option<String>,
     pub user_id: Option<String>,
+    /// 去重后同一弹幕出现的次数(对齐 Dart DanmakuItem.count),未去重恒为 1。
+    #[serde(default = "one")]
+    pub count: i32,
+}
+fn one() -> i32 {
+    1
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct DanmakuEpisode {
     pub episode_id: String,
     pub episode_title: String,
     pub episode_number: Option<String>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct DanmakuAnime {
     pub anime_id: String,
     pub anime_title: String,
@@ -59,6 +71,27 @@ pub struct DanmakuAnime {
     pub year: Option<i64>,
     pub episode_count: Option<i64>,
     pub episodes: Vec<DanmakuEpisode>,
+}
+
+/// 文件识别命中项。对齐 Dart DanmakuMatchItem。
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct DanmakuMatchItem {
+    pub episode_id: String,
+    pub anime_id: String,
+    pub anime_title: String,
+    pub episode_title: String,
+    pub type_: Option<String>,
+    pub type_description: Option<String>,
+    pub shift: Option<i64>,
+    pub source_id: String,
+    pub source_name: String,
+}
+
+/// 对齐 Dart DanmakuMatchResult。
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct DanmakuMatchResult {
+    pub is_matched: bool,
+    pub matches: Vec<DanmakuMatchItem>,
 }
 
 const OFFICIAL_BASE: &str = "https://api.dandanplay.net";
@@ -180,8 +213,12 @@ fn parse_comment(d: &Value, source: &str) -> DanmakuComment {
         mode: p.get(1).and_then(|s| s.parse().ok()).unwrap_or(1),
         color: p.get(2).and_then(|s| s.parse().ok()).unwrap_or(16777215),
         source: source.to_string(),
-        cid: d["cid"].as_str().map(|s| s.to_string()),
+        cid: d["cid"]
+            .as_str()
+            .map(|s| s.to_string())
+            .or_else(|| d["cid"].as_i64().map(|n| n.to_string())),
         user_id: p.get(3).map(|s| s.to_string()),
+        count: 1,
     }
 }
 
@@ -298,6 +335,851 @@ pub async fn get_comments(
     Ok(parse_comments(&v["comments"], &cfg.name))
 }
 
+/// 文件识别:POST /match。对齐 Dart DanmakuSource.match。
+pub async fn match_file(
+    http: &reqwest::Client,
+    cfg: &DanmakuSourceConfig,
+    file_name: &str,
+    file_hash: Option<&str>,
+    file_size: Option<i64>,
+    video_duration: Option<f64>,
+) -> Result<DanmakuMatchResult, String> {
+    let (headers, query) = cfg.auth_parts("/match");
+    let body = serde_json::json!({
+        "fileName": file_name,
+        "fileHash": file_hash.unwrap_or(""),
+        "fileSize": file_size.unwrap_or(0),
+        "videoDuration": video_duration.unwrap_or(0.0),
+    });
+    let mut req = http.post(cfg.endpoint_url("/match")).json(&body);
+    for (k, v) in &headers {
+        req = req.header(k.as_str(), v);
+    }
+    if !query.is_empty() {
+        req = req.query(&query);
+    }
+    let v: Value = req
+        .send()
+        .await
+        .map_err(|e| format!("弹幕匹配失败: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("弹幕匹配解析失败: {e}"))?;
+    Ok(parse_match_result(&v, cfg))
+}
+
+fn parse_match_result(data: &Value, cfg: &DanmakuSourceConfig) -> DanmakuMatchResult {
+    let str_of = |v: &Value| -> String {
+        v.as_str()
+            .map(String::from)
+            .or_else(|| v.as_i64().map(|n| n.to_string()))
+            .unwrap_or_default()
+    };
+    let matches = data["matches"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|m| DanmakuMatchItem {
+                    episode_id: str_of(&m["episodeId"]),
+                    anime_id: str_of(&m["animeId"]),
+                    anime_title: m["animeTitle"].as_str().unwrap_or("").to_string(),
+                    episode_title: m["episodeTitle"].as_str().unwrap_or("").to_string(),
+                    type_: m["type"].as_str().map(String::from),
+                    type_description: m["typeDescription"].as_str().map(String::from),
+                    shift: m["shift"].as_i64(),
+                    source_id: cfg.id.clone(),
+                    source_name: cfg.name.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    DanmakuMatchResult {
+        is_matched: data["isMatched"].as_bool().unwrap_or(false),
+        matches,
+    }
+}
+
+// ---------- 多源并行(用户自己挑) ----------
+
+/// 单个弹幕源的查询结果。对齐 Dart DanmakuSourceGroup —— 一源一组,单源失败不拖累别人。
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct DanmakuSourceGroup {
+    pub source_id: String,
+    pub source_name: String,
+    pub animes: Vec<DanmakuAnime>,
+    pub matches: Vec<DanmakuMatchItem>,
+    /// 该源失败时的错误串(其余源照常返回)。
+    pub error: Option<String>,
+}
+
+impl DanmakuSourceGroup {
+    pub fn is_empty(&self) -> bool {
+        self.animes.is_empty() && self.matches.is_empty()
+    }
+}
+
+/// 并行向所有传入源做集数搜索,分源返回(顺序与 `cfgs` 一致,便于 UI 稳定列表)。
+/// 对齐 Dart DanmakuService.searchAllGrouped。
+/// ponytail: 不做 Dart 的 searchAllStreamed(边搜边显示)—— Tauri 侧 IPC 一次性返回即可,
+/// 真要流式再上 Channel。
+pub async fn search_all_grouped(
+    http: &reqwest::Client,
+    cfgs: &[DanmakuSourceConfig],
+    keyword: &str,
+) -> Vec<DanmakuSourceGroup> {
+    let keyword = keyword.to_string();
+    parallel_by_source(http, cfgs, |http, cfg| {
+        let keyword = keyword.clone();
+        async move {
+            match search_episodes(&http, &cfg, Some(&keyword), None).await {
+                Ok(animes) => DanmakuSourceGroup {
+                    source_id: cfg.id,
+                    source_name: cfg.name,
+                    animes,
+                    ..Default::default()
+                },
+                Err(e) => DanmakuSourceGroup {
+                    source_id: cfg.id,
+                    source_name: cfg.name,
+                    error: Some(e),
+                    ..Default::default()
+                },
+            }
+        }
+    })
+    .await
+    .into_iter()
+    .collect()
+}
+
+/// 并行向所有传入源做文件识别,分源返回候选。对齐 Dart DanmakuService.matchAllGrouped。
+pub async fn match_all_grouped(
+    http: &reqwest::Client,
+    cfgs: &[DanmakuSourceConfig],
+    input: &MatchInput,
+) -> Vec<DanmakuSourceGroup> {
+    let input = input.clone();
+    parallel_by_source(http, cfgs, |http, cfg| {
+        let input = input.clone();
+        async move {
+            match match_file(
+                &http,
+                &cfg,
+                &input.file_name,
+                input.file_hash.as_deref(),
+                input.file_size,
+                input.duration_secs,
+            )
+            .await
+            {
+                Ok(r) => DanmakuSourceGroup {
+                    source_id: cfg.id,
+                    source_name: cfg.name,
+                    matches: r.matches,
+                    ..Default::default()
+                },
+                Err(e) => DanmakuSourceGroup {
+                    source_id: cfg.id,
+                    source_name: cfg.name,
+                    error: Some(e),
+                    ..Default::default()
+                },
+            }
+        }
+    })
+    .await
+}
+
+/// 逐源并行跑 `f`,结果按 `cfgs` 原顺序归位(JoinSet 完成顺序是乱的)。
+/// 与 download.rs / net::cf::speedtest 同款 JoinSet 姿势。
+async fn parallel_by_source<F, Fut, T>(
+    http: &reqwest::Client,
+    cfgs: &[DanmakuSourceConfig],
+    f: F,
+) -> Vec<T>
+where
+    F: Fn(reqwest::Client, DanmakuSourceConfig) -> Fut,
+    Fut: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let mut set = tokio::task::JoinSet::new();
+    for (i, cfg) in cfgs.iter().enumerate() {
+        // reqwest::Client 内部是 Arc,clone 极廉价且共享同一连接池。
+        let fut = f(http.clone(), cfg.clone());
+        set.spawn(async move { (i, fut.await) });
+    }
+    let mut slots: Vec<Option<T>> = (0..cfgs.len()).map(|_| None).collect();
+    while let Some(r) = set.join_next().await {
+        if let Ok((i, v)) = r {
+            slots[i] = Some(v);
+        }
+    }
+    slots.into_iter().flatten().collect()
+}
+
+// ---------- 智能集数匹配(逐字对齐 Dart DanmakuMatcher) ----------
+
+/// 一条匹配候选(某源的某作品的某一集)。对齐 Dart DanmakuMatchCandidate。
+#[derive(Serialize, Clone, Debug)]
+pub struct DanmakuMatchCandidate {
+    pub source_id: String,
+    pub source_name: String,
+    pub anime_id: String,
+    pub anime_title: String,
+    pub episode_id: String,
+    pub episode_title: String,
+    /// 排序分(越大越可信)。
+    pub score: f64,
+}
+
+/// 匹配输入。core 不认 Emby Item(emby::Item 没有 path 字段,且网盘/聚合源没有 Emby
+/// 上下文),由宿主用 [`resolve_title`] / [`resolve_file_name`] 装好再传进来。
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MatchInput {
+    /// 作品标题(剧集用 seriesName,否则条目名)。
+    pub title: String,
+    /// 集号(剧集才有)。
+    pub episode_no: Option<i64>,
+    /// 真实文件名(文件识别用)。
+    pub file_name: String,
+    pub file_hash: Option<String>,
+    pub file_size: Option<i64>,
+    /// 视频时长(秒)。
+    pub duration_secs: Option<f64>,
+}
+
+/// 自动加载可信度阈值:低于此分不该自动上屏。对齐 Dart DanmakuAutoLoader._minScore。
+pub const MIN_AUTO_SCORE: f64 = 0.5;
+
+/// 剧集用 seriesName,否则用条目名。对齐 Dart DanmakuMatcher.resolveTitle。
+pub fn resolve_title(series_name: Option<&str>, name: &str) -> String {
+    match series_name.map(str::trim) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => name.trim().to_string(),
+    }
+}
+
+/// 真实文件名:优先 path 的 basename(Emby 存的是发布文件名,文件识别最准),无则退条目名。
+/// 对齐 Dart DanmakuMatcher._resolveFileName。
+pub fn resolve_file_name(path: Option<&str>, name: &str) -> String {
+    if let Some(p) = path.filter(|p| !p.is_empty()) {
+        let norm = p.replace('\\', "/");
+        let base = norm.rsplit('/').next().unwrap_or(&norm);
+        if !base.is_empty() {
+            return base.to_string();
+        }
+    }
+    name.to_string()
+}
+
+/// 时长 ticks → 秒。对齐 Dart DanmakuMatcher.resolveDurationSeconds。
+pub fn duration_secs_from_ticks(ticks: Option<i64>) -> Option<f64> {
+    ticks.filter(|t| *t > 0).map(|t| t as f64 / 10_000_000.0)
+}
+
+/// 是否动漫(决定是否放行官方弹弹Play:动漫专库,给电视剧/电影匹配会出乱七八糟的弹幕)。
+/// 逐字对齐 Dart MediaItem.isAnime —— genres 与 tags 一起丢进来即可。
+/// 注:Dart 的「剧集缺 genres → 拉 series 再判」回退需要 Emby 客户端,留给宿主。
+pub fn is_anime(genres_and_tags: &[String]) -> bool {
+    const KW: [&str; 11] = [
+        "动画", "动漫", "動畫", "動漫", "番剧", "番劇", "二次元", "卡通", "anime", "アニメ",
+        "animation",
+    ];
+    genres_and_tags.iter().any(|g| {
+        let l = g.to_lowercase();
+        KW.iter().any(|k| l.contains(k))
+    })
+}
+
+/// 并行向所有传入源做智能匹配,返回按可信度降序的候选。对齐 Dart DanmakuMatcher.matchAll。
+/// 官方弹弹Play 是否参与由宿主决定(用 [`is_anime`] 判后从 `cfgs` 里剔除),对齐 Dart 的
+/// sourcesFor(allowOfficial:)。
+pub async fn match_all(
+    http: &reqwest::Client,
+    cfgs: &[DanmakuSourceConfig],
+    input: &MatchInput,
+) -> Vec<DanmakuMatchCandidate> {
+    if input.title.trim().is_empty() {
+        return Vec::new();
+    }
+    let input2 = input.clone();
+    let per_source = parallel_by_source(http, cfgs, |http, cfg| {
+        let input = input2.clone();
+        async move { match_one(&http, &cfg, &input).await }
+    })
+    .await;
+    let mut all: Vec<DanmakuMatchCandidate> = per_source.into_iter().flatten().collect();
+    // 降序;NaN 不可能出现(分值全是有限算术)。
+    all.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    all
+}
+
+/// 弹弹Play 官方推荐两条路径都跑:①文件识别 /match ②名字搜索 /search/episodes。
+/// 两路**并行**再合并去重(同源同集保留高分)。对齐 Dart DanmakuMatcher._matchOne。
+async fn match_one(
+    http: &reqwest::Client,
+    cfg: &DanmakuSourceConfig,
+    input: &MatchInput,
+) -> Vec<DanmakuMatchCandidate> {
+    let (by_search, by_file) = tokio::join!(
+        search_candidates(http, cfg, input),
+        match_by_file_candidates(http, cfg, input),
+    );
+    let mut by_ep: HashMap<String, DanmakuMatchCandidate> = HashMap::new();
+    for c in by_search.into_iter().chain(by_file) {
+        let key = format!("{}|{}", c.source_id, c.episode_id);
+        match by_ep.get(&key) {
+            Some(prev) if prev.score >= c.score => {}
+            _ => {
+                by_ep.insert(key, c);
+            }
+        }
+    }
+    by_ep.into_values().collect()
+}
+
+/// ②名字搜索:searchEpisodes(anime, episode) 服务端按集号收窄,无果退纯剧名。
+/// 对齐 Dart DanmakuMatcher._searchCandidates。失败静默(返回空)。
+async fn search_candidates(
+    http: &reqwest::Client,
+    cfg: &DanmakuSourceConfig,
+    input: &MatchInput,
+) -> Vec<DanmakuMatchCandidate> {
+    let ep_str = input.episode_no.map(|n| n.to_string());
+    let mut animes =
+        match search_episodes(http, cfg, Some(&input.title), ep_str.as_deref()).await {
+            Ok(a) => a,
+            Err(_) => return Vec::new(),
+        };
+    if animes.is_empty() && input.episode_no.is_some() {
+        animes = search_episodes(http, cfg, Some(&input.title), None)
+            .await
+            .unwrap_or_default();
+    }
+    animes
+        .into_iter()
+        .filter_map(|anime| {
+            if anime.episodes.is_empty() {
+                return None;
+            }
+            let title_score = title_score(&input.title, &anime.anime_title);
+            let ep = pick_episode(&anime.episodes, input.episode_no)?;
+            Some(DanmakuMatchCandidate {
+                source_id: cfg.id.clone(),
+                source_name: cfg.name.clone(),
+                anime_id: anime.anime_id.clone(),
+                anime_title: anime.anime_title.clone(),
+                episode_id: ep.episode_id.clone(),
+                episode_title: ep.episode_title.clone(),
+                score: title_score + if episode_matches(ep, input.episode_no) { 0.3 } else { 0.0 },
+            })
+        })
+        .collect()
+}
+
+/// ①文件识别:真实文件名 + 时长调 /match。isMatched 且唯一命中最可信。
+/// 对齐 Dart DanmakuMatcher._matchByFileCandidates。失败静默(返回空)。
+async fn match_by_file_candidates(
+    http: &reqwest::Client,
+    cfg: &DanmakuSourceConfig,
+    input: &MatchInput,
+) -> Vec<DanmakuMatchCandidate> {
+    let r = match match_file(
+        http,
+        cfg,
+        &input.file_name,
+        input.file_hash.as_deref(),
+        input.file_size,
+        input.duration_secs,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    let confident = r.is_matched && r.matches.len() == 1;
+    r.matches
+        .into_iter()
+        .map(|m| DanmakuMatchCandidate {
+            source_id: cfg.id.clone(),
+            source_name: cfg.name.clone(),
+            anime_id: m.anime_id,
+            // 文件识别唯一命中最可信:给到高于名字搜索满分(标题1.0+集号0.3=1.3)的分,
+            // 确保排最前;否则按标题相似度 + 小加成。
+            score: if confident { 1.5 } else { title_score(&input.title, &m.anime_title) + 0.2 },
+            anime_title: m.anime_title,
+            episode_id: m.episode_id,
+            episode_title: m.episode_title,
+        })
+        .collect()
+}
+
+fn pick_episode(episodes: &[DanmakuEpisode], ep_num: Option<i64>) -> Option<&DanmakuEpisode> {
+    if episodes.is_empty() {
+        return None;
+    }
+    if let Some(n) = ep_num {
+        if let Some(ep) = episodes.iter().find(|ep| episode_matches(ep, Some(n))) {
+            return Some(ep);
+        }
+        // 集号越界时退回按位置取(部分源 episodeNumber 不规整)。
+        if n >= 1 && n <= episodes.len() as i64 {
+            return episodes.get((n - 1) as usize);
+        }
+    }
+    episodes.first()
+}
+
+fn episode_matches(ep: &DanmakuEpisode, ep_num: Option<i64>) -> bool {
+    let Some(n) = ep_num else { return false };
+    let raw = ep.episode_number.as_deref().unwrap_or("").trim();
+    if raw.is_empty() {
+        return false;
+    }
+    if let Ok(parsed) = raw.parse::<i64>() {
+        return parsed == n;
+    }
+    // episodeNumber 可能是 "第3话"/"03" 之类,抽首个数字串比对。
+    digits_re()
+        .find(raw)
+        .and_then(|m| m.as_str().parse::<i64>().ok())
+        .is_some_and(|d| d == n)
+}
+
+fn digits_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\d+").unwrap())
+}
+
+/// 逐字对齐 Dart DanmakuMatcher._normalize:小写 → 去标点/空白 → 去「第N季/部」→ trim。
+fn normalize(s: &str) -> String {
+    static PUNCT: OnceLock<Regex> = OnceLock::new();
+    static SEASON: OnceLock<Regex> = OnceLock::new();
+    let punct = PUNCT
+        .get_or_init(|| Regex::new(r"[\s\-_:：·・,，.。!！?？\[\]\(\)（）]").unwrap());
+    let season = SEASON
+        .get_or_init(|| Regex::new(r"第[一二三四五六七八九十\d]+[季部]").unwrap());
+    let lower = s.to_lowercase();
+    let no_punct = punct.replace_all(&lower, "");
+    season.replace_all(&no_punct, "").trim().to_string()
+}
+
+/// 标题相似度 0~1。完全相等 1,包含 0.7,否则字符二元组 Jaccard ×0.6。
+/// 逐字对齐 Dart DanmakuMatcher._titleScore。
+fn title_score(query: &str, candidate: &str) -> f64 {
+    let q = normalize(query);
+    let c = normalize(candidate);
+    if q.is_empty() || c.is_empty() {
+        return 0.0;
+    }
+    if q == c {
+        return 1.0;
+    }
+    if c.contains(&q) || q.contains(&c) {
+        return 0.7;
+    }
+    let qg = bigrams(&q);
+    let cg = bigrams(&c);
+    if qg.is_empty() || cg.is_empty() {
+        return 0.0;
+    }
+    let inter = qg.intersection(&cg).count();
+    let union = qg.union(&cg).count();
+    if union == 0 {
+        0.0
+    } else {
+        (inter as f64 / union as f64) * 0.6
+    }
+}
+
+fn bigrams(s: &str) -> std::collections::HashSet<String> {
+    // Dart 按 UTF-16 code unit 切;CJK/拉丁(BMP)下与 Rust char 等价。
+    let chars: Vec<char> = s.chars().collect();
+    let mut set = std::collections::HashSet::new();
+    for w in chars.windows(2) {
+        set.insert(w.iter().collect::<String>());
+    }
+    if chars.len() == 1 {
+        set.insert(s.to_string());
+    }
+    set
+}
+
+// ---------- 缓存(内存 LRU + 磁盘 JSON) ----------
+// 对齐 Dart DanmakuCache:key = `{sourceId}:{episodeId}`,内存 40 条,磁盘 TTL 7 天。
+// 磁盘目录走 config_dir()/LinPlayer/danmaku_cache(与 config.json 同根,独立文件不塞进配置)。
+
+const MEM_CAPACITY: usize = 40;
+const TTL_SECS: i64 = 7 * 24 * 3600;
+
+/// 访问顺序即 LRU 顺序(尾部最新)。
+/// ponytail: Vec 线性扫,40 条上限下 O(n) 无所谓;真要放大再换 LinkedHashMap。
+static MEM: Mutex<Vec<(String, Vec<DanmakuComment>)>> = Mutex::new(Vec::new());
+
+#[derive(Serialize, Deserialize)]
+struct CacheFile {
+    ts: i64,
+    source_id: String,
+    episode_id: String,
+    items: Vec<DanmakuComment>,
+}
+
+fn cache_key(source_id: &str, episode_id: &str) -> String {
+    format!("{source_id}:{episode_id}")
+}
+
+fn cache_dir() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("LinPlayer")
+        .join("danmaku_cache")
+}
+
+fn cache_file(key: &str) -> PathBuf {
+    let mut h = Md5::new();
+    h.update(key.as_bytes());
+    cache_dir().join(format!("{:x}.json", h.finalize()))
+}
+
+fn mem_touch(key: &str, items: &[DanmakuComment]) {
+    let Ok(mut m) = MEM.lock() else { return };
+    m.retain(|(k, _)| k != key);
+    m.push((key.to_string(), items.to_vec()));
+    while m.len() > MEM_CAPACITY {
+        m.remove(0);
+    }
+}
+
+fn mem_get(key: &str) -> Option<Vec<DanmakuComment>> {
+    let mut m = MEM.lock().ok()?;
+    let i = m.iter().position(|(k, _)| k == key)?;
+    let hit = m.remove(i); // 提升为最近使用
+    let items = hit.1.clone();
+    m.push(hit);
+    Some(items)
+}
+
+/// 读缓存。未命中 / 过期返回 None。
+/// ponytail: 用同步 std::fs —— 单集弹幕 JSON 几百 KB,阻塞可忽略;真卡了再 tokio::fs。
+pub fn cache_get(source_id: &str, episode_id: &str) -> Option<Vec<DanmakuComment>> {
+    if source_id.is_empty() || episode_id.is_empty() {
+        return None;
+    }
+    let key = cache_key(source_id, episode_id);
+    if let Some(hit) = mem_get(&key) {
+        return Some(hit);
+    }
+    let path = cache_file(&key);
+    let raw: CacheFile = serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+    if now_secs() - raw.ts > TTL_SECS {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
+    if raw.items.is_empty() {
+        return None;
+    }
+    mem_touch(&key, &raw.items);
+    Some(raw.items)
+}
+
+/// 写缓存(内存 + 磁盘)。空列表不写。磁盘写失败不影响内存缓存与本次播放。
+pub fn cache_put(source_id: &str, episode_id: &str, items: &[DanmakuComment]) {
+    if source_id.is_empty() || episode_id.is_empty() || items.is_empty() {
+        return;
+    }
+    let key = cache_key(source_id, episode_id);
+    mem_touch(&key, items);
+    let _ = std::fs::create_dir_all(cache_dir());
+    if let Ok(json) = serde_json::to_string(&CacheFile {
+        ts: now_secs(),
+        source_id: source_id.to_string(),
+        episode_id: episode_id.to_string(),
+        items: items.to_vec(),
+    }) {
+        let _ = std::fs::write(cache_file(&key), json);
+    }
+}
+
+/// 清空全部弹幕缓存(内存 + 磁盘)。返回删除的文件数。对齐 Dart DanmakuCache.clear。
+pub fn cache_clear() -> usize {
+    if let Ok(mut m) = MEM.lock() {
+        m.clear();
+    }
+    let Ok(rd) = std::fs::read_dir(cache_dir()) else { return 0 };
+    rd.flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter(|e| std::fs::remove_file(e.path()).is_ok())
+        .count()
+}
+
+/// 当前磁盘缓存占用字节数。对齐 Dart DanmakuCache.diskSizeBytes。
+pub fn cache_disk_size_bytes() -> u64 {
+    let Ok(rd) = std::fs::read_dir(cache_dir()) else { return 0 };
+    rd.flatten()
+        .filter_map(|e| e.metadata().ok())
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .sum()
+}
+
+/// 取某源某集弹幕,命中缓存秒载。对齐 Dart DanmakuService.getComments(sourceId:)。
+pub async fn get_comments_cached(
+    http: &reqwest::Client,
+    cfg: &DanmakuSourceConfig,
+    episode_id: &str,
+    ch_convert: i32,
+    use_cache: bool,
+) -> Result<Vec<DanmakuComment>, String> {
+    if use_cache {
+        if let Some(hit) = cache_get(&cfg.id, episode_id) {
+            if !hit.is_empty() {
+                return Ok(hit);
+            }
+        }
+    }
+    let items = get_comments(http, cfg, episode_id, ch_convert).await?;
+    if use_cache && !items.is_empty() {
+        cache_put(&cfg.id, episode_id, &items);
+    }
+    Ok(items)
+}
+
+/// 逐源尝试取弹幕,首个非空即返回;`preferred` 优先。对齐 Dart getCommentsFromAll。
+pub async fn get_comments_from_all(
+    http: &reqwest::Client,
+    cfgs: &[DanmakuSourceConfig],
+    episode_id: &str,
+    preferred: Option<&str>,
+    ch_convert: i32,
+) -> Vec<DanmakuComment> {
+    // 顺序(非并行)——对齐 Dart:命中即停,不给后面的源白发请求。
+    let order = cfgs
+        .iter()
+        .filter(|c| Some(c.id.as_str()) == preferred)
+        .chain(cfgs.iter().filter(|c| Some(c.id.as_str()) != preferred));
+    for cfg in order {
+        if let Ok(items) = get_comments_cached(http, cfg, episode_id, ch_convert, true).await {
+            if !items.is_empty() {
+                return items;
+            }
+        }
+    }
+    Vec::new()
+}
+
+// ---------- 过滤 + 去重 ----------
+
+/// 弹幕屏蔽器。对齐 Dart DanmakuFilter:文本屏蔽词 + 用户ID 屏蔽。
+#[derive(Clone, Debug, Default)]
+pub struct DanmakuFilter {
+    text_blockwords: Vec<String>,
+    user_blocklist: Vec<String>,
+}
+
+impl DanmakuFilter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn add_text_blockword(&mut self, word: &str) {
+        if !word.is_empty() && !self.text_blockwords.iter().any(|w| w == word) {
+            self.text_blockwords.push(word.to_string());
+        }
+    }
+
+    pub fn add_user_block(&mut self, user_id: &str) {
+        if !user_id.is_empty() && !self.user_blocklist.iter().any(|u| u == user_id) {
+            self.user_blocklist.push(user_id.to_string());
+        }
+    }
+
+    pub fn remove_text_blockword(&mut self, word: &str) {
+        self.text_blockwords.retain(|w| w != word);
+    }
+
+    pub fn remove_user_block(&mut self, user_id: &str) {
+        self.user_blocklist.retain(|u| u != user_id);
+    }
+
+    pub fn import_blockwords(&mut self, words: &[String]) {
+        for w in words {
+            self.add_text_blockword(w);
+        }
+    }
+
+    pub fn import_user_blocks(&mut self, ids: &[String]) {
+        for u in ids {
+            self.add_user_block(u);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.text_blockwords.clear();
+        self.user_blocklist.clear();
+    }
+
+    pub fn text_blockwords(&self) -> &[String] {
+        &self.text_blockwords
+    }
+
+    pub fn user_blocklist(&self) -> &[String] {
+        &self.user_blocklist
+    }
+
+    pub fn total_block_count(&self) -> usize {
+        self.text_blockwords.len() + self.user_blocklist.len()
+    }
+
+    /// 是否该被过滤:用户在屏蔽名单,或文本含任一屏蔽词。
+    pub fn should_filter(&self, text: &str, user_id: Option<&str>) -> bool {
+        if let Some(u) = user_id {
+            if self.user_blocklist.iter().any(|b| b == u) {
+                return true;
+            }
+        }
+        self.text_blockwords.iter().any(|w| text.contains(w.as_str()))
+    }
+}
+
+/// 屏蔽词导入结果。对齐 Dart DanmakuFilterImportResult。
+#[derive(Debug, Default, Serialize)]
+pub struct DanmakuFilterImportResult {
+    /// 装好的过滤器(Rust 侧直接可用)。不过 IPC:它的内容与下面 text_words/user_ids
+    /// 是同一份数据的两种形态,前端只要后者,没必要为过 IPC 给它硬加 derive。
+    #[serde(skip)]
+    pub filter: DanmakuFilter,
+    pub text_words: Vec<String>,
+    pub user_ids: Vec<String>,
+    pub skipped_count: usize,
+}
+
+impl DanmakuFilterImportResult {
+    pub fn total_imported(&self) -> usize {
+        self.text_words.len() + self.user_ids.len()
+    }
+}
+
+/// 从弹弹Play XML 屏蔽列表导入。格式:`<item enabled="true">t=词</item>` /
+/// `<item enabled="true">x=uid=[平台]用户ID</item>`。对齐 Dart importFromDandanplayXml。
+/// ponytail: 用 regex 抽 `<item>` 而非上 XML crate —— 这文件就这一种扁平结构,
+/// 为它加个 quick-xml 依赖不值;真要吃任意 XML 再换。
+pub fn import_dandanplay_blocklist_xml(xml: &str) -> DanmakuFilterImportResult {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"(?s)<item([^>]*)>(.*?)</item>").unwrap());
+    let mut out = DanmakuFilterImportResult::default();
+    for cap in re.captures_iter(xml) {
+        let attrs = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        if attrs.contains("enabled=\"false\"") || attrs.contains("enabled='false'") {
+            out.skipped_count += 1;
+            continue;
+        }
+        let content = unescape_xml(cap.get(2).map(|m| m.as_str()).unwrap_or("").trim());
+        if content.is_empty() {
+            out.skipped_count += 1;
+            continue;
+        }
+        if let Some(word) = content.strip_prefix("t=") {
+            let word = word.trim();
+            if !word.is_empty() {
+                out.text_words.push(word.to_string());
+                out.filter.add_text_blockword(word);
+            }
+        } else if let Some(uid) = content.strip_prefix("x=uid=") {
+            let uid = uid.trim();
+            if !uid.is_empty() {
+                out.user_ids.push(uid.to_string());
+                out.filter.add_user_block(uid);
+            }
+        }
+    }
+    out
+}
+
+fn unescape_xml(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&") // 必须最后,否则 &amp;lt; 会被二次解码
+}
+
+/// 后处理选项。对齐 Dart applyDanmakuFilterAndDedup 的入参
+/// (danmakuBlockwords / danmakuDedup / danmakuDedupWindow 三个 provider)。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FilterOptions {
+    pub blockwords: Vec<String>,
+    /// Dart 侧只从 XML 导入用户屏蔽、没接 provider;这里一并暴露,宿主可不填。
+    pub user_blocklist: Vec<String>,
+    /// 屏蔽的弹幕类型(1=滚动 4=底 5=顶)。**Dart 无对应实现**,按任务书补的;空=不过滤。
+    pub blocked_modes: Vec<i32>,
+    pub dedup: bool,
+    /// 去重时间窗口(秒),Dart 默认 10.0。
+    pub dedup_window: f64,
+}
+
+impl Default for FilterOptions {
+    fn default() -> Self {
+        Self {
+            blockwords: Vec::new(),
+            user_blocklist: Vec::new(),
+            blocked_modes: Vec::new(),
+            dedup: false,
+            dedup_window: 10.0,
+        }
+    }
+}
+
+/// 弹幕后处理:屏蔽词/用户/类型过滤 + 时间窗口去重。手动搜索面板与自动加载共用,
+/// 保证两条路径得到一致的弹幕。对齐 Dart applyDanmakuFilterAndDedup。
+pub fn apply_filter_and_dedup(
+    input: Vec<DanmakuComment>,
+    opts: &FilterOptions,
+) -> Vec<DanmakuComment> {
+    let mut items = input;
+    if !opts.blockwords.is_empty() || !opts.user_blocklist.is_empty() {
+        let mut filter = DanmakuFilter::new();
+        filter.import_blockwords(&opts.blockwords);
+        filter.import_user_blocks(&opts.user_blocklist);
+        items.retain(|it| !filter.should_filter(&it.text, it.user_id.as_deref()));
+    }
+    if !opts.blocked_modes.is_empty() {
+        items.retain(|it| !opts.blocked_modes.contains(&it.mode));
+    }
+    if opts.dedup {
+        items = dedup(items, opts.dedup_window);
+    }
+    items
+}
+
+/// 时间窗口内同文本同类型合并,count 记次数。逐字对齐 Dart danmaku_postprocess._dedup。
+fn dedup(mut items: Vec<DanmakuComment>, window_seconds: f64) -> Vec<DanmakuComment> {
+    items.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+    let mut used = vec![false; items.len()];
+    let mut result = Vec::new();
+    for i in 0..items.len() {
+        if used[i] {
+            continue;
+        }
+        let mut count = 1;
+        for j in (i + 1)..items.len() {
+            if used[j] {
+                continue;
+            }
+            if items[j].time - items[i].time > window_seconds {
+                break;
+            }
+            if items[j].text == items[i].text && items[j].mode == items[i].mode {
+                count += 1;
+                used[j] = true;
+            }
+        }
+        result.push(DanmakuComment { count, ..items[i].clone() });
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +1207,286 @@ mod tests {
         cfg.auth_type = Some(DanmakuAuthType::PathToken);
         cfg.token = Some("tok123".into());
         assert_eq!(cfg.request_base_url(), "https://d.example.com/tok123/api/v2");
+    }
+
+    // ---------- 集数匹配 ----------
+
+    fn ep(id: &str, num: Option<&str>) -> DanmakuEpisode {
+        DanmakuEpisode {
+            episode_id: id.into(),
+            episode_title: format!("第{}话", num.unwrap_or("?")),
+            episode_number: num.map(String::from),
+        }
+    }
+
+    #[test]
+    fn episode_number_forms() {
+        // 纯数字 / 补零 / 「第N话」/ 「N话」 —— 都该抽出数字比对。
+        assert!(episode_matches(&ep("1", Some("3")), Some(3)));
+        assert!(episode_matches(&ep("1", Some("03")), Some(3)));
+        assert!(episode_matches(&ep("1", Some("第3话")), Some(3)));
+        assert!(episode_matches(&ep("1", Some(" 3 ")), Some(3)));
+        assert!(!episode_matches(&ep("1", Some("4")), Some(3)));
+        // 空 / 无数字 / 无集号 → 不匹配。
+        assert!(!episode_matches(&ep("1", None), Some(3)));
+        assert!(!episode_matches(&ep("1", Some("")), Some(3)));
+        assert!(!episode_matches(&ep("1", Some("OVA")), Some(3)));
+        assert!(!episode_matches(&ep("1", Some("3")), None));
+    }
+
+    #[test]
+    fn pick_episode_by_number_then_position() {
+        let eps = vec![ep("101", Some("1")), ep("102", Some("2")), ep("103", Some("3"))];
+        // ① 按 episodeNumber 命中。
+        assert_eq!(pick_episode(&eps, Some(2)).unwrap().episode_id, "102");
+        // ② episodeNumber 不规整 → 退回按位置(第 2 集 = 下标 1)。
+        let messy = vec![ep("201", Some("SP")), ep("202", Some("OVA")), ep("203", Some("PV"))];
+        assert_eq!(pick_episode(&messy, Some(2)).unwrap().episode_id, "202");
+        // ③ 集号越界且不匹配 → 退回首集。
+        assert_eq!(pick_episode(&messy, Some(9)).unwrap().episode_id, "201");
+        // ④ 无集号 → 首集;空列表 → None。
+        assert_eq!(pick_episode(&eps, None).unwrap().episode_id, "101");
+        assert!(pick_episode(&[], Some(1)).is_none());
+    }
+
+    #[test]
+    fn title_score_forms() {
+        // 完全相等(含标点/大小写/空白差异被 normalize 抹平)。
+        assert_eq!(title_score("葬送的芙莉莲", "葬送的芙莉莲"), 1.0);
+        assert_eq!(title_score("Frieren: Beyond Journey's End", "frieren beyond journey's end"), 1.0);
+        // 「第N季/部」被剥掉 → 与无季号标题相等。
+        assert_eq!(title_score("孤独摇滚 第二季", "孤独摇滚"), 1.0);
+        assert_eq!(title_score("间谍过家家 第2部", "间谍过家家"), 1.0);
+        // 包含关系 → 0.7。
+        assert_eq!(title_score("赛马娘", "赛马娘 Pretty Derby"), 0.7);
+        // 无交集 → bigram Jaccard ×0.6,必然 < 0.6。
+        let s = title_score("葬送的芙莉莲", "咒术回战");
+        assert!((0.0..0.6).contains(&s), "无关标题不该高分, got {s}");
+        // 部分重叠 → 落在 (0, 0.6)。
+        let s2 = title_score("摇曳露营", "摇曳百合");
+        assert!(s2 > 0.0 && s2 < 0.6, "部分重叠应在(0,0.6), got {s2}");
+        // 空串 → 0。
+        assert_eq!(title_score("", "x"), 0.0);
+        assert_eq!(title_score("x", ""), 0.0);
+        // 单字符标题:bigrams 走 length==1 分支,不该 panic 也不该判 0(相等走 1.0)。
+        assert_eq!(title_score("A", "A"), 1.0);
+    }
+
+    #[test]
+    fn normalize_strips_punct_and_season() {
+        assert_eq!(normalize("Re：从零开始的异世界生活 第二季"), "re从零开始的异世界生活");
+        assert_eq!(normalize("[Sub] Title (2024)!"), "subtitle2024");
+    }
+
+    #[test]
+    fn resolve_title_and_file_name() {
+        // 剧集用 seriesName。
+        assert_eq!(resolve_title(Some(" 孤独摇滚 "), "第 5 集"), "孤独摇滚");
+        // seriesName 空 → 条目名。
+        assert_eq!(resolve_title(None, " 你的名字 "), "你的名字");
+        assert_eq!(resolve_title(Some("  "), "你的名字"), "你的名字");
+        // 文件名:Windows 反斜杠 / Unix 斜杠都取 basename。
+        assert_eq!(
+            resolve_file_name(Some(r"D:\Anime\Bocchi\S01E05.mkv"), "第5集"),
+            "S01E05.mkv"
+        );
+        assert_eq!(
+            resolve_file_name(Some("/mnt/media/Bocchi/S01E05.mkv"), "第5集"),
+            "S01E05.mkv"
+        );
+        // 无 path → 条目名。
+        assert_eq!(resolve_file_name(None, "第5集"), "第5集");
+        assert_eq!(resolve_file_name(Some(""), "第5集"), "第5集");
+    }
+
+    #[test]
+    fn ticks_and_anime_detection() {
+        assert_eq!(duration_secs_from_ticks(Some(14_100_000_000)), Some(1410.0));
+        assert_eq!(duration_secs_from_ticks(Some(0)), None);
+        assert_eq!(duration_secs_from_ticks(None), None);
+        assert!(is_anime(&["动画".to_string()]));
+        assert!(is_anime(&["Anime".to_string()])); // 大小写不敏感
+        assert!(is_anime(&["Japanese Animation".to_string()])); // 子串命中
+        assert!(!is_anime(&["剧情".to_string(), "犯罪".to_string()]));
+        assert!(!is_anime(&[]));
+    }
+
+    #[test]
+    fn match_result_parses_real_payload() {
+        // 弹弹Play /match 真实响应形状(animeId/episodeId 是数字,不是字符串)。
+        let v = serde_json::json!({
+            "isMatched": true,
+            "matches": [{
+                "episodeId": 178990001i64,
+                "animeId": 17899,
+                "animeTitle": "葬送的芙莉莲",
+                "episodeTitle": "第1话 冒险的结束",
+                "type": "tvseries",
+                "typeDescription": "TV动画",
+                "shift": 0
+            }]
+        });
+        let cfg = DanmakuSourceConfig { id: "official".into(), name: "弹弹Play".into(), ..Default::default() };
+        let r = parse_match_result(&v, &cfg);
+        assert!(r.is_matched);
+        assert_eq!(r.matches.len(), 1);
+        assert_eq!(r.matches[0].episode_id, "178990001");
+        assert_eq!(r.matches[0].anime_id, "17899");
+        assert_eq!(r.matches[0].source_name, "弹弹Play");
+        assert_eq!(r.matches[0].shift, Some(0));
+        // 空响应不 panic。
+        let empty = parse_match_result(&serde_json::json!({}), &cfg);
+        assert!(!empty.is_matched && empty.matches.is_empty());
+    }
+
+    // ---------- 过滤 / 去重 ----------
+
+    fn c(time: f64, text: &str, mode: i32, user: Option<&str>) -> DanmakuComment {
+        DanmakuComment {
+            time,
+            text: text.into(),
+            mode,
+            color: 16777215,
+            source: "s".into(),
+            cid: None,
+            user_id: user.map(String::from),
+            count: 1,
+        }
+    }
+
+    #[test]
+    fn filter_blocks_words_users_modes() {
+        let items = vec![
+            c(1.0, "前方高能", 1, Some("u1")),
+            c(2.0, "剧透:他死了", 1, Some("u2")),
+            c(3.0, "正常弹幕", 1, Some("u3")),
+            c(4.0, "顶部广告", 5, Some("u4")),
+        ];
+        // 关键词屏蔽(子串命中)。
+        let out = apply_filter_and_dedup(
+            items.clone(),
+            &FilterOptions { blockwords: vec!["剧透".into()], ..Default::default() },
+        );
+        assert_eq!(out.len(), 3);
+        assert!(!out.iter().any(|x| x.text.contains("剧透")));
+        // 用户屏蔽。
+        let out = apply_filter_and_dedup(
+            items.clone(),
+            &FilterOptions { user_blocklist: vec!["u1".into()], ..Default::default() },
+        );
+        assert_eq!(out.len(), 3);
+        assert!(!out.iter().any(|x| x.user_id.as_deref() == Some("u1")));
+        // 类型过滤(屏蔽顶部弹幕 mode=5)。
+        let out = apply_filter_and_dedup(
+            items.clone(),
+            &FilterOptions { blocked_modes: vec![5], ..Default::default() },
+        );
+        assert_eq!(out.len(), 3);
+        assert!(out.iter().all(|x| x.mode != 5));
+        // 不配置任何屏蔽 → 原样返回。
+        assert_eq!(apply_filter_and_dedup(items, &FilterOptions::default()).len(), 4);
+    }
+
+    #[test]
+    fn dedup_merges_within_window_only() {
+        let items = vec![
+            c(1.0, "哈哈哈", 1, None),
+            c(3.0, "哈哈哈", 1, None),  // 窗口内同文同类型 → 合并
+            c(5.0, "哈哈哈", 5, None),  // 同文但类型不同 → 不合并
+            c(30.0, "哈哈哈", 1, None), // 超窗口 → 不合并
+            c(2.0, "别的", 1, None),
+        ];
+        let out = apply_filter_and_dedup(
+            items,
+            &FilterOptions { dedup: true, dedup_window: 10.0, ..Default::default() },
+        );
+        // 结果按时间升序:哈哈哈(1,count2) / 别的(2) / 哈哈哈顶(5) / 哈哈哈(30)
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[0].time, 1.0);
+        assert_eq!(out[0].count, 2, "窗口内同文同类型应合并计数");
+        assert_eq!(out[1].text, "别的");
+        assert_eq!(out[2].mode, 5);
+        assert_eq!(out[2].count, 1, "类型不同不该合并");
+        assert_eq!(out[3].time, 30.0);
+        assert_eq!(out[3].count, 1, "超出窗口不该合并");
+    }
+
+    #[test]
+    fn dedup_off_keeps_everything() {
+        let items = vec![c(1.0, "a", 1, None), c(2.0, "a", 1, None)];
+        let out = apply_filter_and_dedup(items, &FilterOptions::default());
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|x| x.count == 1));
+    }
+
+    #[test]
+    fn filter_add_remove_dedupes_entries() {
+        let mut f = DanmakuFilter::new();
+        f.add_text_blockword("剧透");
+        f.add_text_blockword("剧透"); // 重复不入
+        f.add_text_blockword(""); // 空不入
+        f.add_user_block("u1");
+        assert_eq!(f.text_blockwords().len(), 1);
+        assert_eq!(f.total_block_count(), 2);
+        assert!(f.should_filter("有剧透哦", None));
+        assert!(f.should_filter("干净", Some("u1")));
+        assert!(!f.should_filter("干净", Some("u2")));
+        f.remove_text_blockword("剧透");
+        f.remove_user_block("u1");
+        assert_eq!(f.total_block_count(), 0);
+        assert!(!f.should_filter("有剧透哦", Some("u1")));
+    }
+
+    #[test]
+    fn import_dandanplay_xml_blocklist() {
+        // 弹弹Play 导出的真实屏蔽列表形状。
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<KeywordFilters>
+  <item enabled="true">t=前方高能</item>
+  <item enabled="true">t=剧透</item>
+  <item enabled="false">t=这条被禁用了</item>
+  <item enabled="true">x=uid=[BiliBili]12345678</item>
+  <item enabled="true"></item>
+  <item enabled="true">t=A&amp;B</item>
+</KeywordFilters>"#;
+        let r = import_dandanplay_blocklist_xml(xml);
+        assert_eq!(r.text_words, vec!["前方高能", "剧透", "A&B"]);
+        assert_eq!(r.user_ids, vec!["[BiliBili]12345678"]);
+        assert_eq!(r.skipped_count, 2, "禁用的 + 空内容的都该跳过");
+        assert_eq!(r.total_imported(), 4);
+        assert!(r.filter.should_filter("前方高能预警", None));
+        assert!(r.filter.should_filter("x", Some("[BiliBili]12345678")));
+        assert!(!r.filter.should_filter("这条被禁用了", None), "禁用项不该生效");
+    }
+
+    // ---------- 缓存 ----------
+
+    #[test]
+    fn cache_mem_roundtrip_and_lru_cap() {
+        // 只验内存层(磁盘层依赖 config_dir,CI 上不该乱写盘)。
+        let items = vec![c(1.0, "缓存的弹幕", 1, None)];
+        let key = cache_key("srcA", "ep1");
+        mem_touch(&key, &items);
+        assert_eq!(mem_get(&key).unwrap(), items);
+        // 空 source/episode 不写不读。
+        cache_put("", "ep1", &items);
+        assert!(cache_get("", "ep1").is_none());
+        // 空列表不写。
+        cache_put("srcB", "ep2", &[]);
+        // LRU 上限:塞满 + 1 后最老的被挤掉,最近访问的还在。
+        for i in 0..MEM_CAPACITY + 5 {
+            mem_touch(&cache_key("s", &i.to_string()), &items);
+        }
+        assert!(MEM.lock().unwrap().len() <= MEM_CAPACITY);
+        assert!(mem_get(&cache_key("s", "0")).is_none(), "最老的该被挤出");
+        assert!(mem_get(&cache_key("s", &(MEM_CAPACITY + 4).to_string())).is_some());
+    }
+
+    #[test]
+    fn cache_file_name_is_stable_md5() {
+        // 同 key 稳定、不同 key 相异(换机/重启后仍命中同一文件)。
+        assert_eq!(cache_file("a:1"), cache_file("a:1"));
+        assert_ne!(cache_file("a:1"), cache_file("a:2"));
+        assert!(cache_file("a:1").to_string_lossy().ends_with(".json"));
     }
 }
