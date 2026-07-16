@@ -11,6 +11,7 @@ import 'player_adapter.dart';
 import 'exo_player_adapter.dart';
 import 'mpv_player_adapter.dart';
 import 'native_mpv_player_adapter.dart';
+import 'windows_native_mpv_adapter.dart';
 
 /// 播放器内核类型
 enum PlayerCoreType {
@@ -53,6 +54,14 @@ class VideoPlayerService extends ChangeNotifier {
   // 实测消除硬件纹理下的卡/闪，故 Windows **默认开**；关掉回落 auto-copy(拷回,兼容兜底)。
   // 会话级不落盘：万一某显卡 d3d11va 起不来，mpv 自会降级软解(不崩),重启也回默认。
   bool _zeroCopyHwdec = Platform.isWindows;
+  // M1 · Windows 原生渲染（--wid 子窗口直出，绕开 ANGLE）。开启后 Windows + mpv 内核
+  // 走 WindowsNativeMpvAdapter；切换在下次起播生效。
+  // ⚠️ 必须 static + 持久化：VideoPlayerService 每次进播放页都新建实例（非单例），
+  // 放实例字段会每次复位（"开了退出再播放又自己关上"的根因）。static 跨实例存活、
+  // SharedPreferences 跨重启存活——开一次永久生效，直到用户主动关。
+  static bool _windowsNativeRender = false;
+  static bool _nativeRenderHydrated = false;
+  static const String _kNativeRenderPrefKey = 'windows_native_render';
   String? _primaryVideoUrl;
   String? _fallbackVideoUrl;
   // 逐流取流鉴权（网盘/聚合源直链）：主/兜底链路与适配器重建都复用同一份。
@@ -218,6 +227,31 @@ class VideoPlayerService extends ChangeNotifier {
   /// 获取当前可用轨道列表
   List<Map<String, dynamic>> get tracksInfo => _adapter?.getTracksInfo() ?? [];
 
+  VideoPlayerService() {
+    // 首次构造时从磁盘水合原生渲染开关（幂等，只跑一次）。播放页 initState 建实例，
+    // 起播在其后，prefs 读得很快，几乎无竞态；用户显式设过则不再被覆盖。
+    unawaited(_hydrateNativeRender());
+  }
+
+  static Future<void> _hydrateNativeRender() async {
+    if (_nativeRenderHydrated) return;
+    _nativeRenderHydrated = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // 原生渲染已封存（真机实测证明它治不了「超分卡」——卡=shader 算力随输出分辨率暴涨，
+      // 与渲染管线无关；见 native-rendering-project 记忆）。一次性清掉测试期残留的开启态，
+      // 让大家回到 media_kit（带完整 Flutter UI + 可见超分菜单）。原生模式下面板被子窗口
+      // 盖住、开关够不到，故必须在这里兜底重置。想再试原生仍可在播放设置面板手动开。
+      // v2：原生渲染带出双内核打架 bug + 已被证明对超分非必需（FSR 轻量 shader 在 media_kit
+      // 上就够），再次强制关回 media_kit，保完整 UI + 单内核。
+      if (prefs.getBool('windows_native_render_parked_v2') != true) {
+        await prefs.setBool(_kNativeRenderPrefKey, false);
+        await prefs.setBool('windows_native_render_parked_v2', true);
+      }
+      _windowsNativeRender = prefs.getBool(_kNativeRenderPrefKey) ?? false;
+    } catch (_) {}
+  }
+
   /// 设置播放器内核
   void setCoreType(PlayerCoreType type) {
     if (_coreType == type) return;
@@ -234,6 +268,9 @@ class VideoPlayerService extends ChangeNotifier {
       case PlayerCoreType.exoPlayer:
         return ExoPlayerAdapter();
       case PlayerCoreType.mpv:
+        if (Platform.isWindows && _windowsNativeRender) {
+          return WindowsNativeMpvAdapter();
+        }
         return MpvPlayerAdapter();
       case PlayerCoreType.nativeMpv:
         return NativeMpvPlayerAdapter();
@@ -819,6 +856,7 @@ class VideoPlayerService extends ChangeNotifier {
     final a = _adapter;
     if (a is MpvPlayerAdapter) await a.mpvCommand(args);
     if (a is NativeMpvPlayerAdapter) await a.mpvCommand(args);
+    if (a is WindowsNativeMpvAdapter) await a.mpvCommand(args);
   }
 
   /// 当前内核是否为 media_kit/mpv。
@@ -1142,6 +1180,40 @@ class VideoPlayerService extends ChangeNotifier {
     _zeroCopyHwdec = enable;
     final a = _adapter;
     if (a is MpvPlayerAdapter) await a.applyZeroCopyHwdec(enable);
+    notifyListeners();
+  }
+
+  /// M1 · Windows 原生渲染实验开关（--wid 子窗口直出，绕开 ANGLE）。会话级、下次
+  /// 起播生效（需换适配器，故不即时切换当前播放）。仅 Windows 有效。
+  bool get windowsNativeRender => _windowsNativeRender;
+
+  /// 播放页推送控制栏可见状态给原生渲染适配器（决定挖洞时避开控制栏区域，否则
+  /// 控制栏会被挖穿变透明）。设置面板的排除走全局 [nativeRenderPanelFraction]，不经此。
+  /// 仅 Windows 原生渲染适配器有效，其余为空操作。
+  void setNativeChrome({bool? controls}) {
+    final a = _adapter;
+    if (a is WindowsNativeMpvAdapter) {
+      a.setChrome(controls: controls);
+    }
+  }
+
+  /// 把 UI 状态（标题/是否有剧集/超分开关）推给自研 Lua 控制栏。仅原生渲染有效。
+  void pushNativeUiState({String? title, bool? hasSeries, bool? superres}) {
+    final a = _adapter;
+    if (a is WindowsNativeMpvAdapter) {
+      a.pushUiState(title: title, hasSeries: hasSeries, superres: superres);
+    }
+  }
+
+  void setWindowsNativeRender(bool enable) {
+    _windowsNativeRender = enable;
+    _nativeRenderHydrated = true; // 用户显式设置，别再被异步水合覆盖
+    unawaited(() async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(_kNativeRenderPrefKey, enable);
+      } catch (_) {}
+    }());
     notifyListeners();
   }
 

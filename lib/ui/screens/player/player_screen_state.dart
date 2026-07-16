@@ -2305,12 +2305,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen>
   void _showAnime4kPanel() {
     const gears = <(String, String)>[
       ('off', '关闭'),
-      ('modeA', '去噪 S · 核显轻量'),
-      ('modeB', '去噪 M · 均衡'),
-      ('modeC', '去噪 L · 清晰'),
-      ('modeAA', '去噪叠加 M · 更净'),
-      ('modeBB', '去噪叠加 L · 强'),
-      ('modeAC', '去噪叠加 VL · 壮机'),
+      ('modeA', 'Mode A · Restore'),
+      ('modeB', 'Mode B · Restore Soft'),
+      ('modeC', 'Mode C · Denoise'),
+      ('modeAA', 'Mode A+A'),
+      ('modeBB', 'Mode B+B'),
+      ('modeAC', 'Mode C+A'),
     ];
     _showRightPanel(
       title: 'Anime4K 超分',

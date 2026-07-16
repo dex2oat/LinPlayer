@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/gestures.dart' show PointerDeviceKind, PointerScrollEvent;
 import 'package:flutter/material.dart';
 
+import '../services/windows_native_mpv_adapter.dart' show nativeRenderPanelFraction;
 import '../theme/app_colors.dart';
 import '../theme/app_motion.dart';
 
@@ -113,7 +114,13 @@ Future<T?> showPlayerSettingsPanel<T>({
   // 让面板继承根 Theme 的明暗，而不是被播放页局部的深色覆盖。
   final ThemeData theme = Theme.of(context);
 
-  return showGeneralDialog<T>(
+  // Windows 原生渲染时，广播面板占屏宽比例，让 mpv 把该区域从视频洞里排除
+  // （否则面板贴在洞上会被挖穿变透明）。非原生渲染下无监听者，纯空写。
+  final double panelFraction =
+      (panelWidth / mediaQuery.size.width).clamp(0.0, 1.0);
+  nativeRenderPanelFraction.value = panelFraction;
+
+  final future = showGeneralDialog<T>(
     context: context,
     barrierDismissible: true,
     barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
@@ -150,6 +157,13 @@ Future<T?> showPlayerSettingsPanel<T>({
       );
     },
   );
+  // 面板关闭后清掉排除区（仅当没有更外层面板改过它，避免嵌套面板误清）。
+  future.whenComplete(() {
+    if (nativeRenderPanelFraction.value == panelFraction) {
+      nativeRenderPanelFraction.value = 0;
+    }
+  });
+  return future;
 }
 
 class _PlayerSettingsPanel extends StatefulWidget {

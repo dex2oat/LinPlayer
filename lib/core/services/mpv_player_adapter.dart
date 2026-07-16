@@ -578,6 +578,11 @@ class MpvPlayerAdapter implements PlayerAdapter {
         'Anime4K shaders 已应用(回读 $_activeGlslShaderCount/${resolvedPaths.length}, '
         '软件纹理=$_softwareTextureActive): ${resolvedPaths.join(', ')}');
   }
+  // ⚠️ 已彻底删除 _applyMpvRenderSizeForShaders（media_kit setSize 抬渲染尺寸）：
+  // 用户机 dxva2-egl 交互本就损坏（每次启动 EGL surface 创建失败），再 resize 渲染面 →
+  // GPU 驱动击穿 → 蓝屏。2026-07-13 三次 BSOD 全部紧跟 setSize 后 ~100ms（日志 3/3 铁证）。
+  // 结论：media_kit 上**永不 setSize**。超分只在源分辨率跑纯锐化(CAS/RCAS)，放大类(FSR EASU)
+  // 因需 setSize 而放弃。见 anime4k_shaders.dart。
 
   @override
   Future<void> initialize({
