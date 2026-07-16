@@ -10,6 +10,7 @@ import {
 } from "../lib/api";
 import { type PageId, NAV, NAV_FOOT, type NavItem } from "./nav";
 import { IconMenu, IconPlus, IconSun, IconMoon } from "./icons";
+import ServerIcon from "../components/ServerIcon";
 
 type Props = {
   page: PageId;
@@ -148,7 +149,7 @@ export default function Sidebar({
         title={n.label}
       >
         <span className="nav-ic">
-          <Icon size={17} />
+          <Icon size={19} />
         </span>
         <span className="nav-label">{n.label}</span>
       </button>
@@ -178,7 +179,11 @@ export default function Sidebar({
           }}
           title="切换 / 管理服务器"
         >
-          <span className="srv-ic">▣</span>
+          {/* 真实账号图标(改图标后经 onAccountsChanged 广播 → load() → 这里立即换)。
+              active 还没到货(首帧)时先空着,别写死字形。 */}
+          <span className="srv-ic">
+            {active && <ServerIcon server={active.server} icon={active.icon_url} size={16} />}
+          </span>
           <span className="srv-meta">
             <span className="srv-name">{activeLabel}</span>
           </span>
@@ -209,6 +214,9 @@ export default function Sidebar({
                     }}
                     title={`${a.server}\n${d.tip}\n右键:编辑 / 线路 / 重登 / 删除`}
                   >
+                    <span className="srv-dd-ic">
+                      <ServerIcon server={a.server} icon={a.icon_url} size={15} />
+                    </span>
                     <span className={`dot ${d.cls}`} />
                     <span className="srv-dd-nm">{a.name || hostOf(a.server)}</span>
                     <span className="rt">{a.user_name}</span>
@@ -240,7 +248,7 @@ export default function Sidebar({
           title={theme === "dark" ? "切到米黄浅色" : "切到沉浸深色"}
         >
           <span className="nav-ic">
-            {theme === "dark" ? <IconSun size={17} /> : <IconMoon size={17} />}
+            {theme === "dark" ? <IconSun size={19} /> : <IconMoon size={19} />}
           </span>
           <span className="nav-label">{theme === "dark" ? "浅色主题" : "深色主题"}</span>
         </button>

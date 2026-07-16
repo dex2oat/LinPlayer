@@ -8,6 +8,32 @@
 .app-root { height: 100%; }
 .app-root.hidden { display: none; }
 
+/* ---------- 自绘标题栏(decorations:false)---------- */
+.titlebar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 90;
+  height: var(--titlebar-h);
+  display: flex; align-items: stretch;
+  background: color-mix(in srgb, var(--panel) 55%, var(--bg));
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+}
+.tb-brand { display: flex; align-items: center; gap: 8px; padding: 0 12px 0 13px; }
+.tb-logo { display: grid; place-items: center; }
+.tb-name { font-size: 12.5px; font-weight: 650; color: var(--ink); letter-spacing: 0.01em; }
+.tb-drag { flex: 1; align-self: stretch; }
+.tb-ctrls { display: flex; align-items: stretch; }
+.tb-btn {
+  width: 46px; border: none; background: transparent;
+  color: var(--ink-2); cursor: pointer;
+  display: grid; place-items: center;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.tb-btn:hover { background: var(--panel-2); color: var(--ink); }
+.tb-btn.danger:hover { background: var(--danger); color: #fff; }
+
+/* 标题栏是 fixed,内容整体下移一个标题栏高度,别被压在栏下。 */
+.app-surface { padding-top: var(--titlebar-h); }
+
 /* ---------- 外壳骨架 ---------- */
 .shell { display: flex; height: 100%; }
 .content {
@@ -36,7 +62,9 @@
   flex-direction: column;
   animation: enter var(--dur-med) var(--ease) both;
 }
-.scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
+/* 平滑滚动:用户 2026-07-16「页面浏览滑动有点卡卡的 加一下线性速度」——
+   纯 CSS 平滑滚动(翻页/锚点/键盘滚动走缓动),不引任何惯性库。 */
+.scroll { flex: 1; overflow-y: auto; overflow-x: hidden; scroll-behavior: smooth; }
 .flip { transform: scaleX(-1); }
 
 /* 正文封顶居中(草稿 .wrap)。给没有自带 .xx- 容器的正文套一层用。
@@ -68,6 +96,13 @@
 /* 下拉锚在切换器正下方;侧栏窄,浮层要比侧栏宽才放得下名字+账号。 */
 .srv-dd { top: calc(100% + 4px); left: 0; min-width: 250px; }
 .sidebar.collapsed .srv-dd { left: calc(100% + 6px); top: 0; }
+/* 下拉项左侧的账号图标缩略(和切换器同源,改了图标这里也实时跟着变)。 */
+.srv-dd-ic {
+  flex: 0 0 auto; width: 24px; height: 24px; border-radius: 6px;
+  overflow: hidden; display: grid; place-items: center;
+  background: var(--accent-soft); border: 1px solid var(--line);
+  color: var(--accent);
+}
 .srv-dd-nm {
   flex: 1; min-width: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -93,16 +128,19 @@
 .srv-switch:hover { background: var(--panel-2); border-color: var(--line-strong); }
 .srv-ic {
   flex: 0 0 auto;
-  width: 22px; height: 22px;
-  border-radius: 6px;
+  width: 28px; height: 28px;
+  border-radius: 7px;
   background: var(--accent-soft);
   border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
   display: grid; place-items: center;
   color: var(--accent);
+  overflow: hidden;
 }
+/* 账号真实图标(网络/本地/默认 emby 图):铺满图标框。字形/字母仍走文本。 */
+.srv-ic img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .srv-meta { flex: 1; min-width: 0; }
 .srv-name {
-  font-size: 12.5px; font-weight: 600; color: var(--ink);
+  font-size: 13.5px; font-weight: 600; color: var(--ink);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .srv-cv { margin-left: auto; }
@@ -117,13 +155,13 @@
 
 .nav { display: flex; flex-direction: column; gap: 4px; }
 .nav-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 9px 10px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 12px;
   width: 100%;
   border: none; background: transparent;
-  border-radius: 9px;
+  border-radius: 10px;
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
   text-align: left;
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
@@ -207,7 +245,7 @@
 }
 
 /* 通用正文容器。封顶居中 ⇒ 一次治好 设置(.md) / 添加服务器(.md) / Ani-RSS / 日历,
-   里面的 .md、.cal-weekgrid 等直接填满这 1560-36 的墨迹宽,不用各自再封一遍。 */
+   里面的 .md、.cal-tl 等直接填满这 1560-36 的墨迹宽,不用各自再封一遍。 */
 .cbody {
   position: relative;
   z-index: 2;
@@ -247,13 +285,13 @@
 .btn:disabled { opacity: 0.55; cursor: default; }
 
 .field {
-  height: 34px;
+  height: 38px;
   border-radius: 8px;
   border: 1px solid var(--line-strong);
   background: color-mix(in srgb, var(--panel) 50%, var(--bg));
   color: var(--ink);
-  padding: 0 12px;
-  font-size: 13px;
+  padding: 0 13px;
+  font-size: 13.5px;
   outline: none;
   width: 100%;
   transition: border-color var(--dur-fast) var(--ease);
@@ -286,13 +324,15 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
 .pcard.poster-ar { aspect-ratio: 2 / 3; }
 .pcard.thumb-ar { aspect-ratio: 16 / 9; }
 .pcard:hover { transform: translateY(-5px); box-shadow: 0 26px 48px -22px rgba(0, 0, 0, 0.6); }
-/* 图片单独淡入,盖在卡片自带的骨架底(.pcard 的 --panel-2 背景)上。
-   ★ 关键:淡入的是**图片**,不是整张卡 —— 卡片框和骨架第一帧就在,不藏内容。
-   用户 2026-07-15:「先出骨架 然后再不断加载图片……这样有动画 加载看起来也会快」。
-   img 解码完成前浏览器不渲染它,所以这段 fade 天然只在「图到位」那一刻跑,不需要 JS 控。 */
-.pcard img { width: 100%; height: 100%; object-fit: cover; display: block; animation: img-fade var(--dur-med) var(--ease); }
-@keyframes img-fade { from { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .pcard img { animation: none; } }
+/* 图片单独淡入,盖在骨架上。★ 淡入的是**图片**,不是整张卡 —— 卡片框和文字第一帧就在。
+   用户 2026-07-15:「先出骨架 然后再不断加载图片……这样有动画 加载看起来也会快」;
+   2026-07-16 再提:「图片有加载动画看起来不会这么卡」→ 原来只有 --panel-2 一块**死底色**,
+   快速下滑时一片平白,像没加载出来。现在未到位时铺 .pskel(shimmer 动画骨架),
+   到位由 JS onLoad 打 .ready 淡入(不能靠 mount 动画:那在图还没解码时就跑完了)。 */
+.pskel { position: absolute; inset: 0; z-index: 0; }
+.pcard img { width: 100%; height: 100%; object-fit: cover; display: block; position: relative; z-index: 1; opacity: 0; transition: opacity var(--dur-med) var(--ease); }
+.pcard img.ready { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .pcard img { transition: none; } .pskel { animation: none; } }
 .pcard .fallback { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-3); }
 .pcard .overlay {
   position: absolute; inset: 0;
@@ -323,8 +363,10 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
   position: absolute; top: 6px; right: 6px;
   min-width: 20px; height: 20px; padding: 0 6px;
   border-radius: 6px;
-  background: rgba(0, 0, 0, 0.62); border: 1px solid var(--line-strong);
-  color: var(--ink); font-family: var(--mono); font-size: 11px; font-weight: 700;
+  background: rgba(0, 0, 0, 0.62); border: 1px solid rgba(255, 255, 255, 0.18);
+  /* 底恒为深色半透明 → 字必须恒亮,不能跟 --ink(浅色主题下 --ink 是深色 = 深底深字,
+     用户 2026-07-16「首页的评分是黑的」)。 */
+  color: #f0f3f8; font-family: var(--mono); font-size: 11px; font-weight: 700;
   display: grid; place-items: center;
 }
 .pcap { font-size: 12.5px; color: var(--ink); font-weight: 500; margin-top: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -370,28 +412,26 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid var(--line);
-  aspect-ratio: 21 / 8;
+  /* 用户 2026-07-16「随机推荐太大了 小一点」:21/8(≈2.63)→ 更扁的 26/7(≈3.71)。
+     ★ 只给 aspect-ratio,**不加 max-height** —— 二者并存会把宽度反锁(详情页 .dt-hero 踩过)。 */
+  aspect-ratio: 26 / 7;
   background: var(--panel-2);
   cursor: pointer;
   isolation: isolate;
 }
 .hero-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -2; transition: opacity var(--dur-slow) var(--ease); }
-/* 只压底部一条,给标题/按钮垫可读性。**左侧那道 90deg 渐变已按用户要求删掉** ——
-   它从左边起 34% 全不透明、到 68% 才化开,等于把大半张剧照糊掉,用户要的是「正常全显示」。
-   别再加回来。 */
-.hero-grad {
-  position: absolute; inset: 0; z-index: -1;
-  background: linear-gradient(0deg, color-mix(in srgb, var(--bg) 85%, transparent), transparent 55%);
-}
-.hero-body { position: absolute; left: 32px; bottom: 26px; max-width: 52%; }
-.hero-title { font-size: clamp(22px, 2.6vw, 30px); font-weight: 720; letter-spacing: -0.02em; color: var(--ink); line-height: 1.1; text-wrap: balance; }
-/* 艺术字下面的条目标题(用户 2026-07-15 版式)。回落文字标题时这行不渲染,不重复。 */
-.hero-subtitle { margin-top: 10px; font-size: 15px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
+/* 用户 2026-07-16「随机推荐封面别做遮罩了 直接显示出来」:遮罩整条删掉,剧照原样全显。
+   文字可读性改由文字自带描边(text-shadow)承担,不再靠盖一层暗底 —— 别再加回渐变。 */
+.hero-grad { display: none; }
+.hero-body { position: absolute; left: 30px; bottom: 22px; max-width: 52%; }
+.hero-title { font-size: clamp(20px, 2.3vw, 27px); font-weight: 720; letter-spacing: -0.02em; color: #fff; line-height: 1.1; text-wrap: balance; text-shadow: 0 2px 12px rgba(0, 0, 0, 0.85), 0 1px 3px rgba(0, 0, 0, 0.9); }
+/* 艺术字下面的条目标题(用户 2026-07-15 版式,2026-07-16 随 Hero 一起收小)。回落文字标题时不渲染。 */
+.hero-subtitle { margin-top: 8px; font-size: 14px; font-weight: 600; color: #fff; letter-spacing: -0.01em; text-shadow: 0 1px 8px rgba(0, 0, 0, 0.85); }
 /* 标题下面的标签行:年份 · 类型 · 评分。 */
 .hero-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
 .hero-tag {
   font-family: var(--mono); font-size: 11px; padding: 3px 9px; border-radius: 999px;
-  border: 1px solid var(--line-strong); background: rgba(20, 25, 34, 0.55); color: var(--ink-2);
+  border: 1px solid var(--line-strong); background: var(--chip-bg); color: var(--ink-2);
 }
 .hero-tag.y { color: var(--warn); }
 /* .hero-eyebrow / .hero-meta / .hero-cta / .hero-ghost 已删:eyebrow「随机推荐」+ 三键都去掉了。 */
@@ -484,38 +524,43 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
 .md { display: grid; grid-template-columns: 214px 1fr; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); min-height: 420px; margin: 4px 0; }
 .mdnav { background: color-mix(in srgb, var(--panel) 40%, var(--bg)); border-right: 1px solid var(--line); padding: 8px; }
 .mdnav .sec { font-size: 10px; font-family: var(--mono); color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em; padding: 12px 10px 4px; }
-.mdnav .it { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 8px; font-size: 12.5px; color: var(--ink-2); cursor: pointer; width: 100%; border: none; background: none; text-align: left; }
+.mdnav .it { display: flex; align-items: center; gap: 10px; padding: 10px 11px; border-radius: 8px; font-size: 13.5px; color: var(--ink-2); cursor: pointer; width: 100%; border: none; background: none; text-align: left; }
 .mdnav .it:hover { background: var(--panel-2); color: var(--ink); }
 .mdnav .it.on { background: var(--accent-soft); color: var(--ink); }
-.mdpane { padding: 16px 20px; }
-.mdpane h4 { margin: 0 0 4px; font-size: 15px; color: var(--ink); }
-.mdpane .hint { font-size: 12px; color: var(--ink-3); margin: 0 0 14px; }
+.mdpane { padding: 18px 22px; }
+.mdpane h4 { margin: 0 0 5px; font-size: 16.5px; color: var(--ink); }
+.mdpane .hint { font-size: 12.5px; color: var(--ink-3); margin: 0 0 16px; }
 
-.setrow { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+/* 用户 2026-07-16「设置页的设置都太小了 放大 点着都费劲」:行距/标题/描述统一上调一档。 */
+.setrow { display: flex; align-items: center; gap: 14px; padding: 15px 0; border-top: 1px solid var(--line); }
 .setrow:first-of-type { border-top: 0; }
-.setrow .l { display: flex; flex-direction: column; gap: 2px; }
-.setrow .l .t { font-size: 13px; color: var(--ink); }
-.setrow .l .d { font-size: 11px; color: var(--ink-3); }
+.setrow .l { display: flex; flex-direction: column; gap: 3px; }
+.setrow .l .t { font-size: 14.5px; color: var(--ink); }
+.setrow .l .d { font-size: 12px; color: var(--ink-3); }
 .setrow .ctl { margin-left: auto; }
 .fld { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
 .fld label { font-size: 12px; color: var(--ink-2); }
 
-/* 开关 / 分段 / 步进(草稿 .sw / .seg / .stepper) */
-.sw { width: 34px; height: 18px; border-radius: 9px; background: var(--line-strong); position: relative; flex: none; border: none; cursor: pointer; transition: background var(--dur-fast) var(--ease); }
+/* 开关 / 分段 / 步进(草稿 .sw / .seg / .stepper)—— 2026-07-16 一并放大,点着不费劲。 */
+.sw { width: 40px; height: 22px; border-radius: 11px; background: var(--line-strong); position: relative; flex: none; border: none; cursor: pointer; transition: background var(--dur-fast) var(--ease); }
 .sw.on { background: var(--accent); }
-.sw i { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: left var(--dur-fast) var(--ease); }
-.sw.on i { left: 18px; }
+.sw i { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left var(--dur-fast) var(--ease); }
+.sw.on i { left: 20px; }
 .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
-.seg span { padding: 5px 12px; font-size: 11.5px; color: var(--ink-2); cursor: pointer; }
+.seg span { padding: 7px 14px; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
 .seg span.on { background: var(--accent); color: var(--accent-ink); }
 .stepper { display: inline-flex; align-items: center; gap: 8px; }
-.stepper .b { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--panel); display: grid; place-items: center; color: var(--ink-2); cursor: pointer; }
-.stepper .v { font-family: var(--mono); min-width: 44px; text-align: center; color: var(--ink); font-size: 12.5px; }
+.stepper .b { width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--line-strong); background: var(--panel); display: grid; place-items: center; color: var(--ink-2); cursor: pointer; }
+.stepper .v { font-family: var(--mono); min-width: 48px; text-align: center; color: var(--ink); font-size: 13.5px; }
 
 /* ---------- 模态弹窗(草稿 .dlg) ---------- */
 .scrim {
   position: fixed; inset: 0; z-index: 60;
-  background: rgba(6, 9, 13, 0.6);
+  /* 用户 2026-07-16「弹窗背景太黑了 侧边栏又很亮 看着突兀」:
+     0.6 → 0.44 减浓,并加一层轻模糊 —— 让侧栏和内容一起柔和退后(统一聚焦),
+     不再是「内容漆黑 + 侧栏突亮」的割裂感。 */
+  background: rgba(6, 9, 13, 0.44);
+  backdrop-filter: blur(3px);
   display: grid; place-items: center;
   padding: 24px;
   animation: enter var(--dur-fast) var(--ease);
@@ -542,7 +587,7 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
 .ctxmenu .mi.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 
 /* ---------- 登录页 ---------- */
-.login-wrap { height: 100%; display: flex; align-items: center; justify-content: center; }
+.login-wrap { height: 100%; display: flex; align-items: center; justify-content: center; padding-top: var(--titlebar-h); }
 .login-card { width: 360px; padding: 40px 34px; border-radius: var(--r-xl); background: var(--panel); border: 1px solid var(--line); box-shadow: var(--card-shadow); display: flex; flex-direction: column; gap: 9px; }
 .brand { font-size: 30px; font-weight: 760; letter-spacing: -0.5px; color: var(--ink); }
 .brand span { color: var(--accent); }
@@ -550,3 +595,31 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
 .lbl { font-size: 12px; color: var(--ink-2); margin-top: 8px; font-weight: 600; }
 .login-card .btn { margin-top: 20px; justify-content: center; }
 .login-err { color: var(--danger); font-size: 13px; margin-top: 10px; }
+
+/* 页面崩溃卡(PageBoundary)。观感对齐 .panel;错误原文用等宽,方便截图/复制给开发者。
+   窗口是透明的 → 不给它一个实心底,崩溃信息会飘在 mpv 画面上看不清。 */
+.pb-crash {
+  max-width: 560px;
+  margin: 60px auto;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  text-align: center;
+}
+.pb-h { font-size: 16px; font-weight: 640; color: var(--ink); }
+.pb-m {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--warn);
+  text-align: left;
+  word-break: break-word;
+}
+.pb-hint { margin-top: 12px; font-size: 12px; color: var(--ink-3); line-height: 1.6; }
+.pb-crash .btn { margin-top: 16px; }

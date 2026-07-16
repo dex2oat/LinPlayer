@@ -1,4 +1,4 @@
-import { type MouseEvent } from "react";
+import { type MouseEvent, useState } from "react";
 import { type Item, type LoginResult, itemLabel, posterUrl, thumbUrl } from "../lib/api";
 import { IconPlay, IconLibrary } from "../app/icons";
 
@@ -30,6 +30,10 @@ export default function Poster({
   onContextMenu,
 }: Props) {
   const thumb = variant === "thumb";
+  /* 图片就位前先摆骨架(用户 2026-07-16:「先加载骨架出来,名字这种文字先出来,
+     图片有加载动画看起来不会这么卡」)。原来 <img> 未加载时那块是**纯空白** ——
+     快速下滑时一片白,看着像页面没加载出来。现在:未加载=shimmer 骨架,加载完淡入。 */
+  const [loaded, setLoaded] = useState(false);
   const progress =
     !item.is_folder && item.resume_secs > 0 && item.runtime_secs > 0
       ? Math.min(100, (item.resume_secs / item.runtime_secs) * 100)
@@ -50,9 +54,13 @@ export default function Poster({
         onClick={() => onOpen(item)}
         title={label}
       >
+        {/* 骨架:图片没到位时占住这块(shimmer),到位即撤 —— 文字/角标本来就已经在了。 */}
+        {item.has_primary && !loaded && <div className="pskel skeleton" />}
         {item.has_primary ? (
           <img
+            className={loaded ? "ready" : ""}
             src={src}
+            onLoad={() => setLoaded(true)}
             /* ★ 关于「切换回去不秒加载」—— **别再拿这里的动画开刀,那不是原因**(用户 2026-07-15
                当面纠正过我一次:「其实不秒加载并不是你的动画问题」)。
 
@@ -65,7 +73,10 @@ export default function Poster({
                async 让解码不挡主线程。两者不冲突。 */
             loading="lazy"
             decoding="async"
-            onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")}
+            onError={(e) => {
+              setLoaded(true); // 失败也要撤骨架,否则永远转圈
+              (e.target as HTMLImageElement).style.visibility = "hidden";
+            }}
           />
         ) : (
           <div className="fallback">

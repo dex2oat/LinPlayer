@@ -463,8 +463,26 @@ impl Player {
         }
         self.set_str("sub-font", font);
     }
-    pub fn set_sub_size(&self, size: f64) {
-        self.set_str("sub-font-size", &size.clamp(10.0, 200.0).to_string());
+    /// 字幕缩放倍率。**这才是「字幕大小」该拧的那颗旋钮**。
+    ///
+    /// 2026-07-16 用 ctypes 直接问 libmpv(v0.41.0-744)实测:
+    ///   - `sub-ass-override` 默认 = `scale` —— 这个模式下 ASS 字幕**只认 `sub-scale`,
+    ///     完全忽略 `sub-font-size`**。而内封字幕(尤其番剧)绝大多数是 ASS。
+    ///   - `secondary-sub-ass-override` 默认 = `strip` —— ASS 标记被剥成纯文本,
+    ///     于是它**反过来只认 `sub-font-size`**。
+    /// 合起来正是用户 2026-07-16 报的那个怪象:「只能调次字幕的字体大小,主字幕的调不动」——
+    /// 同一个 sub-font-size,对主(ASS 保样式)无效、对次(被 strip 成纯文本)有效。
+    /// `sub-scale` 对 ASS 与纯文本都生效,所以大小统一走它。别再拿 sub-font-size 当大小旋钮。
+    pub fn set_sub_scale(&self, scale: f64) {
+        self.set_str("sub-scale", &format!("{:.2}", scale.clamp(0.2, 4.0)));
+    }
+    /// 次字幕的 ASS 处理模式。mpv 默认 `strip`(剥成纯文本)= 用户说的「次字幕不渲染样式」。
+    /// `scale` 则与主字幕同规矩:保留 ASS 自带样式。取值必须是 mpv 认的枚举,别乱传。
+    pub fn set_secondary_sub_ass_override(&self, mode: &str) {
+        if !matches!(mode, "no" | "scale" | "force" | "strip") {
+            return; // 传错值 mpv 只会静默拒绝,这里先挡掉,免得以为设上了
+        }
+        self.set_str("secondary-sub-ass-override", mode);
     }
     /// 字幕竖直位置 0(顶)..100(底)。mpv 只收整数(见 [[macos-no-video-hwdec]])。
     pub fn set_sub_position(&self, pos: f64) {

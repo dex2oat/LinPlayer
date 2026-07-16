@@ -20,9 +20,10 @@
 /* 封顶居中:grid 模式原本无封顶,2560px 下卡片摊成一长排。 */
 .sv-srvgrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
-  gap: 14px;
-  padding: 8px 18px 8px;
+  /* 用户 2026-07-16「服务器都太小了 放大一点」:卡片最小宽 232 → 272。 */
+  grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
+  gap: 16px;
+  padding: 10px 18px 8px;
   align-content: start;
   max-width: var(--content-max);
   margin-inline: auto;
@@ -30,15 +31,15 @@
 /* list 模式保留原有 680px(.sv-srvgrid.list 特异性更高,压得住上面的封顶);
    只是跟着上面的 margin-inline:auto 变成居中 —— 原来左对齐时右边空 1880px,
    正是「右半大半空着」的那个毛病。 */
-.sv-srvgrid.list { grid-template-columns: 1fr; max-width: 680px; }
+.sv-srvgrid.list { grid-template-columns: 1fr; max-width: 760px; }
 
 /* ---------- 服务器卡(草稿 .srvcard) ---------- */
 .sv-srvcard {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 13px;
-  padding: 14px 15px;
+  gap: 15px;
+  padding: 17px 18px;
   border-radius: var(--r-md);
   background: var(--panel);
   border: 1px solid var(--line);
@@ -62,8 +63,8 @@
 /* 图标框(草稿 .sic) */
 .sv-sic {
   flex: 0 0 auto;
-  width: 42px;
-  height: 42px;
+  width: 52px;
+  height: 52px;
   border-radius: var(--r-sm);
   background: var(--accent-soft);
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
@@ -72,7 +73,7 @@
   color: var(--accent);
   overflow: hidden;
 }
-.sv-sic.lg { width: 54px; height: 54px; }
+.sv-sic.lg { width: 60px; height: 60px; }
 .sv-sic-img { width: 100%; height: 100%; object-fit: cover; }
 .sv-glyph { line-height: 1; }
 
@@ -81,7 +82,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 640;
   color: var(--ink);
   white-space: nowrap;
@@ -215,11 +216,11 @@
 }
 .sv-chk input { accent-color: var(--accent); }
 
-/* 图标网格(草稿 .iconpick) */
+/* 图标网格(草稿 .iconpick)—— 2026-07-16 放大:7 列 → 6 列,字形更大,点着不费劲。 */
 .sv-iconpick {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
 }
 .sv-icell {
   aspect-ratio: 1;
@@ -229,34 +230,41 @@
   border: 1px solid var(--line-strong);
   background: var(--panel);
   color: var(--ink-2);
-  font-size: 18px;
+  font-size: 24px;
   cursor: pointer;
+  overflow: hidden;
   transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 }
 .sv-icell:hover { border-color: var(--ink-3); color: var(--ink); }
 .sv-icell.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+/* 默认格里的 emby 图标本尊。 */
+.sv-def-ic { width: 74%; height: 74%; object-fit: contain; display: block; }
 
 /* ---------- 网络图标库(改图标弹窗的「网络图标源」页) ---------- */
 .sv-libbar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
 .sv-libbar .field { flex: 1; }
-/* 网格:固定高度 + 内部滚动,几百个图标不撑破弹窗。 */
+/* 网格:更高的滚动区 + 更大格子(用户 2026-07-16:图标太小、窗口做大)。
+   8 列 → 6 列;固定高度内部滚动,全量渲染靠 content-visibility + 图片 lazy 扛住。 */
 .sv-libgrid {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 7px;
-  max-height: 264px;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+  max-height: 46vh;
   overflow-y: auto;
   padding-right: 4px;
 }
-.sv-libgrid.loading { display: grid; place-items: center; min-height: 120px; }
+.sv-libgrid.loading { display: grid; place-items: center; min-height: 160px; }
 .sv-licell {
   aspect-ratio: 1;
-  padding: 4px;
+  padding: 7px;
   border-radius: var(--r-sm);
   border: 1px solid var(--line-strong);
   background: var(--panel);
   cursor: pointer;
   overflow: hidden;
+  /* 全量渲染上千格的性能护栏:屏外的格子不排版/不绘制,只占位。 */
+  content-visibility: auto;
+  contain-intrinsic-size: 64px;
   transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 }
 .sv-licell:hover { border-color: var(--ink-3); }
@@ -291,3 +299,8 @@
 /* 删除确认主按钮染成 danger。 */
 .sv-danger-btn { background: var(--danger); }
 .sv-danger-btn:hover { background: var(--danger); filter: brightness(1.06); }
+
+/* 更换图标弹窗:比普通对话框宽/高一档(用户 2026-07-16「修改图标的窗口就该做大点」),
+   让图标网格铺得开、图标看得清。 */
+.sv-icondlg { max-width: 640px; }
+.sv-icondlg .dbd { max-height: 74vh; }

@@ -18,7 +18,12 @@ function groupLabel(g: RankingCategory["group"]): string {
   return g === "anime" ? "追番榜" : "影视热榜";
 }
 
-export default function RankingsPage() {
+export default function RankingsPage({
+  onOpenItem,
+}: {
+  /** 跨服找到片源后直接开详情(Shell 传 openFromSearch)。不传就只切服务器 + 提示。 */
+  onOpenItem?: (item: Item, serverId: string) => void;
+}) {
   const [cats, setCats] = useState<RankingCategory[] | null>(null);
   const [active, setActive] = useState<string>("");
   const [entries, setEntries] = useState<RankingEntry[] | null>(null);
@@ -157,14 +162,19 @@ export default function RankingsPage() {
                 ))}
           </div>
 
-          {/* 右栏:海报网格 + 名次角标 + 评分(外部数据,不可播放)。 */}
-          <div>
+          {/* 右栏:海报网格 + 名次角标 + 评分(外部数据,不可播放)。
+              ★ .rk-main 这个 class 不能省:它是 .rkwrap 的 flex 子元素,
+                flex:1/min-width:0 得挂在它身上,网格才有确定宽度(见 CSS 里的长注释)。 */}
+          <div className="rk-main">
             {err ? (
               <div className="empty">加载失败：{err}</div>
             ) : entries == null ? (
               <div className="rankgrid">
-                {Array.from({ length: 12 }).map((_, i) => (
-                  <div className="rankcell poster skeleton" key={i} />
+                {Array.from({ length: 18 }).map((_, i) => (
+                  <div className="rk-item" key={i}>
+                    <div className="rankcell poster skeleton" />
+                    <span className="skeleton" style={{ height: 11, borderRadius: 4 }} />
+                  </div>
                 ))}
               </div>
             ) : entries.length === 0 ? (
@@ -181,7 +191,7 @@ export default function RankingsPage() {
         <div style={{ height: 40 }} />
       </div>
 
-      {pick && <SourcePicker title={pick} onClose={() => setPick(null)} />}
+      {pick && <SourcePicker title={pick} onOpenItem={onOpenItem} onClose={() => setPick(null)} />}
     </>
   );
 }
@@ -306,30 +316,44 @@ export function SourcePicker({
   );
 }
 
-// 名次角标(前三金银铜)+ 评分 + 悬停浮起;点海报 → 跨服找可播源弹窗(草稿 33)。
+// 海报 + 名次角标(前三金银铜)+ 评分 + 标题;点海报 → 跨服找可播源弹窗(草稿 33)。
 function RankCell({ entry, onPick }: { entry: RankingEntry; onPick: () => void }) {
   const medal = entry.rank <= 3 ? ` g${entry.rank}` : "";
+  const [loaded, setLoaded] = useState(false);
   return (
-    <div className="rankcell poster tap" title={entry.title} onClick={onPick}>
-      {entry.image_url ? (
-        <img
-          className="rk-img"
-          src={entry.image_url}
-          loading="lazy"
-          alt={entry.title}
-          onError={(ev) =>
-            ((ev.target as HTMLImageElement).style.visibility = "hidden")
-          }
-        />
-      ) : (
-        <div className="rk-ph">
-          <IconRanking size={28} />
-        </div>
-      )}
-      <span className={`rk${medal}`}>{entry.rank}</span>
-      {entry.rating != null && (
-        <span className="rate">★{entry.rating.toFixed(1)}</span>
-      )}
+    <div className="rk-item">
+      <div className="rankcell poster tap" title={entry.title} onClick={onPick}>
+        {entry.image_url && !loaded && <div className="rk-skel skeleton" />}
+        {entry.image_url ? (
+          <img
+            className={`rk-img${loaded ? " ready" : ""}`}
+            src={entry.image_url}
+            loading="lazy"
+            decoding="async"
+            alt={entry.title}
+            onLoad={() => setLoaded(true)}
+            onError={(ev) => {
+              setLoaded(true); // 失败也撤骨架,否则永远 shimmer
+              (ev.target as HTMLImageElement).style.visibility = "hidden";
+            }}
+          />
+        ) : (
+          <div className="rk-ph">
+            <IconRanking size={26} />
+          </div>
+        )}
+        <span className={`rk${medal}`}>{entry.rank}</span>
+        {/* 评分:0 分不画 —— 两个源都拿 0 表示「没评分」,画出来会变成「这片 0 分」的诽谤。 */}
+        {entry.rating != null && entry.rating > 0 && (
+          <span className={`rate${entry.rating >= 8 ? " hi" : ""}`} title={`评分 ${entry.rating}`}>
+            <i className="s">★</i>
+            {entry.rating.toFixed(1)}
+          </span>
+        )}
+      </div>
+      <span className="rk-cap" title={entry.title}>
+        {entry.title}
+      </span>
     </div>
   );
 }

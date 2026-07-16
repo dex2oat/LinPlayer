@@ -126,11 +126,19 @@ export type MediaVersion = {
   streams: StreamInfo[];
 };
 
-/** 列表卡片标题:剧集补上剧名,否则「第 35 集」单看不知是哪部。 */
+/** 列表卡片标题:剧集补上剧名。
+    ★ 用户 2026-07-16「继续观看名称写具体的季度和集数,样式 SxxExx」:
+      季+集都有 → 「剧名 · S1E5」;缺季号(部分番剧)→ 回落到集名(「第 35 集」),
+      单看集名不知哪部,所以剧名恒在前。 */
 export function itemLabel(it: Item): string {
-  return it.type_ === "Episode" && it.series_name
-    ? `${it.series_name} · ${it.name}`
-    : it.name;
+  if (it.type_ === "Episode" && it.series_name) {
+    const se =
+      it.season_no != null && it.episode_no != null
+        ? `S${it.season_no}E${it.episode_no}`
+        : it.name;
+    return `${it.series_name} · ${se}`;
+  }
+  return it.name;
 }
 
 export type ItemDetail = {
@@ -544,10 +552,16 @@ export const setAspectRatio = (ratio: string) => invoke<void>("set_aspect_ratio"
 /** "auto-safe" / "d3d11va" / "no"(软解) 等。 */
 export const setHwdec = (mode: string) => invoke<void>("set_hwdec", { mode });
 
-/** 字幕样式,不传的项不动。 */
+/** 字幕样式,不传的项不动。
+ *  ★ 这些全是 mpv 的 `sub-*` 全局属性 —— **主字幕和次字幕共用同一份**,
+ *  mpv 压根没有 secondary-sub-font-size/-font/-color 这些属性(2026-07-16 实测 property-list)。
+ *  scale:字幕缩放倍率 = **唯一的字幕大小旋钮**。
+ *  这里曾有个 size(→ mpv sub-font-size),已删:ASS 字幕在 mpv 默认的
+ *  sub-ass-override=scale 下完全无视 sub-font-size,那个旋钮对内封字幕从来就没生效过。
+ *  别再加回来。 */
 export const setSubStyle = (o: {
   font?: string;
-  size?: number;
+  scale?: number;
   position?: number;
   background?: boolean;
   blendMode?: string;
@@ -555,8 +569,12 @@ export const setSubStyle = (o: {
 
 /** 次字幕(双字幕);id 为空 = 关。 */
 export const setSecondarySub = (id: string) => invoke<void>("set_secondary_sub", { id });
-export const setSecondarySubOpts = (o: { delay?: number; position?: number }) =>
-  invoke<void>("set_secondary_sub_opts", o);
+/** assOverride:"scale" 保留 ASS 自带样式 / "strip" 剥成纯文本(mpv 默认,即「次字幕不渲染样式」)。 */
+export const setSecondarySubOpts = (o: {
+  delay?: number;
+  position?: number;
+  assOverride?: string;
+}) => invoke<void>("set_secondary_sub_opts", o);
 
 /** 加载外挂字幕(本地路径或 URL)。 */
 export const addSubtitle = (url: string, title?: string, secondary?: boolean) =>
@@ -569,7 +587,7 @@ export const screenshot = (dir?: string) => invoke<string>("screenshot", { dir }
 /** 画质档位 `[id, 显示名, 窗口模式是否也生效]`。
  *  ★ 第三个字段别丢:放大类滤镜(FSR EASU / Anime4K CNN)只有画面区大于源才跑,
  *  窗口里播 1080p 点了毫无变化。要在**点之前**就标出来,别让用户点完自己猜。 */
-export type ShaderLevel = [id: string, name: string, worksInWindow: boolean];
+export type ShaderLevel = [id: string, name: string, family: string];
 export const shaderLevels = () => invoke<ShaderLevel[]>("shader_levels");
 /** 画质滤镜强度 0~100(CAS 锐化 STR + FSR RCAS SHARP)。落盘 + 立即生效。
  *  返回 false = mpv 拒了 glsl-shader-opts(参数名对不上),**它自己不会报错**,要如实告诉用户。 */
@@ -746,6 +764,9 @@ export const clearAccountIcon = (serverId: string) =>
 /** 并发探测各线路延迟(GET /System/Info/Public,非 ping)。ms=null 即不通。 */
 export const probeLines = (serverId: string) =>
   invoke<LineProbe[]>("probe_lines", { serverId });
+/** 只探一条线路。整表探测要等最慢那条(6s)才返回 —— 要「先出表再逐条填」就用这个。 */
+export const probeLine = (serverId: string, index: number) =>
+  invoke<LineProbe>("probe_line", { serverId, index });
 /** 整表覆写(增删改排序都走它)。 */
 export const setLines = (serverId: string, lines: ServerLine[]) =>
   invoke<void>("set_lines", { serverId, lines });
@@ -1057,8 +1078,18 @@ export type CalendarEntry = {
   air_date: string | null;
   /** 每周放送日 1=周一…7=周日(Bangumi 用)。 */
   weekday: number | null;
+  /** 每周固定放送时刻(ISO8601 UTC 首播时刻,按周重复 → 时分即每周更新时间)。
+      Bangumi 官方 API 不给时刻,核层用 bangumi-data 补(约 64% 覆盖);取不到为 null,不显示时刻。 */
+  broadcast_at: string | null;
   image_url: string | null;
   tmdb_id: number | null;
+  /** 评分(10 分制,两源同口径)。★ null = 没人评过,**不是 0 分** —— 别画成 0.0。 */
+  rating: number | null;
+  /** 简介。Trakt 内联给(TMDB 那次请求顺手就有);**Bangumi 恒为 null**,
+   *  要走 bangumiSummary(bangumi_id) 按需拉(/calendar 的 summary 实测整周全空)。 */
+  summary: string | null;
+  /** Bangumi subject id —— 按需拉简介用。Trakt 侧为 null。 */
+  bangumi_id: number | null;
   source: "trakt" | "bangumi";
 };
 
@@ -1071,6 +1102,10 @@ export type AfdianVerifyResult = {
 
 export const traktCalendar = (onlyMine: boolean) =>
   invoke<CalendarEntry[]>("trakt_calendar", { onlyMine });
+/** 单部番的简介(Bangumi)。核层带进程内缓存,重复调是瞬时的。null = 没有,别画。 */
+export const bangumiSummary = (subjectId: number) =>
+  invoke<string | null>("bangumi_summary", { subjectId });
+
 export const bangumiCalendar = (onlyMine: boolean) =>
   invoke<CalendarEntry[]>("bangumi_calendar", { onlyMine });
 export const afdianVerify = (orderNo: string) =>

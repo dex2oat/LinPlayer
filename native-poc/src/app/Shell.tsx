@@ -22,6 +22,7 @@ import AddServerPage from "../pages/AddServerPage";
 import SettingsPage from "../pages/SettingsPage";
 import AniRssPage from "../pages/AniRssPage";
 import CalendarPage from "../pages/CalendarPage";
+import PageBoundary from "./PageBoundary";
 
 type Props = {
   session: LoginResult;
@@ -110,6 +111,10 @@ export default function Shell({
     openDetail(it);
   }
 
+  /* 这个 key 同时干两件事:换页时重挂 .page(入场动画),以及重置错误边界 ——
+     不重置的话某页崩过一次,切走再切回来它还顶着错误页。 */
+  const pageKey = detail ? `d:${detail.id}` : page + (libTarget?.id ?? "");
+
   const body = (() => {
     switch (page) {
       case "home":
@@ -138,7 +143,7 @@ export default function Shell({
       case "favorites":
         return <FavoritesPage session={session} onOpenItem={openDetail} />;
       case "rankings":
-        return <RankingsPage />;
+        return <RankingsPage onOpenItem={openFromSearch} />;
       case "downloads":
         return <DownloadsPage onPlayLocal={onPlayDownload} />;
       case "netdisk":
@@ -146,7 +151,7 @@ export default function Shell({
       case "anirss":
         return <AniRssPage onBack={() => nav("servers")} />;
       case "calendar":
-        return <CalendarPage onBack={() => nav("settings")} />;
+        return <CalendarPage onOpenItem={openFromSearch} />;
       case "servers":
         return (
           <ServersPage
@@ -172,7 +177,7 @@ export default function Shell({
           />
         );
       case "settings":
-        return <SettingsPage theme={theme} setTheme={setTheme} onOpenCalendar={() => nav("calendar")} />;
+        return <SettingsPage theme={theme} setTheme={setTheme} />;
     }
   })();
 
@@ -191,19 +196,24 @@ export default function Shell({
         />
         <div className="content">
           <div className="immersive" />
-          <div className="page" key={detail ? `d:${detail.id}` : page + (libTarget?.id ?? "")}>
-            {detail ? (
-              <DetailPage
-                session={session}
-                item={detail}
-                onPlay={onPlay}
-                onOpenChild={pushDetail}
-                onBack={backDetail}
-                onSessionChange={onSessionChange}
-              />
-            ) : (
-              body
-            )}
+          {/* 错误边界包在 .page 里面:炸的只是这一页,侧栏照常在,还能切走。
+              不包的话任何一页渲染抛错都会卸载整棵树 —— 而窗口是透明的,
+              看起来就是「整个 app 黑屏、打都打不开」(2026-07-16 追剧日历真炸过)。 */}
+          <div className="page" key={pageKey}>
+            <PageBoundary resetKey={pageKey}>
+              {detail ? (
+                <DetailPage
+                  session={session}
+                  item={detail}
+                  onPlay={onPlay}
+                  onOpenChild={pushDetail}
+                  onBack={backDetail}
+                  onSessionChange={onSessionChange}
+                />
+              ) : (
+                body
+              )}
+            </PageBoundary>
           </div>
         </div>
       </div>

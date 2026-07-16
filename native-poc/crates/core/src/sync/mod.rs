@@ -36,6 +36,9 @@ pub fn proxy_headers() -> Vec<(&'static str, &'static str)> {
 pub const BANGUMI_API_OFFICIAL: &str = "https://api.bgm.tv";
 pub const BANGUMI_API_MIRROR: &str = "https://bgmapi.anibt.net";
 pub const BANGUMI_OAUTH_OFFICIAL: &str = "https://bgm.tv";
+// 图片反代(用户 2026-07-16:anibt 的 API 反代一直过不了 CF,但图片反代没问题)。
+// 因此 API 走官方、图片单独改写到 anibt 图片反代 —— 官方图片 lain.bgm.tv 国内常不通。
+pub const BANGUMI_IMG_MIRROR: &str = "https://bgmimg.anibt.net";
 
 // ---------- OAuth 凭据轻混淆(XOR SHA256 keystream) ----------
 const OBF_PASSPHRASE: &str = "LinPlayer::oauth::keystream::v1";

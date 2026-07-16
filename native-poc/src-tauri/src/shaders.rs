@@ -53,6 +53,16 @@ const FILES: &[(&str, &str)] = &[
         "Anime4K_Denoise_Bilateral_Mode.glsl",
         include_str!("../shaders/Anime4K_Denoise_Bilateral_Mode.glsl"),
     ),
+    // —— NVIDIA Image Scaling(NIS,取自 hooke007/mpv_PlayKit)——
+    // NVSharpen:纯锐化,//!WHEN SHARP 是参数,窗口模式也跑;NVScaler:放大+锐化,//!WHEN OUTPUT 挑尺寸。
+    (
+        "NVSharpen_RT.glsl",
+        include_str!("../shaders/NVSharpen_RT.glsl"),
+    ),
+    (
+        "NVScaler_RT.glsl",
+        include_str!("../shaders/NVScaler_RT.glsl"),
+    ),
     // —— 放大器(要输出>源才跑) ——
     (
         "AMD_FSR1_EASU.glsl",
@@ -165,43 +175,32 @@ pub struct Preset {
 ///   所以放大档的提升空间不在这儿。4.0 = 不跑(`//!WHEN SHARP 4.0 <`)。
 fn preset(level: &str) -> Option<Preset> {
     Some(match level {
-        // ——— 窗口模式也生效(不挑尺寸) ———
-        // 「轻」也比 shader 默认(0.5)高一档:用户的基线是「默认档我看不出来」。
-        "modeA" => Preset { files: &["AMD_CAS_luma_RT.glsl"], opts: "STR=0.60" },
+        // ═══════════ 家族一:Anime4K(动漫特化:双边去噪 + CNN 超分) ═══════════
         // Denoise_Bilateral 没有 //!PARAM,强度靠换 Mean(温和)/Mode(更狠)两个算法拉开。
-        "modeB" => Preset { files: &["Anime4K_Denoise_Bilateral_Mean.glsl"], opts: "" },
-        "modeC" => Preset {
+        "ak_denoise_l" => Preset { files: &["Anime4K_Denoise_Bilateral_Mean.glsl"], opts: "" },
+        "ak_denoise_h" => Preset { files: &["Anime4K_Denoise_Bilateral_Mode.glsl"], opts: "" },
+        // 去噪 + CAS 锐化(CAS 的 STR 越大越锐,烧进档位)。
+        "ak_sharp" => Preset {
             files: &["Anime4K_Denoise_Bilateral_Mode.glsl", "AMD_CAS_luma_RT.glsl"],
             opts: "STR=0.85",
         },
-        // ★「强」档:CAS 挂 LUMA、RCAS 挂 MAIN(见各自 //!HOOK)—— **不同阶段,可以叠**,
-        //   这是能在窗口里做出「一眼看得见」的唯一办法,两个都拉到各自最锐端。
-        //   再往上没有了:STR>1 / SHARP<0 超出 //!MAXIMUM,mpv 会夹回去。
-        "modeD" => Preset {
+        // CNN x2 放大(窗口下不跑,全屏才生效)。Clamp_Highlights 是前置辅助 pass。
+        "ak_up_m" => Preset {
+            files: &["Anime4K_Clamp_Highlights.glsl", "Anime4K_Upscale_CNN_x2_M.glsl"],
+            opts: "",
+        },
+        // 去噪 + CNN x2 放大。
+        "ak_up_dn" => Preset {
             files: &[
                 "Anime4K_Denoise_Bilateral_Mode.glsl",
-                "AMD_CAS_luma_RT.glsl",
-                "AMD_FSR1_RCAS_RT.glsl",
+                "Anime4K_Clamp_Highlights.glsl",
+                "Anime4K_Upscale_CNN_x2_M.glsl",
             ],
-            opts: "STR=1.00,SHARP=0.00",
+            opts: "",
         },
-        // ——— 放大档(要输出 > 源才生效,即全屏/大窗口) ———
-        // FSR1 官方链:EASU 放大 → RCAS 锐化。RCAS 门槛是参数,窗口下会退化成「只锐化」。
-        "modeAA" => Preset {
-            files: &["AMD_FSR1_EASU.glsl", "AMD_FSR1_RCAS_RT.glsl"],
-            opts: "SHARP=0.00",
-        },
-        "modeBB" => Preset {
-            files: &[
-                "Anime4K_Denoise_Bilateral_Mode.glsl",
-                "AMD_FSR1_EASU.glsl",
-                "AMD_FSR1_RCAS_RT.glsl",
-            ],
-            opts: "SHARP=0.00",
-        },
-        // 唯一保留的重型 CNN 档(壮机 + 全屏)。VL 模型 143K,这才是真「超分」。
+        // 重型 CNN 去噪放大链(壮机 + 全屏)。VL 模型 143K,这才是真「超分」。
         // Anime4K CNN 没有 //!PARAM —— 权重写死在模型里,强度不可调,只能换模型大小。
-        "modeAC" => Preset {
+        "ak_up_vl" => Preset {
             files: &[
                 "Anime4K_Clamp_Highlights.glsl",
                 "Anime4K_Upscale_Denoise_CNN_x2_VL.glsl",
@@ -211,27 +210,82 @@ fn preset(level: &str) -> Option<Preset> {
             ],
             opts: "",
         },
+
+        // ═══════════ 家族二:AMD FSR(通用锐化 + FSR1 放大) ═══════════
+        // 「轻」也比 shader 默认(0.5)高一档:用户基线是「默认档我看不出来」。CAS 的 STR 越大越锐。
+        "fsr_sharp_l" => Preset { files: &["AMD_CAS_luma_RT.glsl"], opts: "STR=0.60" },
+        "fsr_sharp_m" => Preset { files: &["AMD_CAS_luma_RT.glsl"], opts: "STR=0.85" },
+        // 「强」:CAS 挂 LUMA、RCAS 挂 MAIN —— 不同阶段,可以叠,两个都拉到各自最锐端。
+        "fsr_sharp_h" => Preset {
+            files: &["AMD_CAS_luma_RT.glsl", "AMD_FSR1_RCAS_RT.glsl"],
+            opts: "STR=1.00,SHARP=0.00",
+        },
+        // FSR1 官方链:EASU 放大 → RCAS 锐化。RCAS 门槛是参数,窗口下退化成「只锐化」。
+        "fsr_up" => Preset {
+            files: &["AMD_FSR1_EASU.glsl", "AMD_FSR1_RCAS_RT.glsl"],
+            opts: "SHARP=0.25",
+        },
+        "fsr_up_h" => Preset {
+            files: &["AMD_FSR1_EASU.glsl", "AMD_FSR1_RCAS_RT.glsl"],
+            opts: "SHARP=0.00",
+        },
+        "fsr_up_dn" => Preset {
+            files: &[
+                "Anime4K_Denoise_Bilateral_Mode.glsl",
+                "AMD_FSR1_EASU.glsl",
+                "AMD_FSR1_RCAS_RT.glsl",
+            ],
+            opts: "SHARP=0.00",
+        },
+
+        // ═══════════ 家族三:NVIDIA Image Scaling(NIS) ═══════════
+        // NVSharpen:纯锐化,//!WHEN SHARP 是参数(0~1,越大越锐),窗口模式也跑。SHARP=0 = 不跑。
+        "nv_sharp_l" => Preset { files: &["NVSharpen_RT.glsl"], opts: "SHARP=0.30" },
+        "nv_sharp_m" => Preset { files: &["NVSharpen_RT.glsl"], opts: "SHARP=0.50" },
+        "nv_sharp_h" => Preset { files: &["NVSharpen_RT.glsl"], opts: "SHARP=0.85" },
+        // NVScaler:放大 + 内建锐化(//!WHEN OUTPUT 挑尺寸,全屏才跑)。
+        "nv_up" => Preset { files: &["NVScaler_RT.glsl"], opts: "SHARP=0.30" },
+        "nv_up_h" => Preset { files: &["NVScaler_RT.glsl"], opts: "SHARP=0.50" },
+        "nv_up_dn" => Preset {
+            files: &["Anime4K_Denoise_Bilateral_Mode.glsl", "NVScaler_RT.glsl"],
+            opts: "SHARP=0.50",
+        },
+
         _ => return None, // off / 未知 = 关
     })
 }
 
-/// UI 档位清单 `(id, 显示名, 窗口模式是否也生效)`。
-/// 第三个字段直接给 UI 画「窗口可用 / 需放大」的角标 —— 让用户点之前就知道,
-/// 而不是点完看不出变化再去猜。有测试钉它必须等于 works_at_any_size()。
+/// UI 档位清单 `(id, 显示名, 滤镜家族)`。
+/// 用户 2026-07-16:「去掉放大才生效的模式那种分组,加入 FSR、专门的 NV 滤镜,三种滤镜每种六个模式」。
+/// 第三个字段是**家族名**(Anime4K / FSR / NVIDIA),UI 按它分三组,每组六档 ——
+/// 不再按「窗口可用 / 需放大」分组(那个割裂的角标去掉了)。
+/// 「某档在当前窗口尺寸下会不会真跑」仍由 will_run() 在点击时如实 toast,不在列表里预标。
 ///
-/// 名字里的 轻/推荐/强 就是强度梯度的**唯一**出口 —— 参数在 preset() 里调死。
-pub fn levels() -> Vec<(&'static str, &'static str, bool)> {
+/// 名字里的 轻/推荐/强 是强度梯度的**唯一**出口 —— 参数在 preset() 里调死。
+pub fn levels() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
-        ("off", "关闭", true),
-        ("modeA", "锐化 · 轻", true),
-        ("modeB", "去噪 · 轻", true),
-        ("modeC", "锐化+去噪 · 推荐", true),
-        ("modeD", "锐化+去噪 · 强", true),
-        // FSR 档:全屏放大 + 锐化;窗口下 EASU 被跳过、RCAS 照锐化 → 仍有效果,故 true。
-        ("modeAA", "放大+锐化 · FSR1", true),
-        ("modeBB", "放大+锐化+去噪 · FSR1", true),
-        // 唯一「不放大就完全没效果」的档 —— 全链 CNN 都带尺寸门槛。
-        ("modeAC", "去噪放大 · Anime4K VL · 壮机", false),
+        ("off", "关闭", ""),
+        // —— Anime4K:动漫特化(双边去噪 + CNN 超分)——
+        ("ak_denoise_l", "去噪 · 轻", "Anime4K"),
+        ("ak_denoise_h", "去噪 · 强", "Anime4K"),
+        ("ak_sharp", "锐化+去噪 · 推荐", "Anime4K"),
+        ("ak_up_m", "放大 · CNN M", "Anime4K"),
+        ("ak_up_dn", "放大+去噪 · CNN M", "Anime4K"),
+        ("ak_up_vl", "放大去噪 · CNN VL · 壮机", "Anime4K"),
+        // —— AMD FSR:通用锐化 + FSR1 放大 ——
+        ("fsr_sharp_l", "锐化 · 轻", "FSR"),
+        ("fsr_sharp_m", "锐化 · 推荐", "FSR"),
+        ("fsr_sharp_h", "锐化 · 强", "FSR"),
+        ("fsr_up", "放大+锐化 · FSR1", "FSR"),
+        ("fsr_up_h", "放大+锐化 · 强", "FSR"),
+        ("fsr_up_dn", "放大+锐化+去噪", "FSR"),
+        // —— NVIDIA Image Scaling(NIS)——
+        ("nv_sharp_l", "锐化 · 轻", "NVIDIA"),
+        ("nv_sharp_m", "锐化 · 推荐", "NVIDIA"),
+        ("nv_sharp_h", "锐化 · 强", "NVIDIA"),
+        ("nv_up", "放大 · NIS", "NVIDIA"),
+        ("nv_up_h", "放大+锐化 · NIS", "NVIDIA"),
+        ("nv_up_dn", "放大+锐化+去噪 · NIS", "NVIDIA"),
     ]
 }
 
@@ -362,7 +416,7 @@ mod tests {
                 .parse()
                 .unwrap()
         };
-        let (light, rec, strong) = (str_of("modeA"), str_of("modeC"), str_of("modeD"));
+        let (light, rec, strong) = (str_of("fsr_sharp_l"), str_of("fsr_sharp_m"), str_of("fsr_sharp_h"));
         assert!(light < rec && rec < strong, "锐化梯度必须 轻({light}) < 推荐({rec}) < 强({strong})");
         // 连最轻的一档都必须高于 shader 自带默认 0.5 —— 默认值就是用户说「看不出来」的那个。
         assert!(light > 0.5, "最轻档 STR={light} 没超过 shader 默认 0.5,等于没调");
@@ -374,7 +428,7 @@ mod tests {
     fn off_clears_opts() {
         assert_eq!(shader_opts("off"), "");
         assert_eq!(shader_opts("nonsense"), "");
-        assert_eq!(shader_opts("modeD"), "STR=1.00,SHARP=0.00");
+        assert_eq!(shader_opts("fsr_sharp_h"), "STR=1.00,SHARP=0.00");
     }
 
     /// off/未知不该挂任何 shader。
@@ -382,7 +436,24 @@ mod tests {
     fn off_yields_no_shaders() {
         assert!(preset("off").is_none());
         assert!(preset("nonsense").is_none());
-        assert!(preset("modeA").is_some());
+        assert!(preset("fsr_sharp_l").is_some());
+    }
+
+    /// 三个家族每个都必须正好六档 —— 用户明确「三种滤镜每种六个模式」。
+    #[test]
+    fn three_families_six_modes_each() {
+        for fam in ["Anime4K", "FSR", "NVIDIA"] {
+            let n = levels().iter().filter(|(_, _, f)| *f == fam).count();
+            assert_eq!(n, 6, "家族 {fam} 应有 6 档,实际 {n}");
+        }
+        // 除 off 外每档都必须能解析出 preset。
+        for (id, _, fam) in levels() {
+            if id == "off" {
+                continue;
+            }
+            assert!(!fam.is_empty(), "档位 {id} 缺家族标记");
+            assert!(preset(id).is_some(), "档位 {id} 没有对应 preset");
+        }
     }
 
     /// 用户 2026-07-11(a5e21885)明确否掉 Restore:动态画面边缘振铃/拖影,且最吃显卡。
@@ -400,28 +471,12 @@ mod tests {
         }
     }
 
-    /// ★ levels() 里声明的「窗口可用」必须和 shader 源里的门槛一致。
-    /// 这是本文件的核心承诺:标着窗口可用却全是放大 pass = 又一次「假装开了」。
+    /// 每个家族的「锐化/去噪」档(不含放大)必须窗口模式下真有效果,一个尺寸门槛都不许有。
+    /// (放大档 works_at_any_size 可真可假 —— 见 upscale_levels_need_upscaling。)
     #[test]
-    fn window_ok_flag_matches_shader_gates() {
-        for (id, label, claims_any_size) in levels() {
-            if preset(id).is_none() {
-                continue;
-            }
-            assert_eq!(
-                claims_any_size,
-                works_at_any_size(id),
-                "档位 {id}({label}) 声明窗口可用={claims_any_size},但按 shader 源里的 //!WHEN 算是 {} —— \
-                 要么改链路要么改声明,别让 UI 撒谎",
-                works_at_any_size(id)
-            );
-        }
-    }
-
-    /// 用户点名要的:前三档必须在窗口模式下真有效果(锐化/去噪),一个尺寸门槛都不许有。
-    #[test]
-    fn first_three_levels_work_in_windowed_mode() {
-        for id in ["modeA", "modeB", "modeC"] {
+    fn sharpen_denoise_levels_work_in_windowed_mode() {
+        // 三家族各挑纯锐化/去噪档(无放大 pass)。
+        for id in ["ak_denoise_l", "ak_denoise_h", "ak_sharp", "fsr_sharp_l", "fsr_sharp_m", "fsr_sharp_h", "nv_sharp_l", "nv_sharp_m", "nv_sharp_h"] {
             assert!(works_at_any_size(id), "{id} 必须窗口模式下就能生效");
             // 缩小播放(1770×1080 窗口播 1920×1080,真机现场)也必须有效果
             assert_eq!(
@@ -432,19 +487,22 @@ mod tests {
         }
     }
 
-    /// 放大档在窗口下确实不生效 —— 这不是 bug,是 shader 的设计,但必须如实告诉用户。
+    /// 纯放大档(全链都带尺寸门槛)在窗口下确实不生效 —— 不是 bug,是 shader 设计,如实由 will_run 报。
     #[test]
     fn upscale_levels_need_upscaling() {
-        // 纯 CNN 档:窗口(0.92×)不跑,全屏 2560×1600(1.33×/1.48×)才跑
-        assert_eq!(will_run("modeAC", Some((1920.0, 1080.0)), Some((1770.0, 1080.0))), Some(false));
-        assert_eq!(will_run("modeAC", Some((1920.0, 1080.0)), Some((2560.0, 1600.0))), Some(true));
+        // ak_up_vl(纯 CNN)与 nv_up(NVScaler)都无「不挑尺寸」的 pass → 窗口不跑,全屏才跑。
+        for id in ["ak_up_vl", "nv_up"] {
+            assert!(!works_at_any_size(id), "{id} 应是纯放大档(窗口下无效果)");
+            assert_eq!(will_run(id, Some((1920.0, 1080.0)), Some((1770.0, 1080.0))), Some(false), "{id} 窗口下不该跑");
+            assert_eq!(will_run(id, Some((1920.0, 1080.0)), Some((2560.0, 1600.0))), Some(true), "{id} 全屏放大应跑");
+        }
         // 只有一边过线也不行(WHEN 是 宽 AND 高)
-        assert_eq!(will_run("modeAC", Some((1920.0, 1080.0)), Some((3840.0, 1080.0))), Some(false));
+        assert_eq!(will_run("ak_up_vl", Some((1920.0, 1080.0)), Some((3840.0, 1080.0))), Some(false));
         // 恰好 1.2 倍:shader 用的是 `>` 不是 `>=`
-        assert_eq!(will_run("modeAC", Some((1000.0, 1000.0)), Some((1200.0, 1200.0))), Some(false));
+        assert_eq!(will_run("ak_up_vl", Some((1000.0, 1000.0)), Some((1200.0, 1200.0))), Some(false));
         // 没在播 / 源尺寸为 0(mpv 还没 reconfig)→ 不下结论,别除零除出 inf 说「能跑」
-        assert_eq!(will_run("modeAC", None, Some((2560.0, 1600.0))), None);
-        assert_eq!(will_run("modeAC", Some((0.0, 0.0)), Some((2560.0, 1600.0))), None);
+        assert_eq!(will_run("ak_up_vl", None, Some((2560.0, 1600.0))), None);
+        assert_eq!(will_run("ak_up_vl", Some((0.0, 0.0)), Some((2560.0, 1600.0))), None);
         // off 不下结论
         assert_eq!(will_run("off", Some((1920.0, 1080.0)), Some((1770.0, 1080.0))), None);
     }
@@ -483,6 +541,8 @@ mod tests {
     fn upscale_gate_detection_is_sane() {
         assert!(is_upscale_gated("AMD_FSR1_EASU.glsl"), "EASU 是放大器,必须判成挑尺寸");
         assert!(is_upscale_gated("Anime4K_Upscale_Denoise_CNN_x2_VL.glsl"));
+        assert!(is_upscale_gated("NVScaler_RT.glsl"), "NVScaler 的 //!WHEN OUTPUT 挑尺寸");
+        assert!(!is_upscale_gated("NVSharpen_RT.glsl"), "NVSharpen 的 //!WHEN SHARP 是参数,不挑尺寸");
         assert!(!is_upscale_gated("AMD_CAS_luma_RT.glsl"), "CAS 的 //!WHEN STR 是参数,不挑尺寸");
         assert!(!is_upscale_gated("AMD_FSR1_RCAS_RT.glsl"), "RCAS 的 //!WHEN SHARP 是参数,不挑尺寸");
         assert!(!is_upscale_gated("Anime4K_Denoise_Bilateral_Mode.glsl"), "去噪没有 WHEN,永远跑");

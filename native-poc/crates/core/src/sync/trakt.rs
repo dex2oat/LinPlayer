@@ -10,6 +10,85 @@ use super::{proxy_headers, trakt_client_id, use_sync_proxy, SyncAccount, SYNC_PR
 
 const API_BASE: &str = "https://api.trakt.tv";
 
+/// Trakt **自己不发图**(响应里只有 ids.tmdb)—— 这就是「trakt 放送表图片加载不出来」的根因:
+/// 旧代码直接 `image_url: None`,前端只能画占位方块。这里拿 tmdb_id 去 TMDB 查海报。
+/// ⚠️ 需要编译期注入 `TMDB_API_KEY`(与排行榜同源)。没 key 就返回 None —— 不假装有图。
+/// TMDB 一次请求能拿到的三样东西。
+/// ★ 海报/简介/评分**同一个 `/3/tv/{id}` 响应里全都有** —— 以前只取了 poster_path,
+/// 白扔了另外两个。补简介/评分**零额外请求**,别再为它们各发一次。
+struct TmdbShow {
+    poster: Option<String>,
+    overview: Option<String>,
+    rating: Option<f64>,
+}
+
+async fn tmdb_show(tmdb_id: i64) -> Option<TmdbShow> {
+    let key = crate::secrets::tmdb_key();
+    if key.is_empty() {
+        return None;
+    }
+    let use_bearer = key.contains('.'); // v4 JWT 含点;v3 为 32 位十六进制
+    let url = format!("https://api.themoviedb.org/3/tv/{tmdb_id}");
+    let mut req = crate::http::client()
+        .get(&url)
+        .header("Accept", "application/json");
+    if use_bearer {
+        req = req.header("Authorization", format!("Bearer {key}"));
+    } else {
+        req = req.query(&[("api_key", key.as_str())]);
+    }
+    let j = req.send().await.ok()?.json::<Value>().await.ok()?;
+    Some(TmdbShow {
+        poster: j
+            .get("poster_path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(|p| format!("https://image.tmdb.org/t/p/w342{p}")),
+        overview: j
+            .get("overview")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|o| !o.is_empty())
+            .map(str::to_string),
+        // 0 = TMDB 表示「没人评过」,不是零分 —— 滤掉,别让前端画出诽谤。
+        rating: j
+            .get("vote_average")
+            .and_then(Value::as_f64)
+            .filter(|r| *r > 0.0),
+    })
+}
+
+/// 给日历条目补 TMDB 海报。同一部剧一周内常有多集 → **按 tmdb_id 去重**,一部只查一次。
+/// 没 key 时每个 tmdb_poster 立即返回 None,不打网络,几乎零开销。
+/// 按 tmdb_id 去重后并发拉 TMDB,回填海报 + 简介 + 评分。
+/// Trakt 自己不发图、不发简介,只给 ids.tmdb —— 这三样只能从 TMDB 来。
+async fn fill_tmdb(out: &mut [CalendarEntry]) {
+    let mut ids: Vec<i64> = out.iter().filter_map(|e| e.tmdb_id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return;
+    }
+    let mut handles = Vec::new();
+    for id in ids {
+        handles.push(tokio::spawn(async move { (id, tmdb_show(id).await) }));
+    }
+    let mut map = std::collections::HashMap::new();
+    for h in handles {
+        if let Ok((id, Some(sh))) = h.await {
+            map.insert(id, sh);
+        }
+    }
+    for e in out.iter_mut() {
+        if let Some(sh) = e.tmdb_id.and_then(|id| map.get(&id)) {
+            e.image_url = sh.poster.clone();
+            e.summary = sh.overview.clone();
+            e.rating = sh.rating;
+        }
+    }
+}
+
 #[derive(Serialize, Clone)]
 pub struct TraktDeviceCode {
     pub device_code: String,
@@ -264,10 +343,15 @@ pub async fn fetch_shows_calendar(
             subtitle,
             air_date,
             weekday: None,
-            image_url: None,
+            broadcast_at: None, // Trakt 的 air_date(first_aired)本身就是精确时刻,不需要
+            image_url: None, // 下面 fill_tmdb 用 tmdb_id 统一补(海报/简介/评分一次拉齐)
             tmdb_id,
+            rating: None,
+            summary: None,
+            bangumi_id: None,
             source: "trakt".into(),
         });
     }
+    fill_tmdb(&mut out).await;
     out
 }

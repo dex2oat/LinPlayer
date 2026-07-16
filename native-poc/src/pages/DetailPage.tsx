@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   type AccountInfo,
   type Item,
@@ -427,21 +428,13 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
 
   return (
     <>
-      {/* 面包屑(标注 12):草稿要求返回除了玻璃 ‹ 还有面包屑这条路。
-          和别的页一样 cbar 在 .scroll 外 —— 放里面会跟着正文滚走,就不是「常驻返回路径」了。 */}
-      <div className="cbar">
-        <span className="crumb">
-          <button className="crumb-btn" onClick={onBack}>
-            媒体库
-          </button>
-          <span className="sep">›</span>
-          <b>{title}</b>
-        </span>
-      </div>
+      {/* 面包屑(标注 12)已按用户 2026-07-16 移除:「页面上面显示路径的地方…没啥作用又丑,
+          且颜色和米黄底冲突」。返回走 Hero 里的玻璃 ‹ 按钮(dt-hero-back,onBack 仍在用)。 */}
       <div className="scroll detail">
       <div className="cbody" style={{ paddingTop: 0 }}>
-        {/* ① Hero:全宽出血,不受正文 max-width 约束 */}
-        <div className="dt-hero">
+        {/* ① Hero:全宽出血,不受正文 max-width 约束。
+            集详情加 .ep:内容底对齐 + 简介进右侧宽区(见下),整块更紧凑贴近播放键。 */}
+        <div className={`dt-hero${isEpisode ? " ep" : ""}`}>
           {/* 背景走 Backdrop(剧集/电影覆盖率 100%/92%,分集用 SeriesId 的 —— 见 bgId)。
               ★ 取不到就露出 .dt-hero 的纯色底(--panel-2),**不再回落 poster** ——
               海报现在是左边那张独立封面,背景再放一张海报就重复了。这就是决定「不提供就纯色」。 */}
@@ -499,13 +492,10 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
                   onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")}
                 />
               </div>
-              {isEpisode && d?.overview && (
-                <p className="dt-hero-epsyn">{d.overview}</p>
-              )}
             </div>
             <div className="dt-hero-body">
               {isEpisode && d?.episode_no != null && (
-                <div className="hero-eyebrow">
+                <div className="dt-hero-eyebrow">
                   第 {d.episode_no} 集{d.name ? ` · ${d.name}` : ""}
                 </div>
               )}
@@ -520,6 +510,11 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
                 ))}
                 {isSeries && episodes.length > 0 && <span className="genre">{episodes.length} 集</span>}
               </div>
+              {/* 集简介搬到这块宽区(用户 2026-07-16:「简介不长,有可用位置就用,不要叠多行」)。
+                  在右侧宽区里短简介 1~2 行就放下,不再挤在窄封面下叠 4 行;正文区 ③ 简介对 Episode 仍隐藏,不重复。 */}
+              {isEpisode && d?.overview && (
+                <p className="dt-hero-epsyn">{d.overview}</p>
+              )}
             </div>
           </div>
         </div>
@@ -957,16 +952,21 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
           (grep '#[tauri::command]' 全表核过:无 cast/dlna/external/open_with)。
           按草稿 979 自己立的规矩「没有就不显示、不硬凑」——弹个「待接」toast 的假菜单项
           比没有更坏:用户以为坏了,下一个人以为接过了。核层补齐命令后再加回来。 */}
-      {moreMenu && (
+      {/* ★ 通过 portal 挂到 body:.ctxmenu 是 position:fixed,但详情页祖先 .page 带
+          animation(transform)会生成「包含块」,让 fixed 退化成相对该祖先定位 → 菜单跑到
+          按钮下方老远(用户 2026-07-16「更多菜单不靠着按钮显示」)。挂到 body 就没有被
+          transform 的祖先,fixed 恢复相对视口,坐标(getBoundingClientRect)才对得上。 */}
+      {moreMenu && createPortal(
         <div className="ctxmenu" style={{ left: moreMenu.x, top: moreMenu.y }} onClick={(e) => e.stopPropagation()}>
           <div className="mi" onClick={() => markPlayed(item.id, !played)}>
             <IconInfo size={15} /> {played ? "标记未看" : "标记已看"}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* 分集右键菜单(标注 16)。「换源」同上:核层无此命令 → 不摆假项。 */}
-      {epCtx && (
+      {epCtx && createPortal(
         <div className="ctxmenu" style={{ left: epCtx.x, top: epCtx.y }} onClick={(e) => e.stopPropagation()}>
           <div className="mi" onClick={() => markPlayed(epCtx.ep.id, true)}>
             <IconInfo size={15} /> 标记已看
@@ -983,7 +983,8 @@ export default function DetailPage({ session, item, onPlay, onOpenChild, onBack,
           >
             <IconDownload size={15} /> 下载本集
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {toast && <div className="toast">{toast}</div>}

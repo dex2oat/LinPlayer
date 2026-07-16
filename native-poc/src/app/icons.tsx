@@ -32,6 +32,8 @@ export const IconSettings = ({ size = 20, className }: P) =>
   svg(size, className, <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-2.7-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H3a2 2 0 1 1 0-4h.2a1.6 1.6 0 0 0 1.1-2.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 2.7-1.1V3a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-1.1 2.7V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.4.9Z" /></>);
 export const IconRanking = ({ size = 20, className }: P) =>
   svg(size, className, <><path d="M6 20V10" /><path d="M12 20V4" /><path d="M18 20v-7" /></>);
+export const IconCalendar = ({ size = 20, className }: P) =>
+  svg(size, className, <><rect x="3" y="4.5" width="18" height="16" rx="2" /><path d="M3 9h18M8 3v3M16 3v3" /></>);
 export const IconSearch = ({ size = 20, className }: P) =>
   svg(size, className, <><circle cx="11" cy="11" r="7" /><path d="m20 20-3.2-3.2" /></>);
 export const IconRefresh = ({ size = 20, className }: P) =>
@@ -79,6 +81,15 @@ export const IconForward = ({ size = 20, className }: P) =>
   svg(size, className, <><path d="M3 5.5v13L11.5 12 3 5.5Z" fill="currentColor" stroke="none" /><path d="M13 5.5v13L21.5 12 13 5.5Z" fill="currentColor" stroke="none" /></>);
 export const IconFullscreen = ({ size = 20, className }: P) =>
   svg(size, className, <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />);
+/* 播放页自绘窗口控制(最小化 / 窗口化·还原 / 全屏·退出全屏)。 */
+export const IconFullscreenExit = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />);
+export const IconMinimize = ({ size = 20, className }: P) =>
+  svg(size, className, <path d="M5 12h14" />);
+export const IconWindow = ({ size = 20, className }: P) =>
+  svg(size, className, <rect x="4.5" y="5.5" width="15" height="13" rx="1.6" />);
+export const IconRestore = ({ size = 20, className }: P) =>
+  svg(size, className, <><rect x="3.5" y="8.5" width="12" height="11" rx="1.5" /><path d="M8 8.5V6a1.5 1.5 0 0 1 1.5-1.5H19A1.5 1.5 0 0 1 20.5 6v9.5A1.5 1.5 0 0 1 19 17h-3.5" /></>);
 export const IconVolume = ({ size = 20, className }: P) =>
   svg(size, className, <><path d="M4 9v6h3l5 4V5L7 9H4Z" /><path d="M16 8.5a4 4 0 0 1 0 7" /></>);
 export const IconList = ({ size = 20, className }: P) =>

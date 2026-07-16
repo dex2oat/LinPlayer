@@ -9,8 +9,24 @@ pub struct CalendarEntry {
     pub air_date: Option<String>,
     /// 每周放送日 1=周一…7=周日(Bangumi 用)。
     pub weekday: Option<i32>,
+    /// 每周固定放送时刻(ISO8601 UTC 的**首播时刻**,周期重复 → 时分即每周更新时间)。
+    /// Bangumi 官方 API 不给时刻,靠 bangumi-data 数据集补;取不到就是 None(不编时间)。
+    /// 前端拿它换算成本地 HH:MM 显示;air_date 已有精确时刻时(Trakt)不需要它。
+    pub broadcast_at: Option<String>,
     pub image_url: Option<String>,
     pub tmdb_id: Option<i64>,
+    /// 评分(10 分制,两源同口径)。
+    /// ★ 0 分 = **没人评过**,不是「这片 0 分」—— 取不到就 None,前端别画。
+    /// 以前 Bangumi 把评分硬塞进 subtitle 当文字("评分 8.2"),那是拿文案位当数据位,已改。
+    pub rating: Option<f64>,
+    /// 简介。
+    /// - Trakt:TMDB 的 overview —— 取海报那次请求**顺手就有**,零额外开销,故直接内联。
+    /// - Bangumi:**恒为 None**。2026-07-16 实测 `/calendar` 的 summary 字段整周 111 条
+    ///   全是空字符串(字段在、值不给),真简介只在 `/v0/subjects/{id}`。一周 111 部要 111 次
+    ///   请求,不能在拉放送表时同步做 → 走 `bangumi_summary` 命令按需拉(前端只对聚焦那条拉)。
+    pub summary: Option<String>,
+    /// Bangumi subject id。前端拿它按需拉简介(见上)。Trakt 侧为 None。
+    pub bangumi_id: Option<i64>,
     pub source: String, // trakt | bangumi
 }
 

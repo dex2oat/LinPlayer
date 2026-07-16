@@ -77,7 +77,7 @@ import {
    ============================================================ */
 
 type Theme = "dark" | "light";
-type Props = { theme: Theme; setTheme: (t: Theme) => void; onOpenCalendar: () => void };
+type Props = { theme: Theme; setTheme: (t: Theme) => void };
 
 /* ---------- 即时反馈 ---------- */
 type Msg = { kind: "ok" | "err"; text: string };
@@ -1817,30 +1817,7 @@ function AccountPane() {
   );
 }
 
-/* ============================================================
-   同步 · 追剧日历 —— 付费功能说明(诚实占位)
-   ============================================================ */
-function CalendarPane({ onOpen }: { onOpen: () => void }) {
-  return (
-    <div className="mdpane">
-      <h4>追剧日历</h4>
-      <p className="hint">
-        Trakt / Bangumi 一周放送表 —— 付费功能,爱发电赞助后用订单号解锁(解锁入口在日历页内)。
-      </p>
-      <div className="setrow">
-        <div className="l">
-          <div className="t">打开追剧日历</div>
-          <div className="d">按周查看已登录账号的放送表。</div>
-        </div>
-        <div className="ctl">
-          <button className="btn primary sm" onClick={onOpen}>
-            打开
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+/* 追剧日历已提到侧栏(用户 2026-07-16「不需要放在设置里面」),原 CalendarPane 移除。 */
 
 /* ============================================================
    其它 · 插件
@@ -2135,7 +2112,6 @@ const SECTIONS: { sec: string; items: ItemDef[] }[] = [
     items: [
       { id: "sync", label: "同步记录 · 跨服聚合", icon: <IconRefresh size={16} /> },
       { id: "account", label: "Trakt / Bangumi", icon: <IconHeart size={16} /> },
-      { id: "calendar", label: "追剧日历", icon: <IconInfo size={16} /> },
     ],
   },
   {
@@ -2151,7 +2127,7 @@ const LABELS: Record<string, string> = Object.fromEntries(
   SECTIONS.flatMap((s) => s.items).map((i) => [i.id, i.label]),
 );
 
-export default function SettingsPage({ theme, setTheme, onOpenCalendar }: Props) {
+export default function SettingsPage({ theme, setTheme }: Props) {
   const [active, setActive] = useState("appearance");
   const [q, setQ] = useState("");
 
@@ -2223,7 +2199,6 @@ export default function SettingsPage({ theme, setTheme, onOpenCalendar }: Props)
             {active === "proxy" && <ProxyPane />}
             {active === "sync" && <SyncPane />}
             {active === "account" && <AccountPane />}
-            {active === "calendar" && <CalendarPane onOpen={onOpenCalendar} />}
             {active === "plugins" && <PluginsPane />}
             {active === "about" && <AboutPane />}
           </div>

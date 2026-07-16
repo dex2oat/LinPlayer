@@ -18,6 +18,17 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+
+/// 给子进程加 Windows `CREATE_NO_WINDOW`,不弹黑色 cmd 窗口(用户 2026-07-16:设置里探测
+/// ffmpeg/whisper 每次都闪一下 cmd 窗)。stdout/stderr 置 null 不足以压掉控制台窗口,必须这个 flag。
+/// 非 Windows 平台是空操作。
+#[cfg(windows)]
+fn hide_window(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+}
+#[cfg(not(windows))]
+fn hide_window(_cmd: &mut std::process::Command) {}
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -1921,13 +1932,12 @@ pub mod whisper {
         // ★ 探测时不持锁:否则两个引擎同时探,后一个会被前一个的进程创建整个卡住,
         //   等于白缓存。宁可偶尔重复探一次,也不要把锁按在同步 spawn 上面。
         let ok = ["-version", "--help"].into_iter().any(|arg| {
-            std::process::Command::new(exe)
-                .arg(arg)
+            let mut cmd = std::process::Command::new(exe);
+            cmd.arg(arg)
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
+                .stderr(std::process::Stdio::null());
+            hide_window(&mut cmd);
+            cmd.status().map(|s| s.success()).unwrap_or(false)
         });
         memo.lock().unwrap().insert(exe.to_string(), ok);
         ok
@@ -2040,8 +2050,10 @@ pub mod whisper {
             FFMPEG_LINUX_AMD64
         };
         // 先确认 tar 在:没有的话早点说清楚,别下完 30MB 再失败。
-        std::process::Command::new("tar")
-            .arg("--version")
+        let mut tar_probe = std::process::Command::new("tar");
+        tar_probe.arg("--version");
+        hide_window(&mut tar_probe);
+        tar_probe
             .output()
             .map_err(|_| "系统没有 tar,无法解包;请用发行版包管理器装 ffmpeg,或在设置里手填路径".to_string())?;
 
@@ -2055,13 +2067,10 @@ pub mod whisper {
         let ex = dir.join("ffmpeg_extract");
         let _ = std::fs::remove_dir_all(&ex);
         std::fs::create_dir_all(&ex).map_err(|e| format!("建解包目录失败: {e}"))?;
-        let st = std::process::Command::new("tar")
-            .arg("-xJf")
-            .arg(&tmp)
-            .arg("-C")
-            .arg(&ex)
-            .status()
-            .map_err(|e| format!("调用 tar 失败: {e}"))?;
+        let mut tar_cmd = std::process::Command::new("tar");
+        tar_cmd.arg("-xJf").arg(&tmp).arg("-C").arg(&ex);
+        hide_window(&mut tar_cmd);
+        let st = tar_cmd.status().map_err(|e| format!("调用 tar 失败: {e}"))?;
         if !st.success() {
             return Err("tar 解包失败(包损坏或缺 xz 支持)".into());
         }
@@ -2185,6 +2194,7 @@ pub mod whisper {
         }
         cmd.args(["-vn", "-ar", "16000", "-ac", "1", "-f", "wav"]);
         cmd.arg(&out);
+        hide_window(&mut cmd);
 
         let r = cmd.output().map_err(|e| format!("ffmpeg 启动失败: {e}"))?;
         if !r.status.success() {
@@ -2221,11 +2231,12 @@ pub mod whisper {
         let prefix = dir.join(format!("whisper_{offset_ms}"));
         let prefix_s = prefix.to_string_lossy().into_owned();
 
-        let r = std::process::Command::new(binary)
+        let mut whisper_cmd = std::process::Command::new(binary);
+        whisper_cmd
             .args(["-m", model_path, "-f", wav_path, "-l", language])
-            .args(["-t", &threads.to_string(), "-osrt", "-of", &prefix_s])
-            .output()
-            .map_err(|e| format!("whisper 启动失败: {e}"))?;
+            .args(["-t", &threads.to_string(), "-osrt", "-of", &prefix_s]);
+        hide_window(&mut whisper_cmd);
+        let r = whisper_cmd.output().map_err(|e| format!("whisper 启动失败: {e}"))?;
         if !r.status.success() {
             return Err(format!(
                 "whisper 转写失败({}): {}",

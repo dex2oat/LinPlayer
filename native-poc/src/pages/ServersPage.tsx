@@ -24,7 +24,7 @@ import {
   updateAccount,
 } from "../lib/api";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { IconClose, IconGauge, IconPlus, IconRefresh, IconSearch, IconServer } from "../app/icons";
+import { IconClose, IconGauge, IconPlus, IconRefresh, IconSearch } from "../app/icons";
 import "./ServersPage.css";
 
 /* ============================================================
@@ -404,10 +404,18 @@ export default function ServersPage({ activeServer, onChanged, onGoAdd, onEnter 
    居中模态弹窗 —— 每个右键项一个,均 .scrim>.dlg。
    ============================================================ */
 
-function Scrim({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
+function Scrim({
+  onClose,
+  children,
+  className = "",
+}: {
+  onClose: () => void;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
     <div className="scrim" onClick={onClose}>
-      <div className="dlg" onClick={(e) => e.stopPropagation()}>
+      <div className={`dlg ${className}`} onClick={(e) => e.stopPropagation()}>
         {children}
       </div>
     </div>
@@ -869,12 +877,13 @@ function IconDialog({
     if (source === "net" && lib === null) loadLib(false);
   }, [source, lib, loadLib]);
 
-  // 过滤 + 封顶渲染数量:1468 个全渲染 <img> 会卡,搜索缩小后再放开。
+  /* 过滤后**全量渲染**,不再封顶 300(用户 2026-07-16:「做成懒加载不得了」)。
+     每个 <img loading="lazy"> + 格子 content-visibility:auto(见 css)→ 屏外不解码不排版,
+     1468 个 DOM 结点在 webview 里稳得住,滚到哪拉到哪。 */
   const shownIcons = useMemo(() => {
     const all = lib ?? [];
     const kw = q.trim().toLowerCase();
-    const hit = kw ? all.filter((i) => i.name.toLowerCase().includes(kw)) : all;
-    return hit.slice(0, 300); // 一屏 300 个够翻;要更多就靠搜索缩小
+    return kw ? all.filter((i) => i.name.toLowerCase().includes(kw)) : all;
   }, [lib, q]);
 
   /* 本地上传:webview 里的 <input type=file> 拿不到真实路径(File.path 不存在),
@@ -927,7 +936,7 @@ function IconDialog({
   }
 
   return (
-    <Scrim onClose={onClose}>
+    <Scrim onClose={onClose} className="sv-icondlg">
       <div className="dhd">
         更换图标 · {srv.name}
         <button className="x" onClick={onClose}>
@@ -947,10 +956,12 @@ function IconDialog({
           <div className="sv-iconpick">
             <span
               className={`sv-icell${!glyph ? " on" : ""}`}
-              title="默认"
+              title="默认(Emby 图标)"
               onClick={() => setGlyph("")}
             >
-              <IconServer size={18} />
+              {/* 默认 = emby_default.png 本尊直接显示,不再用内置线框图 IconServer 顶替
+                  (用户 2026-07-16:「默认的 Emby 图标就直接显示」)。 */}
+              <img className="sv-def-ic" src="/emby_default.png" alt="默认" />
             </span>
             {GLYPHS.map((g) => (
               <span

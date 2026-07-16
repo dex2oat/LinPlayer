@@ -73,9 +73,12 @@ impl Default for CfSpeedTestOptions {
             max_latency_ms: 500,
             latency_tier_ms: 50,
             latency_keep_top: 24,
-            download_wanted: 4,
-            download_duration: Duration::from_secs(6),
-            min_download_kbps: 0.0,
+            // 用户 2026-07-16:带宽要真正参与。多测几个 IP 的带宽(4→8),否则只有最低延迟的
+            // 几个被测带宽、高带宽的中延迟 IP 根本没机会;单次时长 6→4s 抵消额外 IP 的总耗时。
+            download_wanted: 8,
+            download_duration: Duration::from_secs(4),
+            // 带宽下限 2Mbps:有更好的就不选近乎零带宽的 IP(都达不到才回退)。
+            min_download_kbps: 2000.0,
             test_url: DEFAULT_CF_TEST_URL.to_string(),
             ip_mode: CfIpMode::Auto,
             validate_host: String::new(),
@@ -83,16 +86,19 @@ impl Default for CfSpeedTestOptions {
     }
 }
 
-/// 排名:延迟低优先(每 tier_ms 一档),同档内比下载速度(高者优先)。
-fn rank_compare(a: &CfTestResult, b: &CfTestResult, tier_ms: u64) -> std::cmp::Ordering {
-    let tier = tier_ms.max(1);
-    let (ta, tb) = (a.latency_ms / tier, b.latency_ms / tier);
-    if ta != tb {
-        return ta.cmp(&tb);
-    }
-    b.download_kbps
-        .unwrap_or(0.0)
-        .partial_cmp(&a.download_kbps.unwrap_or(0.0))
+/// 排名综合分(用户 2026-07-16:「别光看延迟,带宽也很重要 —— 延迟极低的一般带宽也极低」)。
+/// 旧版是硬分档(50ms 一档),同档才比带宽 → 一个延迟低但带宽差的 IP 仍能排在延迟略高、带宽高得多的
+/// IP 前面。改成综合分:`分 = 延迟(ms) − 带宽奖励`,分越低越靠前。
+/// 每 Mbps 抵约 3ms 延迟,带宽封顶 100Mbps(≈300ms 奖励)—— 既让带宽真正参与排序,
+/// 又不至于让一个 480ms 的远端高带宽 IP 通吃(它 300ms 奖励也追不平延迟差)。
+/// tier_ms 参数保留(调用点仍传)但新算法不再用它。
+fn rank_compare(a: &CfTestResult, b: &CfTestResult, _tier_ms: u64) -> std::cmp::Ordering {
+    let score = |r: &CfTestResult| -> f64 {
+        let mbps = (r.download_kbps.unwrap_or(0.0) / 1000.0).min(100.0);
+        r.latency_ms as f64 - mbps * 3.0
+    };
+    score(a)
+        .partial_cmp(&score(b))
         .unwrap_or(std::cmp::Ordering::Equal)
 }
 
@@ -339,14 +345,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ranking_prefers_low_latency_tier_then_speed() {
+    fn ranking_blends_latency_and_bandwidth() {
+        // 延迟差太大时,带宽追不平:60ms 仍优于 480ms(哪怕 b 快很多)。
         let a = CfTestResult { ip: "a".into(), latency_ms: 60, loss_rate: 0.0, download_kbps: Some(1000.0) };
         let b = CfTestResult { ip: "b".into(), latency_ms: 480, loss_rate: 0.0, download_kbps: Some(9000.0) };
-        // 60ms(档 1)优于 480ms(档 9),即使 b 更快。
         assert_eq!(rank_compare(&a, &b, 50), std::cmp::Ordering::Less);
-        // 同档比速度:c 更快应排前。
+        // 相近延迟比带宽:更快的排前。
         let c = CfTestResult { ip: "c".into(), latency_ms: 70, loss_rate: 0.0, download_kbps: Some(5000.0) };
         let d = CfTestResult { ip: "d".into(), latency_ms: 60, loss_rate: 0.0, download_kbps: Some(1000.0) };
         assert_eq!(rank_compare(&c, &d, 50), std::cmp::Ordering::Less);
+        // ★ 用户场景:延迟极低但带宽极低 vs 延迟略高但带宽高得多 —— 后者应胜出。
+        // low: 20ms/2Mbps → 20-6=14;high: 90ms/40Mbps → 90-120=-30 → high 更靠前。
+        let low = CfTestResult { ip: "low".into(), latency_ms: 20, loss_rate: 0.0, download_kbps: Some(2000.0) };
+        let high = CfTestResult { ip: "high".into(), latency_ms: 90, loss_rate: 0.0, download_kbps: Some(40000.0) };
+        assert_eq!(rank_compare(&high, &low, 50), std::cmp::Ordering::Less);
     }
 }

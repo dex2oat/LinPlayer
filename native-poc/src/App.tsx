@@ -8,7 +8,6 @@ import {
   type DanmakuSourceGroup,
   type DownloadItem,
   type Item,
-  type LineProbe,
   type LoginResult,
   type MediaVersion,
   type Prefs,
@@ -36,7 +35,7 @@ import {
   playLocal,
   playerOpts,
   posterUrl,
-  probeLines,
+  probeLine,
   reportProgress,
   screenshot,
   seek as seekApi,
@@ -66,10 +65,15 @@ import {
 import { DanmakuLayer, type DanmakuComment, type TimeSync } from "./Danmaku";
 import LoginPage from "./pages/LoginPage";
 import Shell from "./app/Shell";
+import Titlebar from "./app/Titlebar";
 import {
   IconChevronLeft,
   IconForward,
   IconFullscreen,
+  IconFullscreenExit,
+  IconMinimize,
+  IconRestore,
+  IconWindow,
   IconInfo,
   IconList,
   IconNext,
@@ -89,6 +93,12 @@ type Panel = null | "eps" | "audio" | "sub" | "danmaku" | "super" | "line" | "ve
 /** 竖条弹出态:kind 决定调音量还是亮度,x 是按钮中心(贴着按钮弹,草稿 21)。 */
 type VBar = null | { kind: "vol" | "bright"; x: number };
 
+/** 超分滤镜家族分组(核层 family 键 → 显示标题)。用户 2026-07-16:三种滤镜,每种六档。 */
+const SHADER_FAMILIES: [string, string][] = [
+  ["Anime4K", "Anime4K · 动漫特化"],
+  ["FSR", "AMD FSR · 通用"],
+  ["NVIDIA", "NVIDIA · NIS"],
+];
 /** 草稿倍速面板「常用」档位。 */
 const SPEEDS = [0.5, 1.0, 1.5, 2.0, 3.0];
 /** 弹幕显示区域档位 → 占屏高百分比(草稿 stepper「1/2 屏」)。 */
@@ -101,6 +111,42 @@ const DM_SPEEDS: [number, string][] = [[14, "极慢"], [11, "慢"], [8, "中"], 
 /** 弹幕字号(CSS px);null =「按画面高自适应」,即组件不传 fontSize 时的原行为。 */
 const DM_SIZES: [number | null, string][] = [[16, "极小"], [20, "小"], [null, "中"], [28, "大"], [34, "极大"]];
 const DM_DEFAULT = 2; // 两张表的「中」都在下标 2
+
+/* 弹幕显示设置的持久化(用户 2026-07-16:「在某一集调整了,后续就不用再重新调整」)。
+
+   为什么是 localStorage 而不是核层 Prefs:这五项**全是前端渲染参数** ——
+   不透明度/显示区域是 CSS,速度/字号是 DanmakuLayer 的 props,Rust 侧从头到尾用不到它们
+   (核层 danmaku 模块只有源的 CRUD + 搜索/匹配/过滤,没有任何显示配置,已 grep 确认)。
+   为它们往 config.rs 加字段 = 让核层存一份自己永远不读的数据。
+   ★ 但「用不到」不等于「可以不存」:换片会重建整个播放器状态,不落盘就每集都要重调。 */
+const DM_KEY = "player:danmaku";
+type DmSettings = { on: boolean; opacity: number; area: number; speed: number; size: number };
+/* ★ on 的默认从 false 改成了 true,这是**配套改动**不是口味改动:
+   以前靠 autoDanmaku 匹配成功时 setDmOn(true) 把它顶开,所以默认 false 也看得到弹幕;
+   现在开关是用户的持久化偏好,自动匹配不能再擅自翻它(翻了就等于「关不掉」),
+   于是默认必须自己立起来。没匹配到弹幕时 dmComments 为空,开着也只是一层空画布,观感不变。 */
+const DM_FALLBACK: DmSettings = { on: true, opacity: 80, area: 1, speed: DM_DEFAULT, size: DM_DEFAULT };
+
+/** 读回存档。★ 必须逐项夹紧:存档是上个版本写的,档位表增删过之后
+    旧下标可能越界 → DM_SPEEDS[7] = undefined → 解构 [0] 直接崩在渲染里。 */
+function loadDm(): DmSettings {
+  try {
+    const raw = localStorage.getItem(DM_KEY);
+    if (!raw) return DM_FALLBACK;
+    const p = JSON.parse(raw) as Partial<DmSettings>;
+    const idx = (v: unknown, len: number, dft: number) =>
+      typeof v === "number" && Number.isInteger(v) && v >= 0 && v < len ? v : dft;
+    return {
+      on: typeof p.on === "boolean" ? p.on : DM_FALLBACK.on,
+      opacity: typeof p.opacity === "number" ? Math.min(100, Math.max(0, p.opacity)) : DM_FALLBACK.opacity,
+      area: idx(p.area, DM_AREAS.length, DM_FALLBACK.area),
+      speed: idx(p.speed, DM_SPEEDS.length, DM_FALLBACK.speed),
+      size: idx(p.size, DM_SIZES.length, DM_FALLBACK.size),
+    };
+  } catch {
+    return DM_FALLBACK; // 存档坏了就用默认,不能让它挡住起播
+  }
+}
 /** 解码档位 → mpv hwdec 值。零拷贝(d3d11va)是 Win 最佳,软解(no)排查用。 */
 const HWDECS: [string, string][] = [["auto-safe", "硬解"], ["d3d11va", "零拷贝"], ["no", "软解"]];
 /** 定时关闭档位(分钟)。照搬旧 Flutter 端既有档位(player_screen_state _showTimerDialog),不另造一套。 */
@@ -133,6 +179,9 @@ export default function App() {
   const [seeking, setSeeking] = useState<number | null>(null);
   const [panel, setPanel] = useState<Panel>(null);
   const [idle, setIdle] = useState(false);
+  /* 视频出第一帧前:黑屏 + 加载动画,不露上一段残帧(用户 2026-07-16)。
+     出画信号取「时间开始走(st.time>0)」,兜底 4s 强制放行(暂停起播/静态首帧)。 */
+  const [ready, setReady] = useState(false);
   const timer = useRef<number | null>(null);
   const tick = useRef(0);
   const idleTimer = useRef<number | null>(null);
@@ -141,8 +190,13 @@ export default function App() {
   const [siblings, setSiblings] = useState<Item[]>([]); // 当前剧全部分集(上/下一集 + 选集)
   const [versions, setVersions] = useState<MediaVersion[] | null>(null); // 版本面板(item_media)
   const [curMsId, setCurMsId] = useState<string | null>(null); // 当前在播的 media_source_id(版本高亮的真依据)
-  // 线路面板(probe_lines / set_active_line 都真接)
-  const [lineProbes, setLineProbes] = useState<LineProbe[] | null>(null);
+  /* 线路面板(probe_line / set_active_line 都真接)。
+     lineMs:index → 延迟。**三态**,不能压成两态:
+       - key 不存在  = 还在探(行上转圈)
+       - null        = 探过、确实不通(显示「—」,不装成 0ms)
+       - number      = 通,毫秒
+     null(整个对象)= 还没开始探;设成 {} 即「已开工」,兼作只探一次的门。 */
+  const [lineMs, setLineMs] = useState<Record<number, number | null> | null>(null);
   const [acct, setAcct] = useState<AccountInfo | null>(null);
   const [lineErr, setLineErr] = useState<string | null>(null);
   const [vbar, setVbar] = useState<VBar>(null);
@@ -165,14 +219,24 @@ export default function App() {
   const [shaderLv, setShaderLv] = useState("off");
   /* 滤镜强度 0~100(核层落盘,起播后由 get_prefs 覆盖成真值)。
      用户实测「强度有点低」—— 因为此前一个参数都没设,一直在吃 shader 自带默认(CAS STR=0.5)。 */
-  // 字幕样式:核层无回读命令,故记前端态;初值取 mpv 自身默认(sub-font-size 55 / sub-pos 100)
+  /* 字幕样式:核层无回读命令,故记前端态;初值必须对齐 **libmpv 的真默认**
+     (2026-07-16 ctypes 实测:sub-scale=1 / sub-pos=100 / sub-font=sans-serif /
+      secondary-sub-pos=0 / secondary-sub-ass-override=strip)。
+     初值和 mpv 真实值对不上 = 面板显示的是假读数,用户还没动就已经在骗他。 */
   const [subFont, setSubFont] = useState("sans-serif");
   const [fontOpen, setFontOpen] = useState(false);
-  const [subSize, setSubSize] = useState(55);
+  /* 「大小」= sub-scale 百分比(100 = 1.0 倍),**不是 sub-font-size**。
+     换旋钮的原因见 mpv.rs::set_sub_scale 的长注释:ASS 字幕不认 sub-font-size。 */
+  const [subScale, setSubScale] = useState(100);
   const [subPos, setSubPos] = useState(100);
   const [sec2, setSec2] = useState(""); // 次字幕 sid,"" = 关
   const [sec2Delay, setSec2Delay] = useState(0);
-  const [sec2Pos, setSec2Pos] = useState(100);
+  /* ★ 曾写死 100,而 mpv 的 secondary-sub-pos 真默认是 **0**(顶部)——
+     面板一打开就显示「位置 100」,和画面上顶着的次字幕对不上。修正成 0。 */
+  const [sec2Pos, setSec2Pos] = useState(0);
+  /* 次字幕的 ASS 处理:mpv 默认 strip(剥成纯文本)= 用户报的「次字幕不渲染样式」。
+     默认改成 scale,与主字幕同规矩(保留 ASS 自带样式)—— 这正是用户要的「调整」。 */
+  const [sec2Ass, setSec2Ass] = useState("scale");
   const [subUrl, setSubUrl] = useState<string | null>(null); // 非 null = 外挂字幕输入框已展开
   // 定时关闭:纯前端,不需要核层命令。句柄必须放 ref —— 放 state 重渲染就丢了句柄,到点没人清。
   const [sleepMin, setSleepMin] = useState<number | null>(null); // null = 关闭
@@ -187,13 +251,22 @@ export default function App() {
 
   // 弹幕。源的增删改查在设置页(多源 CRUD),这儿只管「搜索 / 选源 / 显示」(草稿 L1119)。
   const [dmComments, setDmComments] = useState<DanmakuComment[]>([]);
-  const [dmOn, setDmOn] = useState(false);
+  /* 显示设置从存档起步(用户:「某一集调整了,后续不用再重新调整」)。
+     useState 的初值写成**函数**:不写函数的话 loadDm() 每次渲染都会跑一遍读 localStorage。 */
+  const [dm, setDm] = useState<DmSettings>(loadDm);
+  const { on: dmOn, opacity: dmOpacity, area: dmArea, speed: dmSpeed, size: dmSize } = dm;
+  /** 改一项 = 存一次。写在同一个函数里,不靠各调用点自觉 —— 漏一处就是「这项不记」。
+   *  ★ 收函数式入参:键盘快捷键的 handler 挂在一个 deps 里**没有 dm** 的 effect 上,
+   *    直接读渲染作用域的 dmOn 会读到注册那一刻的旧值(按 D 只切一次就再也切不动)。
+   *    原代码 setDmOn(v => !v) 是函数式所以躲过了这一劫,别在这里退化成读外层变量。 */
+  const patchDm = (p: Partial<DmSettings> | ((d: DmSettings) => Partial<DmSettings>)) =>
+    setDm((d) => {
+      const next = { ...d, ...(typeof p === "function" ? p(d) : p) };
+      try { localStorage.setItem(DM_KEY, JSON.stringify(next)); } catch { /* 存不下也不该影响播放 */ }
+      return next;
+    });
   const [dmResults, setDmResults] = useState<DanmakuSourceGroup[] | null>(null);
   const [dmKw, setDmKw] = useState("");
-  const [dmOpacity, setDmOpacity] = useState(80); // 纯 CSS,真生效
-  const [dmArea, setDmArea] = useState(1); // DM_AREAS 下标,纯 CSS 裁剪,真生效
-  const [dmSpeed, setDmSpeed] = useState(DM_DEFAULT); // DM_SPEEDS 下标 → DanmakuLayer duration
-  const [dmSize, setDmSize] = useState(DM_DEFAULT); // DM_SIZES 下标 → DanmakuLayer fontSize
   const timeSync = useRef<TimeSync>({ base: 0, stamp: performance.now(), paused: false });
 
   // 进度条悬停时间气泡(草稿 pin 18);x 是条内像素偏移。
@@ -234,6 +307,12 @@ export default function App() {
     setPrefs2(next);
     await setPrefs(next).catch(() => {});
   }
+  /** 切音/字轨:set_track 后立刻重拉 track-list 刷新 selected 高亮 —— 不然点了轨道,
+      单选点还赖在旧轨上(mpv 的 selected 标志变了,前端这份 tracks 不重拉就看不出来)。 */
+  async function chooseTrack(kind: "audio" | "sub", id: string) {
+    await setTrack(kind, id).catch(() => {});
+    setTracks(await tracksApi().catch(() => tracks));
+  }
 
   /** OSD 统一提示(复用 ui.css 的 .toast)。
       停留时长按字数给:整句解释(如超分为何不生效)2.4s 根本读不完,读不完等于没说。 */
@@ -262,13 +341,12 @@ export default function App() {
     };
     try {
       const auto = await danmakuAutoLoad(input, defaultDanmakuFilter(), null, it.series_id ?? null);
-      if (auto) { setDmComments(auto); setDmOn(true); return; } // 够可信 → 静默挂上,不打扰
+      if (auto) { setDmComments(auto); return; } // 够可信 → 静默挂上,不打扰(开不开由持久化的开关说了算)
       // null = 核层认为没有够格自动挂的匹配。再看一眼候选:够门槛就挂,不够就把面板留给用户。
       const cands = await danmakuMatch(input);
       const top = cands.reduce<DanmakuMatchCandidate | null>((a, b) => (!a || b.score > a.score ? b : a), null);
       if (top && top.score >= (await danmakuMinAutoScore())) {
         setDmComments(await danmakuLoad(top.episode_id));
-        setDmOn(true);
         say(`弹幕已自动匹配 · ${top.source_name} · ${top.anime_title}`);
         return;
       }
@@ -279,8 +357,10 @@ export default function App() {
   }
 
   async function afterStart(it: Item) {
+    setReady(false); // 新片:先黑屏,等出画
     setDmComments([]);
-    setDmOn(false);
+    /* ★ 这里以前有 setDmOn(false) —— 换片就把弹幕开关拍回关,
+       用户上一集调好的东西下一集全废。开关现在是持久化偏好,换片不动它。 */
     setDmKw(it.series_name ?? it.name); // 手搜的预填也用剧名,和自动匹配同一口径
     setDmResults(null);
     setPanel(null);
@@ -288,14 +368,20 @@ export default function App() {
     // 换片重置前端侧样式态(核层是新播放器实例,旧的延迟/次字幕都没了)。
     setSubUrl(null);
     setADelay(0); setSDelay(0);
-    setSec2(""); setSec2Delay(0); setSec2Pos(100);
-    setSubSize(55); setSubPos(100); setSubFont("sans-serif");
+    setSec2(""); setSec2Delay(0); setSec2Pos(0); setSec2Ass("scale");
+    setSubScale(100); setSubPos(100); setSubFont("sans-serif");
+    /* 次字幕默认保留 ASS 样式:mpv 自己的默认是 strip(剥成纯文本),不主动设它就还是 strip。
+       每换一片都要重设 —— 播放器是新实例,属性回到 mpv 默认。失败不打扰:
+       这只是观感偏好,而且此刻播放器可能还没起来(afterStart 紧跟着 play)。 */
+    setSecondarySubOpts({ assOverride: "scale", position: 0 }).catch(() => {});
     setAspect(""); setShaderLv("off");
     setSleepMin(null); setSleepOpen(false); setDolby(false); // 定时句柄由 [playing] 的 cleanup 清
     autoDanmaku(it); // 不 await:弹幕匹配要打网络,不能拖住起播后的 OSD 初始化
     setTimeout(async () => {
       await applyPrefs().catch(() => {});
-      setTracks(await tracksApi().catch(() => []));
+      /* 音轨/字幕**不在这里一次性拉**(见 [playing] 的轮询 effect)。
+         网络流起播后 1.2s 往往还没 demux 出内封轨,track-list 为空 → 用户看到「字幕只有关闭/外挂、
+         音轨整条不显示」(2026-07-16 报的)。改成轮询到位,别只赌这一枪。 */
       // 音量/倍速/静音/延迟/解码拉真值 —— 否则 OSD 滑块显示的是前端瞎猜的初值。
       try {
         const o = await playerOpts();
@@ -425,23 +511,61 @@ export default function App() {
     });
   }
 
+  /* 播放页的窗口态(用户 2026-07-16:「点击全屏化就是一直全屏化了,根本没有其他的操作」)。
+
+     根因不是全屏切不回来(f / Esc 一直能退),是**界面上看不出来**:
+     播放时 <Titlebar/> 整个不渲染(那是给非播放页用的),而顶栏只有一个「全屏」按钮,
+     图标和文案还永远是「全屏」—— 进了全屏之后,屏幕上没有任何一个可见的东西告诉你
+     「最小化 / 窗口化」还存在。所以给播放页自绘一组窗口控制,三个动作各有各的按钮。
+
+     fs/maxed 必须**回读窗口**而不是自己记账:双击标题栏、Win+↑、系统热键都会改变窗口态,
+     只在点击时翻标志位,图标迟早和真实状态对不上。 */
+  const [fs, setFs] = useState(false);
+  const [maxed, setMaxed] = useState(false);
+  useEffect(() => {
+    const w = getCurrentWindow();
+    const sync = () => {
+      w.isFullscreen().then(setFs).catch(() => {});
+      w.isMaximized().then(setMaxed).catch(() => {});
+    };
+    sync();
+    let un: (() => void) | undefined;
+    w.onResized(sync).then((f) => (un = f)).catch(() => {});
+    return () => un?.();
+  }, []);
+
+  /** 窗口化:全屏中 = 退回窗口;不在全屏 = 最大化/还原互切。 */
+  async function windowMode() {
+    const w = getCurrentWindow();
+    try {
+      if (await w.isFullscreen()) {
+        await exitFullscreen();
+        return;
+      }
+      await w.toggleMaximize();
+    } catch { /* 切不动就算了,别把播放页整崩 */ }
+  }
+
   useEffect(() => {
     if (!playing) {
       if (timer.current) window.clearInterval(timer.current);
       return;
     }
     tick.current = 0;
+    // 兜底:4s 后无论如何放行黑屏(暂停起播 st.time 不动,不能永远黑着)。
+    const readyFallback = window.setTimeout(() => setReady(true), 4000);
     timer.current = window.setInterval(async () => {
       try {
         const st = await statusApi();
         setStatus(st);
+        if (st.time > 0) setReady(true); // 时间开始走 = 已出画,撤黑屏
         timeSync.current = { base: st.time, stamp: performance.now(), paused: st.paused };
         tick.current++;
         if (tick.current % 10 === 0) reportProgress(st.time, st.paused);
         sourceWatchdog(st.time);
       } catch { /* 未就绪忽略 */ }
     }, 500);
-    return () => { if (timer.current) window.clearInterval(timer.current); };
+    return () => { if (timer.current) window.clearInterval(timer.current); window.clearTimeout(readyFallback); };
   }, [playing]);
 
   /* 定时关闭的兜底清理:换片/退播放器/组件卸载都必须 clearTimeout,
@@ -482,9 +606,42 @@ export default function App() {
     return () => { dead = true; };
   }, [playing]);
 
-  // 版本面板用的 MediaSources:开面板时才拉,省一次请求。
+  /* 音轨/字幕轮询到位。网络流 demux 慢,起播后内封轨要等几秒才在 track-list 出现 ——
+     只在 afterStart 拉一枪必然赶不上,表现为「字幕只有关闭/外挂、音轨不显示」(2026-07-16)。
+     这里从起播起每 700ms 探一次,拿到非空就停;最多 ~11s(16 次)兜底,别无限探。
+     换集/换版本(playing 变或 setTracks 被 switchVersion 重置)自动重来。 */
   useEffect(() => {
-    if (panel !== "version" || !playing || versions) return;
+    if (!playing) { setTracks([]); return; }
+    let alive = true;
+    let tries = 0;
+    let lastLen = -1;
+    let stable = 0;
+    /* ★ 别在「第一次非空」就停 —— 网络流里音轨常先于字幕 demux 出来:
+       停在只有音轨的那一帧,内封字幕就永远进不了面板(用户 2026-07-16:字幕面板到现在
+       还是不显示内封字幕)。改成每次都更新 tracks,直到轨数连续两次不变(demux 稳定)
+       或 ~14s 兜底才停。 */
+    const poll = async () => {
+      if (!alive) return;
+      try {
+        const t = await tracksApi();
+        if (!alive) return;
+        setTracks(t); // 每轮都刷:字幕晚到也能补进来
+        if (t.length > 0 && t.length === lastLen) {
+          if (++stable >= 2) return; // 连续两次轨数不变 = 稳定,停
+        } else {
+          stable = 0;
+          lastLen = t.length;
+        }
+      } catch { /* 未就绪:继续探 */ }
+      if (++tries < 20) window.setTimeout(poll, 700);
+    };
+    const first = window.setTimeout(poll, 600);
+    return () => { alive = false; window.clearTimeout(first); };
+  }, [playing]);
+
+  // 版本面板 + 「更多」的静态播放信息都要 MediaSources:开这两个面板任一时拉,省请求。
+  useEffect(() => {
+    if ((panel !== "version" && panel !== "more") || !playing || versions) return;
     itemMedia(playing.id)
       .then((vs) => {
         setVersions(vs);
@@ -495,12 +652,21 @@ export default function App() {
       .catch(() => setVersions([]));
   }, [panel, playing, versions]);
 
-  /* 线路探测。★ server_id 是**账号键**(list_accounts().server),不是 session.server:
-     set_active_line 切完会把 session.server 改写成那条线路的 URL,此后 session.server
-     就不再等于账号键,再拿它去 probe_lines 只会得到「找不到该服务器」。踩过,别改回去。
-     草稿 L1037 要求「进入服务器自动探测 · 缓存至退出程序清空」→ 探到就存着不重探。 */
+  /* 线路:**先出表,再逐条探**(用户 2026-07-16:「不需要做延迟探测,要做也是先显示线路
+     再去探测 —— 不然一条线路探了好久,一直卡在那怎么办?」)。
+
+     以前是 `setLineProbes(await probeLines(...))`:整表一次性返回,而 probe_lines 要等
+     **最慢的那条**(最坏 6s 超时)。于是一条死线 = 整个面板扣住 6s 只显示「探测中…」,
+     用户连切到那条能用的线都做不到 —— 而他打开这个面板,十有八九正是因为当前线路不通。
+
+     现在:线路表直接从账号配置渲染(本地数据,零等待、立刻可点),再对每条线各发一个
+     probe_line 各回各的。死线只让它自己那一行转圈,不牵连别人。
+     ★ server_id 是**账号键**(list_accounts().server),不是 session.server:
+       set_active_line 切完会把 session.server 改写成那条线路的 URL,此后拿它去探
+       只会得到「找不到该服务器」。踩过,别改回去。
+     草稿 L1037「进入服务器自动探测 · 缓存至退出程序清空」→ lineMs 非空即不重探。 */
   useEffect(() => {
-    if (panel !== "line" || lineProbes) return;
+    if (panel !== "line" || lineMs) return;
     let dead = false;
     (async () => {
       try {
@@ -509,13 +675,26 @@ export default function App() {
         if (!a) { setLineErr("没有活跃的服务器账号"); return; }
         setAcct(a);
         setLineErr(null);
-        setLineProbes(await probeLines(a.server)); // ← a.server = 账号键
+        setLineMs({}); // 开工:表已可渲染,同时关掉重入
+        // 行数口径必须和核层 line_urls 一致:没配 lines 时 server 本身算一条。
+        const n = a.lines.length || 1;
+        for (let i = 0; i < n; i++) {
+          probeLine(a.server, i)
+            .then((p) => {
+              // 逐条合并,不整表覆写 —— 覆写会把已回来的其它行抹掉。
+              if (!dead) setLineMs((m) => ({ ...(m ?? {}), [p.index]: p.ms }));
+            })
+            .catch(() => {
+              // 探测本身失败(命令报错)≠ 线路不通,但对用户是一回事:这条给不出延迟。
+              if (!dead) setLineMs((m) => ({ ...(m ?? {}), [i]: null }));
+            });
+        }
       } catch (e) {
         if (!dead) setLineErr(String(e));
       }
     })();
     return () => { dead = true; };
-  }, [panel, lineProbes]);
+  }, [panel, lineMs]);
 
   /** 切线路:立即生效无需重启(核层会同步刷新活跃会话地址)。 */
   async function switchLine(index: number) {
@@ -677,19 +856,27 @@ export default function App() {
       say(`超分未生效:${e}`); // 档位高亮不动:没生效就别显示成选中
     }
   }
-  async function applySubStyle(o: { font?: string; size?: number; position?: number }) {
+  /** 字幕样式。scalePct 是**百分比**(UI 口径),传给核层前折成倍率 —— mpv 的 sub-scale 是倍率。 */
+  async function applySubStyle(o: { font?: string; scalePct?: number; position?: number }) {
     if (o.font !== undefined) { setSubFont(o.font); setFontOpen(false); }
-    if (o.size !== undefined) setSubSize(o.size);
+    if (o.scalePct !== undefined) setSubScale(o.scalePct);
     if (o.position !== undefined) setSubPos(o.position);
-    try { await setSubStyle(o); } catch (e) { fail("字幕样式", e); }
+    try {
+      await setSubStyle({
+        font: o.font,
+        scale: o.scalePct !== undefined ? o.scalePct / 100 : undefined,
+        position: o.position,
+      });
+    } catch (e) { fail("字幕样式", e); }
   }
   async function applySec2(id: string) {
     setSec2(id);
     try { await setSecondarySub(id); } catch (e) { fail("次字幕", e); }
   }
-  async function applySec2Opts(o: { delay?: number; position?: number }) {
+  async function applySec2Opts(o: { delay?: number; position?: number; assOverride?: string }) {
     if (o.delay !== undefined) setSec2Delay(o.delay);
     if (o.position !== undefined) setSec2Pos(o.position);
+    if (o.assOverride !== undefined) setSec2Ass(o.assOverride);
     try { await setSecondarySubOpts(o); } catch (e) { fail("次字幕设置", e); }
   }
   /** 截图:核层返回落盘路径,报给用户(不然不知道存哪了)。 */
@@ -764,7 +951,7 @@ export default function App() {
         case "p": case "P": e.preventDefault(); goEpisode(prevEp, "上"); break;
         case "n": case "N": e.preventDefault(); goEpisode(nextEp, "下"); break;
         case "s": case "S": e.preventDefault(); doShot(); break;
-        case "d": case "D": e.preventDefault(); setDmOn((v) => !v); break;
+        case "d": case "D": e.preventDefault(); patchDm((d) => ({ on: !d.on })); break;
         default: break;
       }
     };
@@ -783,17 +970,28 @@ export default function App() {
   async function loadDmEpisode(ep: DanmakuEpisode) {
     try {
       setDmComments(await danmakuLoad(ep.episode_id));
-      setDmOn(true);
+      patchDm({ on: true }); // 手动挑了一集 = 明确要看,这一处强开(并落盘)
       setDmResults(null);
       say(`弹幕已加载 · ${ep.episode_title || ep.episode_number || ""}`);
     } catch (e) { fail("加载弹幕", e); }
   }
 
   if (!booted) return null;
-  if (!session) return <LoginPage onLoggedIn={setSession} />;
+  if (!session) return (<><Titlebar /><LoginPage onLoggedIn={setSession} /></>);
 
   const audio = tracks.filter((t) => t.kind === "audio");
   const subs = tracks.filter((t) => t.kind === "sub");
+  /* 「更多 · 播放信息」的静态规格(用户 2026-07-16:要常见静态项 —— 分辨率/码率/大小/
+     字幕格式/音频格式,不要动态的时长/状态)。取当前在播版本的流规格(item_media)。 */
+  const curVer = versions?.find((v) => v.id === curMsId) ?? versions?.[0] ?? null;
+  const vStream = curVer?.streams.find((s) => s.type_ === "Video") ?? null;
+  const uniqCodecs = (kind: string) =>
+    curVer ? [...new Set(curVer.streams.filter((s) => s.type_ === kind).map((s) => s.codec.toUpperCase()))].join(" / ") : "";
+  const aCodecs = uniqCodecs("Audio");
+  const sCodecs = uniqCodecs("Subtitle");
+  const infoRes = vStream?.width && vStream?.height ? `${vStream.width}×${vStream.height}` : fmtRes(playing?.video_height ?? null);
+  const infoBitrate = fmtBitrate(curVer?.bitrate ?? playing?.bitrate ?? null);
+  const infoSize = fmtSize(curVer?.size_bytes ?? playing?.size_bytes ?? null);
   const curTime = seeking ?? status.time;
   const pct = status.duration > 0 ? (curTime / status.duration) * 100 : 0;
   const bufPct = status.duration > 0 ? (status.buffered / status.duration) * 100 : 0;
@@ -832,6 +1030,8 @@ export default function App() {
 
   return (
     <>
+      {/* 自绘标题栏:播放时不渲染(让 mpv 全屏铺满,且不与播放器顶栏冲突)。 */}
+      {!playing && <Titlebar />}
       <div className={`app-root${playing ? " hidden" : ""}`}>
         <Shell
           session={session}
@@ -844,6 +1044,11 @@ export default function App() {
           onCloseSearch={() => setSearchOpen(false)}
         />
       </div>
+
+      {/* 出第一帧前的黑屏 + 加载动画:盖住 mpv 独立窗口,不露上一段残帧(用户 2026-07-16)。 */}
+      {playing && !ready && (
+        <div className="p-loading"><div className="sp" /></div>
+      )}
 
       {/* 亮度遮罩:核层没有亮度命令,但 mpv 画面在网页层下面,盖一层黑就是真调光。
           放在 player-layer 外面,否则 OSD 淡出时亮度跟着一起变。 */}
@@ -889,13 +1094,29 @@ export default function App() {
             <span className={`p-title${marquee ? " run" : ""}`} ref={titleRef} title={title}>
               <b>{title}</b>
             </span>
+            {/* 拖动区:窗口化播放时,<Titlebar/> 不在 = 没有任何地方能拖窗口 ——
+                给了「窗口化」却挪不动那个窗口,等于没给。这条弹性空白就是播放页的标题栏。 */}
+            <div className="p-drag" data-tauri-drag-region />
             <span className="p-top-r">
               {pb("✦", "超分", panel === "super", togglePanel("super"))}
               {pb("⇄", "线路", panel === "line", togglePanel("line"))}
               {pb("◈", "版本", panel === "version", togglePanel("version"))}
               {pb("⋯", "更多", panel === "more", togglePanel("more"))}
               <span className="p-sep" />
-              {pb(<IconFullscreen size={16} />, "全屏", false, toggleFullscreen, true)}
+              {/* 自绘窗口控制:播放时 <Titlebar/> 不渲染,这三个动作在播放页只能自己长出来。
+                  纯图标(顶栏已经四个带字按钮了,再加三个字满得没法看),动作靠 title 说明。
+                  没有「关闭」—— 播放页的返回键在左上角,这里再放个 × 只会让人误关整个 app。 */}
+              <span className="p-win">
+                <button className="p-wb" title="最小化" onClick={() => void getCurrentWindow().minimize()}>
+                  <IconMinimize size={15} />
+                </button>
+                <button className="p-wb" title={fs ? "窗口化" : maxed ? "还原" : "最大化"} onClick={windowMode}>
+                  {maxed && !fs ? <IconRestore size={14} /> : <IconWindow size={14} />}
+                </button>
+                <button className="p-wb hot" title={fs ? "退出全屏" : "全屏"} onClick={toggleFullscreen}>
+                  {fs ? <IconFullscreenExit size={15} /> : <IconFullscreen size={15} />}
+                </button>
+              </span>
             </span>
           </div>
 
@@ -1035,7 +1256,7 @@ export default function App() {
                       <button
                         key={t.id}
                         className={`p-li${t.selected ? " on" : ""}`}
-                        onClick={() => { setTrack("audio", t.id); persistPrefs({ ...prefs, audio_lang: trackLang(audio, t.id) || prefs.audio_lang }); }}
+                        onClick={() => { chooseTrack("audio", t.id); persistPrefs({ ...prefs, audio_lang: trackLang(audio, t.id) || prefs.audio_lang }); }}
                       >
                         <span className="rad" /> 音轨 {t.id} {t.lang || t.title}
                       </button>
@@ -1054,14 +1275,14 @@ export default function App() {
                   <>
                     <div className="col">
                       <div className="grp-lab">主字幕</div>
-                      <button className={`p-li${subs.every((t) => !t.selected) ? " on" : ""}`} onClick={() => { setTrack("sub", "no"); persistPrefs({ ...prefs, sub_enabled: false }); }}>
+                      <button className={`p-li${subs.every((t) => !t.selected) ? " on" : ""}`} onClick={() => { chooseTrack("sub", "no"); persistPrefs({ ...prefs, sub_enabled: false }); }}>
                         <span className="rad" /> 关闭
                       </button>
                       {subs.map((t) => (
                         <button
                           key={t.id}
                           className={`p-li${t.selected ? " on" : ""}`}
-                          onClick={() => { setTrack("sub", t.id); persistPrefs({ ...prefs, sub_enabled: true, sub_lang: trackLang(subs, t.id) || prefs.sub_lang }); }}
+                          onClick={() => { chooseTrack("sub", t.id); persistPrefs({ ...prefs, sub_enabled: true, sub_lang: trackLang(subs, t.id) || prefs.sub_lang }); }}
                         >
                           <span className="rad" /> 字幕 {t.id} {t.lang || t.title}
                         </button>
@@ -1081,6 +1302,14 @@ export default function App() {
                           <button className="p-li" onClick={() => setSubUrl(null)}>取消</button>
                         </>
                       )}
+                      {stepper("位置", `${subPos}`, () => applySubStyle({ position: Math.max(0, subPos - 5) }), () => applySubStyle({ position: Math.min(100, subPos + 5) }))}
+                      {stepper("延迟", fmtDelay(sDelay), () => applySDelay(sDelay - 0.1), () => applySDelay(sDelay + 0.1))}
+
+                      {/* 主次共用的样式。★ 不是偷懒放一起 —— mpv 就只有一份:
+                          secondary-sub-font-size / -font 这些属性**根本不存在**
+                          (2026-07-16 实测 property-list,set 回 -8 property not found)。
+                          与其在次字幕栏摆一个假的字号 stepper,不如如实标成「主次共用」。 */}
+                      <div className="grp-lab">字幕样式 · 主次共用</div>
                       <div className="p-li static">
                         字体
                         <span className="rt sel" onClick={() => setFontOpen((o) => !o)}>
@@ -1092,9 +1321,12 @@ export default function App() {
                           <span className="rad" /> {label}
                         </button>
                       ))}
-                      {stepper("大小", `${subSize}`, () => applySubStyle({ size: Math.max(10, subSize - 5) }), () => applySubStyle({ size: Math.min(200, subSize + 5) }))}
-                      {stepper("位置", `${subPos}`, () => applySubStyle({ position: Math.max(0, subPos - 5) }), () => applySubStyle({ position: Math.min(100, subPos + 5) }))}
-                      {stepper("延迟", fmtDelay(sDelay), () => applySDelay(sDelay - 0.1), () => applySDelay(sDelay + 0.1))}
+                      {/* 大小 = sub-scale 百分比。以前拧的是 sub-font-size,而 ASS 字幕
+                          (内封几乎都是)在 mpv 默认 sub-ass-override=scale 下**完全无视它** ——
+                          这就是「主字幕大小调不动」的真因。sub-scale 对 ASS 和纯文本都生效。 */}
+                      {stepper("大小", `${subScale}%`,
+                        () => applySubStyle({ scalePct: Math.max(50, subScale - 10) }),
+                        () => applySubStyle({ scalePct: Math.min(300, subScale + 10) }))}
                     </div>
                     <div className="col">
                       <div className="grp-lab">次字幕(双字幕)</div>
@@ -1106,14 +1338,22 @@ export default function App() {
                           <span className="rad" /> 字幕 {t.id} {t.lang || t.title}
                         </button>
                       ))}
-                      {stepper("位置 ", `${sec2Pos}`, () => applySec2Opts({ position: Math.max(0, sec2Pos - 5) }), () => applySec2Opts({ position: Math.min(100, sec2Pos + 5) }))}
-                      {stepper("延迟 ", fmtDelay(sec2Delay), () => applySec2Opts({ delay: round1(sec2Delay - 0.1) }), () => applySec2Opts({ delay: round1(sec2Delay + 0.1) }))}
-                      <div className="p-note">
-                        次字幕只有位置/延迟可调:mpv 没有独立的次字幕字体/字号属性,样式跟随主字幕。
-                      </div>
-                    </div>
-                    <div className="p-note span2">
-                      位置 = mpv sub-pos:100 是底部(默认),数值越小字幕越靠上。延迟正值 = 字幕延后出现。
+                      {/* 与主字幕栏同样的两项(位置/延迟)—— 这两项 mpv 确实给了 secondary 独立属性。 */}
+                      {stepper("位置", `${sec2Pos}`, () => applySec2Opts({ position: Math.max(0, sec2Pos - 5) }), () => applySec2Opts({ position: Math.min(100, sec2Pos + 5) }))}
+                      {stepper("延迟", fmtDelay(sec2Delay), () => applySec2Opts({ delay: round1(sec2Delay - 0.1) }), () => applySec2Opts({ delay: round1(sec2Delay + 0.1) }))}
+
+                      {/* 用户 2026-07-16:「为什么主字幕渲染样式对了,次字幕却不渲染样式?」
+                          答:mpv 的 secondary-sub-ass-override 默认就是 strip —— 把次字幕的 ASS
+                          标记整个剥掉当纯文本画。这里把它提成开关,默认已改成「保留原样式」。
+                          ⚠️ 保留原样式 = 次字幕按它自己 ASS 里写的位置画,「位置」这项可能就推不动它了
+                          (ASS 自带定位优先),而且多半和主字幕挤在底部。真挤了就切回「纯文本」。 */}
+                      <div className="grp-lab">次字幕样式</div>
+                      <button className={`p-li${sec2Ass === "scale" ? " on" : ""}`} onClick={() => applySec2Opts({ assOverride: "scale" })}>
+                        <span className="rad" /> 保留原样式(同主字幕)
+                      </button>
+                      <button className={`p-li${sec2Ass === "strip" ? " on" : ""}`} onClick={() => applySec2Opts({ assOverride: "strip" })}>
+                        <span className="rad" /> 纯文本(可用上面的位置)
+                      </button>
                     </div>
                   </>
                 )}
@@ -1151,29 +1391,22 @@ export default function App() {
                         </div>
                       ))}
                       {dmResults && dmResults.length === 0 && <div className="p-note">没有可用的弹幕源(去设置页添加)。</div>}
-                      {/* 弹幕源的增删改查在设置页(多源 CRUD);草稿 L1119 这里只要「搜索 / 选源」,
-                          不再放 api_url 输入框 —— 它当年还把 Vec<DanmakuServer> 当单对象存,存了个寂寞。 */}
-                      <div className="p-note">起播时会自动匹配弹幕;没匹配上或想换,在这儿搜片名手动挑。源的增删改在「设置 · 弹幕源」。</div>
                     </div>
                     <div className="col">
                       <div className="grp-lab">显示设置</div>
-                      {swRow("弹幕开关", dmOn, () => setDmOn((v) => !v))}
+                      {swRow("弹幕开关", dmOn, () => patchDm({ on: !dmOn }))}
                       {stepper("不透明度", `${dmOpacity}%`,
-                        () => setDmOpacity((v) => Math.max(10, v - 10)),
-                        () => setDmOpacity((v) => Math.min(100, v + 10)))}
+                        () => patchDm({ opacity: Math.max(10, dmOpacity - 10) }),
+                        () => patchDm({ opacity: Math.min(100, dmOpacity + 10) }))}
                       {stepper("显示区域", DM_AREAS[dmArea] === 100 ? "全屏" : `${DM_AREAS[dmArea] / 25}/4 屏`,
-                        () => setDmArea((i) => Math.max(0, i - 1)),
-                        () => setDmArea((i) => Math.min(DM_AREAS.length - 1, i + 1)))}
+                        () => patchDm({ area: Math.max(0, dmArea - 1) }),
+                        () => patchDm({ area: Math.min(DM_AREAS.length - 1, dmArea + 1) }))}
                       {stepper("显示速度", DM_SPEEDS[dmSpeed][1],
-                        () => setDmSpeed((i) => Math.max(0, i - 1)),
-                        () => setDmSpeed((i) => Math.min(DM_SPEEDS.length - 1, i + 1)))}
+                        () => patchDm({ speed: Math.max(0, dmSpeed - 1) }),
+                        () => patchDm({ speed: Math.min(DM_SPEEDS.length - 1, dmSpeed + 1) }))}
                       {stepper("字体大小", DM_SIZES[dmSize][1],
-                        () => setDmSize((i) => Math.max(0, i - 1)),
-                        () => setDmSize((i) => Math.min(DM_SIZES.length - 1, i + 1)))}
-                      <div className="p-note">
-                        显示速度 = 滚动弹幕横穿屏幕的秒数(「中」=8s);字体大小「中」= 按画面高自适应。
-                        这两项是前端渲染参数,核层 danmaku_filter 只管过滤/去重。
-                      </div>
+                        () => patchDm({ size: Math.max(0, dmSize - 1) }),
+                        () => patchDm({ size: Math.min(DM_SIZES.length - 1, dmSize + 1) }))}
                     </div>
                   </>
                 )}
@@ -1197,69 +1430,65 @@ export default function App() {
                             </button>
                           );
                         })}
-                        <div className="p-note">列表为服务端真实版本(item_media)。点击即切换:先落进度再按当前位置用该版本重新起播(mpv 不支持热换源,必然有一次短暂重载)。</div>
                       </>
                 )}
 
-                {/* ---- 超分:档位来自核层 shader_levels(),挂载后回读校验 ---- */}
+                {/* ---- 超分:档位来自核层 shader_levels(),按滤镜家族分三组(用户 2026-07-16)。
+                        「需放大才生效」的分组/角标已去掉;某档在当前窗口尺寸下会不会真跑,由 applyShader
+                        点击时如实 toast(will_run),不在列表里预标。 ---- */}
                 {panel === "super" && (
                   shaderList.length === 0 ? <div className="p-note">读取档位中…</div> : (
                     <>
-                      {shaderList.slice(0, 1).map(([id, name]) => (
+                      {/* 关闭档 */}
+                      {shaderList.filter(([id]) => id === "off").map(([id, name]) => (
                         <button key={id} className={`p-li${shaderLv === id ? " on" : ""}`} onClick={() => applyShader(id)}>
                           <span className="rad" /> {name}
                         </button>
                       ))}
-                      {/* 分成「窗口也生效」和「需放大」两组:后者在窗口里点了毫无变化,
-                          必须点之前就说清楚,别让用户自己猜(worksInWindow 由核层按 shader
-                          源里的 //!WHEN 现算,不是前端写死的名单)。 */}
-                      <div className="grp-lab">窗口 / 全屏都生效</div>
-                      {shaderList.slice(1).filter(([, , w]) => w).map(([id, name]) => (
-                        <button key={id} className={`p-li${shaderLv === id ? " on" : ""}`} onClick={() => applyShader(id)}>
-                          <span className="rad" /> {name}
-                        </button>
-                      ))}
-                      <div className="grp-lab">需要放大才生效(全屏)</div>
-                      {shaderList.slice(1).filter(([, , w]) => !w).map(([id, name]) => (
-                        <button key={id} className={`p-li${shaderLv === id ? " on" : ""}`} onClick={() => applyShader(id)}>
-                          <span className="rad" /> {name}
-                          <span className="rt">需放大</span>
-                        </button>
-                      ))}
-                      {/* ★ 这里曾有一个 0~100 的「强度」stepper。用户 2026-07-15 否掉:
-                          「强度不是靠用户调的 是让你设计挡位的……用户又不会调 没用啊」。
-                          强度已烧进各档(shaders.rs 的 preset()),梯度就是档位名里的 轻/推荐/强。
-                          别再加回任何让用户拧参数的控件。 */}
-                      <div className="p-note">
-                        锐化/去噪(CAS + Anime4K Denoise)在源分辨率就跑,窗口里也立刻见效。
-                        放大类(FSR1 / Anime4K CNN)是放大器,只有画面区大于源画面 1.2 倍才工作 —— 按 F 全屏。
-                        挂载后回读 glsl-shaders 与画面尺寸双重校验,不会假装开了。
-                      </div>
+                      {/* 三家族各六档:Anime4K(动漫)/ FSR(通用)/ NVIDIA(NIS)。 */}
+                      {SHADER_FAMILIES.flatMap(([fam, label]) => {
+                        const items = shaderList.filter(([, , f]) => f === fam);
+                        if (items.length === 0) return [];
+                        return [
+                          <div className="grp-lab" key={`lab-${fam}`}>{label}</div>,
+                          ...items.map(([id, name]) => (
+                            <button key={id} className={`p-li${shaderLv === id ? " on" : ""}`} onClick={() => applyShader(id)}>
+                              <span className="rad" /> {name}
+                            </button>
+                          )),
+                        ];
+                      })}
                     </>
                   )
                 )}
 
-                {/* ---- 线路:probe_lines / set_active_line 全真接 ---- */}
+                {/* ---- 线路:probe_line / set_active_line 全真接 ----
+                    行来自本地账号配置(立刻出、立刻可点),延迟各行自己填。
+                    「探测中…」这个整面板占位没了 —— 它正是「卡在那」的来源。 */}
                 {panel === "line" && (
-                  lineErr ? <div className="p-note">线路探测失败:{lineErr}</div>
-                    : !lineProbes || !acct ? <div className="p-note">探测中…</div>
+                  lineErr ? <div className="p-note">线路读取失败:{lineErr}</div>
+                    : !acct ? <div className="p-note">读取中…</div>
                       : <>
-                        {lineProbes.map((p) => (
-                          <button
-                            key={p.index}
-                            className={`p-li${acct.active_line === p.index ? " on" : ""}`}
-                            onClick={() => switchLine(p.index)}
-                          >
-                            <span className="rad" />
-                            <span className="col">
-                              <span className="t1">{lineName(acct, p.index)}</span>
-                              <span className="t2">{p.url}</span>
-                            </span>
-                            {/* ms=null 是「探过、确实不通」,按草稿显示「—」,不装成 0ms */}
-                            <span className="rt">{p.ms == null ? "—" : `${p.ms}ms`}</span>
-                          </button>
-                        ))}
-                        <div className="grp-lab">进入服务器自动探测(GET /public,非 ping)· 缓存至退出程序清空 · 无需手动测速</div>
+                        {Array.from({ length: acct.lines.length || 1 }, (_, i) => {
+                          const ms = lineMs?.[i];
+                          return (
+                            <button
+                              key={i}
+                              className={`p-li${acct.active_line === i ? " on" : ""}`}
+                              onClick={() => switchLine(i)}
+                            >
+                              <span className="rad" />
+                              {/* 用户 2026-07-16「线路选择不要直接显示地址 显示名称就行」:只留名称,不显 URL。 */}
+                              <span className="col">
+                                <span className="t1">{lineName(acct, i)}</span>
+                              </span>
+                              {/* 三态:未回来=转圈 / null=探过确实不通,显示「—」不装成 0ms / 数字=毫秒 */}
+                              <span className="rt">
+                                {ms === undefined ? <i className="p-dot" /> : ms == null ? "—" : `${ms}ms`}
+                              </span>
+                            </button>
+                          );
+                        })}
                       </>
                 )}
 
@@ -1289,7 +1518,6 @@ export default function App() {
                         <span className="rad" /> {s.toFixed(1)}×
                       </button>
                     ))}
-                    <div className="grp-lab">范围 0.25×–5.0× · 步进 0.25 · 长按 +/− 连调 · 快捷键 [ / ]</div>
                   </>
                 )}
 
@@ -1345,22 +1573,20 @@ export default function App() {
                     {swRow("杜比视界软解", dolby, () => applyDolby(!dolby))}
                     <button className="p-li" onClick={doShot}><span className="i">◱</span>截图 <span className="rt">S</span></button>
                     <button className="p-li" onClick={copyTime}><span className="i">⧉</span>复制当前时间</button>
+                    {/* 播放信息:常见静态规格(用户 2026-07-16:分辨率/码率/大小/编码/音频·字幕格式,
+                        不要动态的时长/状态)。取自当前在播版本的流规格(item_media)。 */}
                     <div className="p-note span2">
-                      <b className="ttl"><IconInfo size={12} /> 播放信息 / 统计</b>
+                      <b className="ttl"><IconInfo size={12} /> 播放信息</b>
                       <span className="kv"><i>标题</i>{playing.name}</span>
                       {playing.series_name && <span className="kv"><i>剧集</i>{playing.series_name}{epTag ? ` · ${epTag}` : ""}</span>}
-                      <span className="kv"><i>进度</i>{fmtTime(status.time)} / {fmtTime(status.duration)}</span>
-                      <span className="kv"><i>已缓冲</i>{fmtTime(status.buffered)}</span>
-                      <span className="kv"><i>状态</i>{status.paused ? "已暂停" : "播放中"}</span>
-                      <span className="kv"><i>音/字轨</i>{audio.length} / {subs.length}</span>
-                      {playing.video_height != null && <span className="kv"><i>规格</i>{[fmtRes(playing.video_height), fmtBitrate(playing.bitrate), fmtSize(playing.size_bytes)].filter(Boolean).join(" · ")}</span>}
-                      {/* 以下几项是 player_opts 回读的真值,不是前端猜的 */}
-                      <span className="kv"><i>倍速</i>{speed.toFixed(2)}×</span>
-                      <span className="kv"><i>音量</i>{muted ? "静音" : volume}</span>
-                      <span className="kv"><i>解码</i>{HWDECS.find(([id]) => id === hwdec)?.[1] ?? hwdec}</span>
-                      <span className="kv"><i>超分</i>{shaderList.find(([id]) => id === shaderLv)?.[1] ?? shaderLv}</span>
-                      {sleepMin != null && <span className="kv"><i>定时</i>{sleepMin} 分钟后关闭</span>}
-                      <span className="kv note">跳过片头尾 / 画中画 核层尚无对应命令,待接。</span>
+                      {infoRes && <span className="kv"><i>分辨率</i>{infoRes}</span>}
+                      {infoBitrate && <span className="kv"><i>码率</i>{infoBitrate}</span>}
+                      {infoSize && <span className="kv"><i>大小</i>{infoSize}</span>}
+                      {vStream?.codec && <span className="kv"><i>视频编码</i>{vStream.codec.toUpperCase()}{vStream.video_range && vStream.video_range !== "SDR" ? ` · ${vStream.video_range}` : ""}</span>}
+                      {aCodecs && <span className="kv"><i>音频格式</i>{aCodecs}</span>}
+                      {sCodecs && <span className="kv"><i>字幕格式</i>{sCodecs}</span>}
+                      {curVer?.container && <span className="kv"><i>容器</i>{curVer.container.toUpperCase()}</span>}
+                      {versions == null && <span className="kv note">读取媒体规格中…</span>}
                     </div>
                   </>
                 )}

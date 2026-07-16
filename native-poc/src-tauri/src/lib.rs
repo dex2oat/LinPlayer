@@ -300,9 +300,12 @@ async fn aggregate_search(
                 user_id: a.user_id.clone(),
                 device_id,
             };
-            // 不再二次 filter 掉非 Movie/Series:那会把 search 默认带上的 Episode 又筛没,
-            // 白瞎。类型收敛交给 search 的 IncludeItemTypes(默认 Movie,Series,Episode)。
-            let items = emby::search(&http, &s, &query, None, None)
+            /* 用户 2026-07-16:「跨服查找剧/电影、聚合搜索,都只出剧/电影的条目,不要出『集』
+               这种条目 —— 这是不一样的」。emby::search 传 None 时默认 IncludeItemTypes=
+               Movie,Series,Episode → 分集混进结果。这里显式收敛成 Movie,Series。
+               跨服 SourcePicker 与聚合搜索共用本命令,一处收敛两处生效。 */
+            let types = ["Movie".to_string(), "Series".to_string()];
+            let items = emby::search(&http, &s, &query, Some(&types), None)
                 .await
                 .unwrap_or_default();
             /* ★ 这里曾拼成 `账户名 @ 地址`。用户 2026-07-15:「聚合搜索的时候
@@ -828,7 +831,13 @@ fn register_deep_link_scheme() {
     let f = std::env::temp_dir().join("linplayer_scheme.reg");
     // .reg 必须是无 BOM 的 UTF-8,reg import 才认。
     if std::fs::write(&f, content.as_bytes()).is_ok() {
-        let _ = std::process::Command::new("reg").arg("import").arg(&f).status();
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW:注册协议时不弹黑 cmd 窗(同 translation.rs 的处理)。
+        let _ = std::process::Command::new("reg")
+            .arg("import")
+            .arg(&f)
+            .creation_flags(0x0800_0000)
+            .status();
         let _ = std::fs::remove_file(&f);
     }
 }
@@ -1033,17 +1042,33 @@ struct LineProbe {
     ms: Option<u64>,
 }
 
+/// 线路 URL 表。空 lines 回落成「server 本身算一条线」—— 前端渲染行数必须与此一致。
+fn line_urls(state: &State<'_, AppState>, server_id: &str) -> Result<Vec<String>, String> {
+    let cfg = state.config.lock().unwrap();
+    let a = cfg.find(server_id).ok_or("找不到该服务器")?;
+    Ok(if a.lines.is_empty() {
+        vec![a.server.clone()]
+    } else {
+        a.lines.iter().map(|l| l.url.clone()).collect()
+    })
+}
+
+/// 单条线路测速。通 = Some(毫秒),不通/超时 = None。
+async fn probe_one(http: &reqwest::Client, url: &str) -> Option<u64> {
+    let probe = format!("{}/System/Info/Public", url.trim_end_matches('/'));
+    let t0 = std::time::Instant::now();
+    let ok = tokio::time::timeout(std::time::Duration::from_secs(6), http.get(&probe).send())
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
+    ok.then(|| t0.elapsed().as_millis() as u64)
+}
+
 #[tauri::command]
 async fn probe_lines(state: State<'_, AppState>, server_id: String) -> Result<Vec<LineProbe>, String> {
-    let urls: Vec<String> = {
-        let cfg = state.config.lock().unwrap();
-        let a = cfg.find(&server_id).ok_or("找不到该服务器")?;
-        if a.lines.is_empty() {
-            vec![a.server.clone()]
-        } else {
-            a.lines.iter().map(|l| l.url.clone()).collect()
-        }
-    };
+    let urls = line_urls(&state, &server_id)?;
     // 并发探测:线路多时别串行等超时(6s × N 会把用户等睡着)。
     let tasks: Vec<_> = urls
         .into_iter()
@@ -1051,18 +1076,8 @@ async fn probe_lines(state: State<'_, AppState>, server_id: String) -> Result<Ve
         .map(|(index, url)| {
             let http = state.http.clone();
             tokio::spawn(async move {
-                let probe = format!("{}/System/Info/Public", url.trim_end_matches('/'));
-                let t0 = std::time::Instant::now();
-                let ok = tokio::time::timeout(
-                    std::time::Duration::from_secs(6),
-                    http.get(&probe).send(),
-                )
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .map(|r| r.status().is_success())
-                .unwrap_or(false);
-                LineProbe { index, url, ms: ok.then(|| t0.elapsed().as_millis() as u64) }
+                let ms = probe_one(&http, &url).await;
+                LineProbe { index, url, ms }
             })
         })
         .collect();
@@ -1071,6 +1086,24 @@ async fn probe_lines(state: State<'_, AppState>, server_id: String) -> Result<Ve
         out.push(t.await.map_err(|e| format!("线路测速任务失败:{e}"))?);
     }
     Ok(out)
+}
+
+/// 只探**一条**线路。给「先出线路表、再逐条填延迟」用(用户 2026-07-16:
+/// 「不需要做延迟探测,要做也是先显示线路再去探测,不然一条探得久就一直卡在那」)。
+///
+/// ★ 为什么不能复用 probe_lines:它要**等最慢的那条**(最坏 6s)才整表返回 ——
+/// 一条死线就把整个面板扣住,用户连切到能用的线路都做不到。逐条探则各回各的,
+/// 死线只是它自己那一行慢慢转,不牵连别人。
+#[tauri::command]
+async fn probe_line(
+    state: State<'_, AppState>,
+    server_id: String,
+    index: usize,
+) -> Result<LineProbe, String> {
+    let urls = line_urls(&state, &server_id)?;
+    let url = urls.get(index).ok_or("线路下标越界")?.clone();
+    let ms = probe_one(&state.http, &url).await;
+    Ok(LineProbe { index, url, ms })
 }
 
 /// 删除某账号;若删的是活跃账号,回落到第一个(无账号则清空会话)。
@@ -1691,12 +1724,19 @@ fn set_hwdec(state: State<'_, AppState>, mode: String) -> Result<(), String> {
     with_player!(state, p => p.set_hwdec(&mode))
 }
 
-/// 字幕样式(字体/字号/位置/背景/混合)。None 的项不动。
+/// 字幕样式(字体/缩放/字号/位置/背景/混合)。None 的项不动。
+///
+/// ★ 这些 `sub-*` 属性**主次字幕共用** —— 不是偷懒,是 mpv 就没有分开的那一份:
+/// 2026-07-16 用 ctypes 拉 libmpv 的 `property-list` 实测,`secondary-*` 名下总共只有
+/// sid / ass-override / delay / pos / visibility / text / start / end / lines,
+/// **不存在 secondary-sub-font-size / -font / -color**(set 回 -8 property not found)。
+/// 所以「次字幕单独设字体大小」在 mpv 层面无法实现,UI 上就该如实标成主次共用,
+/// 别造一个假的次字幕字号 stepper 骗人。
 #[tauri::command]
 fn set_sub_style(
     state: State<'_, AppState>,
     font: Option<String>,
-    size: Option<f64>,
+    scale: Option<f64>,
     position: Option<f64>,
     background: Option<bool>,
     blend_mode: Option<String>,
@@ -1706,8 +1746,8 @@ fn set_sub_style(
     if let Some(f) = font {
         p.set_sub_font(&f);
     }
-    if let Some(s) = size {
-        p.set_sub_size(s);
+    if let Some(sc) = scale {
+        p.set_sub_scale(sc);
     }
     if let Some(pos) = position {
         p.set_sub_position(pos);
@@ -1732,6 +1772,7 @@ fn set_secondary_sub_opts(
     state: State<'_, AppState>,
     delay: Option<f64>,
     position: Option<f64>,
+    ass_override: Option<String>,
 ) -> Result<(), String> {
     let guard = state.player.lock().unwrap();
     let p = guard.as_ref().ok_or("播放器未就绪")?;
@@ -1740,6 +1781,9 @@ fn set_secondary_sub_opts(
     }
     if let Some(pos) = position {
         p.set_secondary_sub_position(pos);
+    }
+    if let Some(m) = ass_override {
+        p.set_secondary_sub_ass_override(&m);
     }
     Ok(())
 }
@@ -2069,10 +2113,9 @@ fn screenshot(state: State<'_, AppState>, dir: Option<String>) -> Result<String,
     Ok(s)
 }
 
-/// 超分档位清单 `(id, 显示名, 窗口模式是否也生效)`。
-/// 第三个字段让 UI 在**点之前**就标出「需放大」—— 用户不该点完看不出变化再去猜。
+/// 超分档位清单 `(id, 显示名, 滤镜家族)`。第三个字段是家族名(Anime4K/FSR/NVIDIA),UI 按它分三组。
 #[tauri::command]
-fn shader_levels() -> Vec<(&'static str, &'static str, bool)> {
+fn shader_levels() -> Vec<(&'static str, &'static str, &'static str)> {
     shaders::levels()
 }
 
@@ -3451,14 +3494,41 @@ async fn bangumi_update_episode(
     Ok(bangumi::update_episode_status(&acc, subject_id, episode_id, type_.unwrap_or(2)).await)
 }
 
+/// 单部番的简介(Bangumi)。**按需**拉,聚焦视图只对当前那条调。
+///
+/// 为什么不在 bangumi_calendar 里一次带回:`/calendar` 的 summary 字段实测整周全空
+/// (2026-07-16),真简介只在 /v0/subjects/{id} —— 一周 111 部 = 111 次请求,
+/// 压在放送表加载路径上会把整页拖到几秒。核层带进程内缓存,滚回来是瞬时的。
+/// 取不到返回 None:**前端就别画简介**,不要编。
+#[tauri::command]
+async fn bangumi_summary(subject_id: i64) -> Result<Option<String>, String> {
+    Ok(bangumi::fetch_subject_summary(subject_id).await)
+}
+
 #[tauri::command]
 async fn bangumi_calendar(
     state: State<'_, AppState>,
     only_mine: Option<bool>,
 ) -> Result<Vec<linplayer_core::sync::calendar::CalendarEntry>, String> {
+    let only_mine = only_mine.unwrap_or(true);
     let acc = state.config.lock().unwrap().sync_bangumi.clone();
-    let Some(acc) = acc else { return Ok(vec![]) };
-    Ok(bangumi::fetch_anime_calendar(&acc, only_mine.unwrap_or(true)).await)
+    // 未登录时:个性化「我追的」拉不了(空);通用放送表 /calendar 是公开端点,用匿名账号照拉
+    // (用户 2026-07-16:不登录也要出正常每周放送表)。
+    match acc {
+        Some(a) => Ok(bangumi::fetch_anime_calendar(&a, only_mine).await),
+        None if !only_mine => {
+            let anon = linplayer_core::sync::SyncAccount {
+                service: "bangumi".into(),
+                access_token: String::new(),
+                refresh_token: None,
+                expires_at: None,
+                username: None,
+                user_id: None,
+            };
+            Ok(bangumi::fetch_anime_calendar(&anon, false).await)
+        }
+        None => Ok(vec![]),
+    }
 }
 
 // ---------- 配置迁移(扫码搬服务器)命令 ----------
@@ -3702,14 +3772,34 @@ pub fn run() {
             // 窗口移动/缩放/激活 -> 重新对齐视频窗口
             let app_handle = app.handle().clone();
             let win2 = window.clone();
+            // 全屏进/出、拖拽缩放会连发多个 Resized,末帧几何要等窗口 settle 才准。
+            // 立即同步一次(跟手)+ 代际防抖补一发延时同步 catch 最终尺寸/z 序 —— 否则
+            // 退出全屏后 mpv 独立窗口可能仍停在全屏尺寸并压在上面,看着像「没退出去」
+            // (用户 2026-07-16:全屏修好后又多了这个问题)。
+            let settle_gen = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
             window.on_window_event(move |ev| {
                 if matches!(
                     ev,
                     WindowEvent::Resized(_) | WindowEvent::Moved(_) | WindowEvent::Focused(true)
                 ) {
-                    if let Some(parent) = parent {
-                        sync_video(&win2, parent, &app_handle.state::<AppState>());
-                    }
+                    let Some(parent) = parent else { return };
+                    sync_video(&win2, parent, &app_handle.state::<AppState>());
+                    // ponytail: 每个 resize 事件起一个短线程等 settle;只有末代那发真重同步,
+                    // 拖拽连发的中间线程 220ms 后发现代际过期即退,不重复动窗口。
+                    let gen = settle_gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    let gen_arc = settle_gen.clone();
+                    let ah = app_handle.clone();
+                    let w3 = win2.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(220));
+                        if gen_arc.load(std::sync::atomic::Ordering::SeqCst) != gen {
+                            return; // 又来了新事件,交给它那一发
+                        }
+                        let ah2 = ah.clone();
+                        let _ = ah.run_on_main_thread(move || {
+                            sync_video(&w3, parent, &ah2.state::<AppState>());
+                        });
+                    });
                 }
             });
 
@@ -3770,6 +3860,7 @@ pub fn run() {
             parse_deep_link,
             batch_add_servers,
             probe_lines,
+            probe_line,
             current_source,
             play,
             report_progress,
@@ -3921,6 +4012,7 @@ pub fn run() {
             bangumi_set_collection,
             bangumi_update_episode,
             bangumi_calendar,
+            bangumi_summary,
             config_export_qr,
             config_import_qr,
             plugin_list,
