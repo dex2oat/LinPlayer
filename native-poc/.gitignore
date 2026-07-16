@@ -22,6 +22,11 @@ target/
 # libmpv 大二进制(117MB dll):本地构建输入,不入普通库;后续走 LFS/CI 拉取
 src-tauri/libmpv/*.dll
 
+# 本地工作材料(用户 2026-07-15 明确不入库,2026-07-17 撤出):
+# UI 原稿 + 打包脚本,GitHub 工作流用不上;放这里挡住 `git add native-poc/` 再次扫入。
+docs/desktop-drafts.html
+scripts/pack-portable.ps1
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
