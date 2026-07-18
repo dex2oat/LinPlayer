@@ -60,8 +60,18 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  animation: enter var(--dur-med) var(--ease) both;
+  /* ★ 这里只能用**不含 transform** 的入场动画,不能复用 .enter。
+     一个带 transform 关键帧的动画会让元素成为 fixed 定位的**包含块**,而且 Chromium
+     在动画播完之后依然保持(实测:fill-mode 换成 backwards 也照样保持)。后果是这一页里
+     所有 position:fixed 的浮层不再相对视口,而是相对 .page —— 被侧栏宽度 + 标题栏高度
+     整体顶偏:右键菜单飘到隔壁条目上,.toast 的 left:50% 也不再是屏幕中间。
+     .page 自己看不出任何异常(transform 终值是 none),所以这 bug 藏了很久。
+     实测(headless Edge,fixed 元素 left:100px,侧栏 200px):
+       无动画 → left=100 ✓   只有 opacity 的动画 → left=100 ✓
+       含 transform + both → left=300 ✗   含 transform + backwards → left=300 ✗ */
+  animation: page-enter var(--dur-med) var(--ease) both;
 }
+@keyframes page-enter { from { opacity: 0; } }
 /* 平滑滚动:用户 2026-07-16「页面浏览滑动有点卡卡的 加一下线性速度」——
    纯 CSS 平滑滚动(翻页/锚点/键盘滚动走缓动),不引任何惯性库。 */
 .scroll { flex: 1; overflow-y: auto; overflow-x: hidden; scroll-behavior: smooth; }
@@ -517,6 +527,8 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
 .toast.error { border-color: var(--danger); color: var(--danger); }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, -8px); } }
 
+/* 卡片入场保留位移。卡片里不放 position:fixed 的浮层,所以上面 .page 那条
+   「transform 关键帧 = fixed 包含块」的坑在这里不咬人。 */
 .enter { animation: enter var(--dur-slow) var(--ease) both; }
 @keyframes enter { from { opacity: 0; transform: translateY(8px); } }
 
@@ -584,6 +596,9 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
 .ctxmenu .mi { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 8px; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
 .ctxmenu .mi:hover { background: var(--panel-2); color: var(--ink); }
 .ctxmenu .mi.danger { color: var(--danger); }
+/* 管理员动作与普通动作之间的分隔 —— 前者动的是整个服务器,别和「标记已看」挨在一起。
+   用独立分隔条而不是给 .mi 加 border-top:那样 hover 高亮会把分隔线一起吃进去。 */
+.ctxmenu .mi-div { height: 1px; margin: 5px 4px; background: var(--line); }
 .ctxmenu .mi.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 
 /* ---------- 登录页 ---------- */

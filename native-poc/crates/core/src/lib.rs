@@ -11,6 +11,7 @@ pub mod icon_library;
 pub mod image_cache;
 pub mod media;
 pub mod net;
+pub mod paths;
 pub mod plugins;
 pub mod ranking;
 pub mod secrets;

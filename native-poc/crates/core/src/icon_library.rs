@@ -56,10 +56,7 @@ struct Cached {
 }
 
 fn cache_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("LinPlayer")
-        .join("icon_library.json")
+    crate::paths::cache_root().join("icon_library.json")
 }
 
 fn now_secs() -> u64 {

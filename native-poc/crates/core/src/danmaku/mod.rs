@@ -104,6 +104,44 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// 从用户粘贴的一条链接里**推导**鉴权方式,不让用户选。
+///
+/// 依据是两个主流自建端的真实接入方式(2026-07-19 查证,非猜测):
+///   - huangxd-/danmu_api:      `http://host:9321/{TOKEN}/api/v2`(README 原文,默认 token 87654321)
+///   - l429609201/misaka_danmu_server: `prefix="/{token}/api/v2"`(src/api/dandan/__init__.py 路由定义)
+///
+/// 两家都把 token 放在**路径**里 —— 也就是说它本来就在用户复制的那条链接内,
+/// 我们原样用就行,既不用他选「鉴权方式」,也不用他单独再填一遍 token。
+/// (用户 2026-07-19:「用户也不知道啥是鉴权方式」。)
+///
+/// 唯一需要动手的是把 token 挂在 **query** 上的写法:`?token=xxx`。
+/// 那种 URL 不能原样拼接 —— `base_url()` 会在后面接 `/api/v2`,
+/// 拼出 `...?token=x/api/v2` 这种废地址。所以要把它拆出来走 QueryToken。
+///
+/// 返回 (干净的基础地址, 鉴权方式, token)。
+pub fn derive_auth(api_url: &str) -> (String, DanmakuAuthType, Option<String>) {
+    let raw = api_url.trim();
+    let (path_part, query) = match raw.split_once('?') {
+        Some((p, q)) => (p, q),
+        None => (raw, ""),
+    };
+    // query 里带 token/api_key → 拆出来单独送,URL 只留路径部分。
+    for kv in query.split('&') {
+        if let Some((k, v)) = kv.split_once('=') {
+            let k = k.trim().to_ascii_lowercase();
+            if (k == "token" || k == "api_key" || k == "apikey") && !v.trim().is_empty() {
+                return (
+                    path_part.trim_end_matches('/').to_string(),
+                    DanmakuAuthType::QueryToken,
+                    Some(v.trim().to_string()),
+                );
+            }
+        }
+    }
+    // 其余一律原样用:路径 token(两大自建端)本就含在地址里,无需额外处理。
+    (path_part.trim_end_matches('/').to_string(), DanmakuAuthType::None, None)
+}
+
 pub fn signature(app_id: &str, path: &str, ts: i64, secret: &str) -> String {
     let mut h = Sha256::new();
     h.update(format!("{app_id}{ts}{path}{secret}").as_bytes());
@@ -831,10 +869,7 @@ fn cache_key(source_id: &str, episode_id: &str) -> String {
 }
 
 fn cache_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("LinPlayer")
-        .join("danmaku_cache")
+    crate::paths::cache_dir("danmaku")
 }
 
 fn cache_file(key: &str) -> PathBuf {
@@ -1184,6 +1219,51 @@ fn dedup(mut items: Vec<DanmakuComment>, window_seconds: f64) -> Vec<DanmakuComm
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /* 鉴权推导:用户只填「名称 + 链接」,鉴权方式由链接推出来。
+       用例是两个主流自建端 README/源码里的**原样地址**,不是我编的:
+         - huangxd-/danmu_api            http://{ip}:9321/87654321/api/v2   (路径 token,默认 87654321)
+         - l429609201/misaka_danmu_server  prefix="/{token}/api/v2"          (路径 token)
+       路径 token 天然含在地址里 → 判 None、地址原样用,请求会打到 /{token}/api/v2/xxx。 */
+    #[test]
+    fn derive_auth_handles_path_token_servers_verbatim() {
+        for url in [
+            "http://192.168.1.9:9321/87654321/api/v2",
+            "https://my.vercel.app/87654321/api/v2",
+            "https://misaka.example.com/mytoken123/api/v2",
+        ] {
+            let (u, a, t) = derive_auth(url);
+            assert_eq!(u, url, "路径 token 的地址必须原样保留");
+            assert_eq!(a, DanmakuAuthType::None, "路径 token 不需要额外鉴权动作");
+            assert_eq!(t, None);
+        }
+        // 尾斜杠要吃掉,否则 base_url() 会拼出双斜杠
+        let (u, _, _) = derive_auth("http://h:9321/87654321/api/v2/");
+        assert_eq!(u, "http://h:9321/87654321/api/v2");
+        // 省略默认 token 的写法(danmu_api 允许)也照样原样用
+        let (u, a, _) = derive_auth("http://h:9321");
+        assert_eq!((u.as_str(), a), ("http://h:9321", DanmakuAuthType::None));
+    }
+
+    /* query 带 token 的写法必须拆出来:原样留在 api_url 里,base_url() 会在问号后面
+       接上 /api/v2,拼成 `...?token=x/api/v2` 这种打不通的地址(静默失败,最难查)。 */
+    #[test]
+    fn derive_auth_splits_query_token_out_of_url() {
+        for (raw, want_tok) in [
+            ("https://d.example.com/api/v2?token=abc123", "abc123"),
+            ("https://d.example.com/api/v2?api_key=k9", "k9"),
+            ("https://d.example.com/api/v2?foo=1&token=zz", "zz"),
+        ] {
+            let (u, a, t) = derive_auth(raw);
+            assert_eq!(u, "https://d.example.com/api/v2", "query 必须从地址里摘掉");
+            assert_eq!(a, DanmakuAuthType::QueryToken);
+            assert_eq!(t.as_deref(), Some(want_tok));
+        }
+        // 空值的 token= 不算,别塞个空 token 进去
+        let (_, a, _) = derive_auth("https://d.example.com/api/v2?token=");
+        assert_eq!(a, DanmakuAuthType::None);
+    }
+
     #[test]
     fn parse_and_sign() {
         let d = serde_json::json!({ "p": "12.5,5,16711680,user9", "m": "顶部红字", "cid": "88" });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   type Filters,
   type Item,
@@ -9,6 +9,7 @@ import {
   thumbUrl,
   views,
 } from "../lib/api";
+import { AdminMenuItems, useIsAdmin } from "../lib/admin";
 import Poster from "../components/Poster";
 import {
   IconChevronDown,
@@ -89,6 +90,32 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
   const [openDD, setOpenDD] = useState<null | "sort" | "filter">(null);
   const [layout, setLayout] = useState<"grid" | "list">("grid");
   const [toast, setToast] = useState("");
+
+  /* 右键菜单。这页原本**一个右键菜单都没有**(库卡片和网格卡都没挂),
+     管理员三项是它的第一批菜单项 —— 所以非管理员右键这里仍然什么都不弹,
+     不画一个只有标题的空菜单。 */
+  const admin = useIsAdmin(session.server);
+  const [ctx, setCtx] = useState<{ x: number; y: number; id: string; name: string } | null>(null);
+  const openCtx = (e: ReactMouseEvent, it: Item) => {
+    if (!admin) return; // 目前菜单里只有管理员项,没权限就别拦浏览器右键
+    e.preventDefault();
+    setCtx({ x: e.clientX, y: e.clientY, id: it.id, name: it.name });
+  };
+
+  // 点外面 / 滚动 / Esc 关(同 DetailPage 套路)。
+  useEffect(() => {
+    if (!ctx) return;
+    const close = () => setCtx(null);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [ctx]);
 
   const nFilters = fGenres.length + fTags.length + fYears.length + (fRating != null ? 1 : 0);
 
@@ -211,6 +238,20 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
     return out;
   }, [fGenres, fTags, fYears, fRating]);
 
+  /** 右键菜单本体。库列表和库内两个 return 都要画,提出来免得两份各改一半。 */
+  const ctxMenu = ctx && (
+    <div className="ctxmenu" style={{ left: ctx.x, top: ctx.y }} onClick={(e) => e.stopPropagation()}>
+      <AdminMenuItems
+        itemId={ctx.id}
+        divider={false}
+        onDone={(m) => {
+          setToast(m);
+          setCtx(null);
+        }}
+      />
+    </div>
+  );
+
   const clearAll = () => {
     setFGenres([]);
     setFTags([]);
@@ -253,6 +294,7 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
                        和 Poster 同一个病,见那边的长注释。内容出现不能被动效挡着。 */
                     className="lib-card"
                     onClick={() => onPickView(lib)}
+                    onContextMenu={(e) => openCtx(e, lib)}
                   >
                     <div className="lib-cover">
                       {lib.has_primary ? (
@@ -268,6 +310,8 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
           {libs != null && libs.length === 0 && !err && <div className="empty">没有可用的媒体库</div>}
           <div style={{ height: 40 }} />
         </div>
+        {ctxMenu}
+        {toast && <div className="toast">{toast}</div>}
       </>
     );
   }
@@ -426,15 +470,21 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
           <div className="empty">{nFilters ? "没有符合筛选的内容" : "这个库还没有内容"}</div>
         ) : layout === "grid" ? (
           <div className="dense-grid">
-            {/* 卡片只有一个操作:点 = 进详情。无悬停按钮、无右键(用户 2026-07-15 定,覆盖草稿 11)。 */}
+            {/* 卡片只有一个操作:点 = 进详情。无悬停按钮(用户 2026-07-15 定,覆盖草稿 11)。
+                右键**只对管理员**开:菜单里就那三项管理动作,普通用户右键仍是浏览器默认行为。 */}
             {items.map((it) => (
-              <Poster key={it.id} item={it} session={session} onOpen={onOpenItem} />
+              <Poster key={it.id} item={it} session={session} onOpen={onOpenItem} onContextMenu={openCtx} />
             ))}
           </div>
         ) : (
           <div className="lib-list">
             {items.map((it) => (
-              <button className="lib-row enter" key={it.id} onClick={() => onOpenItem(it)}>
+              <button
+                className="lib-row enter"
+                key={it.id}
+                onClick={() => onOpenItem(it)}
+                onContextMenu={(e) => openCtx(e, it)}
+              >
                 <span className="lib-row-thumb">
                   {it.has_primary ? (
                     <img src={posterUrl(session, it.id, 120)} loading="lazy" />
@@ -460,6 +510,7 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
         <div style={{ height: 40 }} />
       </div>
 
+      {ctxMenu}
       {toast && <div className="toast">{toast}</div>}
     </>
   );

@@ -58,19 +58,15 @@ fn err_str(code: c_int) -> String {
 }
 
 pub fn mpv_log_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("linplayer_mpv.log")
+    linplayer_core::paths::logs_dir().join("mpv.log")
 }
 
 use crate::poclog;
 
-/// 编译好的 shader 缓存目录。放 app data 而不是 %TEMP% —— 它就是要跨次启动活着才有意义,
-/// 被临时目录清理掉就等于没缓存。和 config.rs 同一个 LinPlayer 根,不另起门户。
+/// mpv 编译好的 shader 产物。放数据根而不是 %TEMP% —— 它就是要跨次启动活着才有意义,
+/// 被临时目录清理掉就等于没缓存。能重建,故归 cache/。
 fn shader_cache_dir() -> std::path::PathBuf {
-    dirs::cache_dir()
-        .or_else(dirs::config_dir)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("LinPlayer")
-        .join("shader-cache")
+    linplayer_core::paths::cache_dir("shader-cache")
 }
 
 // ---------- Win32 顶层视频窗口 ----------
@@ -299,12 +295,10 @@ impl Player {
     }
 
     /// 带续播起点加载:用 mpv 的 `start` 选项(下一次 loadfile 生效),避免 seek 早于解码就绪失败。
+    ///
+    /// 这条路是 **Emby 直连取流**(网盘源走 load_with_headers)。
     pub fn load_at(&self, url: &str, start_secs: f64) -> Result<(), String> {
-        self.set_str(
-            "start",
-            &if start_secs > 1.0 { start_secs.to_string() } else { "none".to_string() },
-        );
-        self.cmd(&["loadfile", url])
+        self.load_inner(url, start_secs, "", None)
     }
     /// 带逐流 HTTP headers / UA 加载(网盘直链取流用:Authorization/Cookie/Referer)。
     // ponytail: http-header-fields 用逗号分隔 "Key: Value";含逗号的值会串味,当前源(OpenList Authorization)不涉及,够用。
@@ -320,11 +314,33 @@ impl Player {
             .map(|(k, v)| format!("{k}: {v}"))
             .collect::<Vec<_>>()
             .join(",");
-        self.set_str("http-header-fields", &joined);
-        if let Some(ua) = user_agent {
-            self.set_str("user-agent", ua);
-        }
-        self.load_at(url, start_secs)
+        self.load_inner(url, start_secs, &joined, user_agent)
+    }
+
+    /* ★ 每次 loadfile 都**无条件重设** UA 和 header,不是「有才设」。
+       mpv 的 user-agent / http-header-fields 是实例级属性,设了就一直在。原先只有
+       load_with_headers 会设、谁都不复位,于是放过一次网盘源之后再放 Emby:
+         1) 还顶着网盘的 UA,并把网盘的 Authorization/Cookie **发给 Emby 服务器**;
+         2) Emby 直连取流从来没带过 LinPlayer/{版本},用的是 mpv 自带默认 UA。
+       两个都是静默的 —— 画面照放,只有服务端日志里看得出来。 */
+    fn load_inner(
+        &self,
+        url: &str,
+        start_secs: f64,
+        header_fields: &str,
+        user_agent: Option<&str>,
+    ) -> Result<(), String> {
+        self.set_str("http-header-fields", header_fields);
+        // 源没指定 UA 就用访问 Emby 的那个(用户 2026-07-19 定的 UA 口径)。
+        self.set_str(
+            "user-agent",
+            user_agent.unwrap_or(&linplayer_core::http::user_agent()),
+        );
+        self.set_str(
+            "start",
+            &if start_secs > 1.0 { start_secs.to_string() } else { "none".to_string() },
+        );
+        self.cmd(&["loadfile", url])
     }
     pub fn set_pause(&self, paused: bool) {
         self.set_str("pause", if paused { "yes" } else { "no" });

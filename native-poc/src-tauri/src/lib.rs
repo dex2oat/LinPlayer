@@ -91,9 +91,14 @@ fn plugins_mgr(state: &AppState) -> Result<Arc<PluginManager>, String> {
     state.plugins.get().cloned().ok_or_else(|| "插件系统未就绪".to_string())
 }
 
+/// 诊断日志。旧版直接往 %TEMP% 根丢 linplayer_poc.log —— 现在收进自己的 logs/。
+fn app_log_path() -> std::path::PathBuf {
+    linplayer_core::paths::logs_dir().join("app.log")
+}
+
 fn poclog(msg: &str) {
     use std::io::Write;
-    let path = std::env::temp_dir().join("linplayer_poc.log");
+    let path = app_log_path();
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "{msg}");
     }
@@ -474,7 +479,8 @@ async fn icon_library(
     force: bool,
 ) -> Result<Vec<linplayer_core::icon_library::IconEntry>, String> {
     // async + State(引用) 的命令 tauri 要求返 Result;库本身不报错(失败回退旧缓存/空)。
-    Ok(linplayer_core::icon_library::library(&state.http, force).await)
+    // 图标库拉的是公共图标仓库,不是 Emby → 用默认 UA 的通用客户端(见 http.rs UA 口径)。
+    Ok(linplayer_core::icon_library::library(&http::client(), force).await)
 }
 
 /// 首页某库"最新更新"轨道。
@@ -538,6 +544,31 @@ async fn set_favorite(
 ) -> Result<(), String> {
     let s = session_of(&state)?;
     emby::set_favorite(&state.http, &s, &item_id, fav).await
+}
+
+/// 当前账号是不是该服务器的管理员。前端据此决定右键菜单里出不出那三项管理动作。
+#[tauri::command]
+async fn is_admin(state: State<'_, AppState>) -> Result<bool, String> {
+    let s = session_of(&state)?;
+    emby::is_admin(&state.http, &s).await
+}
+
+/// 刷新某个库/条目的元数据。full=false 只补缺失,full=true 强制重刮。
+#[tauri::command]
+async fn refresh_item(
+    state: State<'_, AppState>,
+    item_id: String,
+    full: bool,
+) -> Result<(), String> {
+    let s = session_of(&state)?;
+    emby::refresh_item(&state.http, &s, &item_id, full).await
+}
+
+/// 扫描整台服务器的媒体库文件(找新加进来的片子)。
+#[tauri::command]
+async fn scan_libraries(state: State<'_, AppState>) -> Result<(), String> {
+    let s = session_of(&state)?;
+    emby::scan_all_libraries(&state.http, &s).await
 }
 
 /// 服务器连通状态。草稿 06 的状态点三态:绿=正常 / 黄=需重登 / 灰=未连。
@@ -828,7 +859,8 @@ fn register_deep_link_scheme() {
          [HKEY_CURRENT_USER\\Software\\Classes\\linplayer\\shell\\open\\command]\r\n\
          @=\"\\\"{exe}\\\" \\\"%1\\\"\"\r\n"
     );
-    let f = std::env::temp_dir().join("linplayer_scheme.reg");
+    // 写在自己的数据根里而不是 %TEMP% 根:import 完就删,但也别在别人地盘上留哪怕一秒。
+    let f = linplayer_core::paths::logs_dir().join("scheme.reg");
     // .reg 必须是无 BOM 的 UTF-8,reg import 才认。
     if std::fs::write(&f, content.as_bytes()).is_ok() {
         use std::os::windows::process::CommandExt;
@@ -865,7 +897,8 @@ async fn account_icon(state: State<'_, AppState>, server_id: String) -> Result<S
         let cfg = state.config.lock().unwrap();
         cfg.find(&server_id).and_then(|a| a.icon_url.clone())
     };
-    linplayer_core::icon_cache::get(&state.http, &server_id, url.as_deref()).await
+    // 服务器图标是用户填的任意外链,不是 Emby → 默认 UA。
+    linplayer_core::icon_cache::get(&http::client(), &server_id, url.as_deref()).await
 }
 
 /// 用户从本地挑一张图当服务器图标。返回 data URI 供前端立刻显示。
@@ -1155,6 +1188,27 @@ async fn remove_account(state: State<'_, AppState>, server_id: String) -> Result
 // 且原实现写死 Primary?maxHeight=360 表达不了 Thumb/Backdrop/Logo —— 死代码,不留。
 
 // ---------- 播放命令 ----------
+/// 把设置页的播放器默认值应用到 mpv。**每次 loadfile 之前**调一次。
+///
+/// 为什么不是"初始化时设一次":用户在设置页改完不重启也得生效,而且杜比软解是**逐片**
+/// 判定的 —— 上一部是 DV 切了软解,下一部是普通片必须切回硬解,否则白白吃一部片的 CPU。
+/// 所以每次起播都从配置重新算一遍,不留跨片残留状态。
+fn apply_playback_defaults(state: &State<'_, AppState>, p: &Player, is_dolby_vision: bool) {
+    let (hwdec, speed, dolby_auto) = {
+        let pf = &state.config.lock().unwrap().prefs;
+        (pf.hwdec.clone(), pf.default_speed, pf.dolby_auto_sw)
+    };
+    // 杜比视界:开着自动软解且这片是 DV → 强制软解,压过用户的默认解码方式。
+    // 理由见 [[dolby-auto-decode]]:DV 走硬解在多数 Windows 显卡上出色偏移(发绿/发紫)。
+    let effective = if dolby_auto && is_dolby_vision { "no" } else { hwdec.as_str() };
+    p.set_hwdec(effective);
+    p.set_speed(speed);
+    if effective != hwdec {
+        poclog("杜比视界:自动切软解(hwdec=no)");
+    }
+    poclog(&format!("播放默认值 hwdec={effective} speed={speed} dv={is_dolby_vision}"));
+}
+
 /// 播放:解析流 -> 从 resume_secs 起播 -> 上报 start;返回起播秒数供前端定位进度条。
 #[tauri::command]
 async fn play(
@@ -1210,10 +1264,15 @@ async fn play(
     ));
 
     // 多线程加载:仅直传流走本地预取代理(转码 URL 是分段流,跳过直连)。
-    // 起服失败/非直传/用户关掉 → 回退直连;旧句柄被替换即 Drop 停服。
+    // 起服失败/非直传/这台服没开 → 回退直连;旧句柄被替换即 Drop 停服。
+    // ★ 开关按**服务器**查(Account.server 身份键),不是全局:线路只是同一台服的入口,
+    //   所以这里认账号 id 而非 session.server(后者是 active_line_url,还可能被 CF 反代改写)。
     let (pf_on, pf_threads, pf_cache) = {
-        let p = &state.config.lock().unwrap().prefs;
-        (p.prefetch_enabled, p.prefetch_threads, p.prefetch_cache_bytes)
+        let cfg = state.config.lock().unwrap();
+        let on = cfg
+            .active_account()
+            .is_some_and(|a| cfg.prefs.prefetch_servers.iter().any(|s| *s == a.server));
+        (on, cfg.prefs.prefetch_threads, cfg.prefs.prefetch_cache_bytes)
     };
     let play_url = if pf_on && target.play_method == "DirectStream" {
         let resign: linplayer_core::net::prefetch::ResignFn = {
@@ -1260,8 +1319,17 @@ async fn play(
         })?;
         let _ = p.take_error_eof();
         // media 代理:仅 HTTP 系列 + 开启 proxyMedia 时给 mpv 挂 http-proxy(SOCKS mpv 不支持)。
-        let mpv_proxy = state.config.lock().unwrap().proxy.mpv_http_proxy();
+        // ★ 播放地址是本机回环(CF 优选反代 / 多线程加载预取代理)时**不给 mpv 挂代理**:
+        //   理由同 http.rs 的 LOOPBACK_NO_PROXY —— mpv 会把 127.0.0.1 的请求递给用户代理,
+        //   代理再去连**它自己那头**的 127.0.0.1,我们的本地服务根本不在那儿。
+        //   真正出网的那一跳由 CF 反代/预取代理自己完成,代理设置在那一层已经生效过了。
+        let mpv_proxy = if linplayer_core::http::is_loopback_url(&play_url) {
+            None
+        } else {
+            state.config.lock().unwrap().proxy.mpv_http_proxy()
+        };
         p.set_http_proxy(mpv_proxy.as_deref());
+        apply_playback_defaults(&state, p, target.is_dolby_vision);
         p.load_at(&play_url, resume_secs)?;
         p.set_pause(false);
     }
@@ -1662,14 +1730,29 @@ struct PlayerOpts {
     sub_delay: f64,
     hwdec: String,
     shader_count: usize,
+    /// 当前在播的这一版是不是杜比视界。
+    ///
+    /// 给前端的用途:播放页「更多」里那行「杜比视界软解」开关**必须照实反映现状**。
+    /// 核层现在会按设置自动给 DV 切软解 —— 前端要是还把这行初始化成写死的 false,
+    /// 用户看到的就是「明明已经在软解,开关却显示关着」,典型的 UI 撒谎。
+    dolby_vision: bool,
 }
 
 /// 取播放器当前可调项。
 #[tauri::command]
 fn player_opts(state: State<'_, AppState>) -> Result<PlayerOpts, String> {
+    // ★ 先取 DV 标志再拿 player 锁。反过来会在两把锁之间形成固定的持有顺序依赖,
+    //   本项目在 [[prefetch-proxy-deadlock]] 上栽过同类跟头,不给它长出来的机会。
+    let dolby_vision = state
+        .playback
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|t| t.is_dolby_vision);
     let guard = state.player.lock().unwrap();
     let p = guard.as_ref().ok_or("播放器未就绪")?;
     Ok(PlayerOpts {
+        dolby_vision,
         speed: p.speed(),
         volume: p.volume(),
         muted: p.muted(),
@@ -2090,14 +2173,12 @@ async fn whisper_download_ffmpeg(app: tauri::AppHandle) -> Result<String, String
 /// 截图到图片文件,返回落盘路径。dir 为空则落到 图片/LinPlayer。
 #[tauri::command]
 fn screenshot(state: State<'_, AppState>, dir: Option<String>) -> Result<String, String> {
-    let base = dir
-        .filter(|d| !d.trim().is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::picture_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("LinPlayer")
-        });
+    // 调用方没指定 → 用用户在设置页选的目录(没设才回落系统图片文件夹)。
+    // 早先这里直接回落 picture_dir(),等于把设置项架空 —— 前端 screenshot() 从来不传 dir。
+    let base = match dir.filter(|d| !d.trim().is_empty()) {
+        Some(d) => std::path::PathBuf::from(d),
+        None => resolve_screenshot_dir(state.config.lock().unwrap().prefs.screenshot_dir.clone()),
+    };
     std::fs::create_dir_all(&base).map_err(|e| format!("建截图目录失败: {e}"))?;
     // 文件名用播放位置,避免同一片子连拍互相覆盖(不引 chrono,时间戳够用)。
     let guard = state.player.lock().unwrap();
@@ -2111,6 +2192,185 @@ fn screenshot(state: State<'_, AppState>, dir: Option<String>) -> Result<String,
     let s = path.to_string_lossy().into_owned();
     p.screenshot_to(&s)?;
     Ok(s)
+}
+
+/* ============================================================
+   数据目录 —— 让"软件把东西放哪了"这件事在 UI 上可见
+   ============================================================ */
+
+/// 数据根 + 各子目录的真实绝对路径,直接给设置页显示。
+/// 存在的意义就是**别让用户猜**:重构前数据散在 6 个根里,UI 里一个字都没提过。
+#[derive(serde::Serialize)]
+struct DataPaths {
+    root: String,
+    config: String,
+    data: String,
+    cache: String,
+    temp: String,
+    webview: String,
+    logs: String,
+    downloads: String,
+    /// Portable / Overridden / SystemFallback。UI 据此解释"为什么在这个位置"——
+    /// SystemFallback 意味着数据**没能**留在包里,必须显眼告警,不能装没事。
+    kind: linplayer_core::paths::RootKind,
+    /// exe 所在目录。UI 用它说明"包在哪儿"。
+    exe_dir: String,
+}
+
+/// 弹系统原生「选择文件夹」对话框。返回 `None` = 用户取消(不是错误,别弹提示)。
+///
+/// 包成我们自己的命令而不是让前端直接调插件:这样既不用装 npm 包,也不用往 capabilities
+/// 里放 dialog 权限(那是给前端直连插件命令用的)。`start` 是初始定位目录,可空。
+#[tauri::command]
+async fn pick_directory(app: tauri::AppHandle, start: Option<String>) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let mut b = app.dialog().file();
+    // 定位到当前值,省得用户每次从头翻。路径不存在时插件会自行忽略。
+    if let Some(s) = start.filter(|s| !s.trim().is_empty()) {
+        b = b.set_directory(s);
+    }
+    b.pick_folder(move |p| {
+        let _ = tx.send(p);
+    });
+    let picked = rx.await.map_err(|_| "选择目录被中断".to_string())?;
+    Ok(picked.map(|p| p.to_string()))
+}
+
+/// 原生文件选择器(外部播放器可执行文件用)。取消返回 None。
+#[tauri::command]
+async fn pick_file(
+    app: tauri::AppHandle,
+    start: Option<String>,
+    filter_name: Option<String>,
+    extensions: Option<Vec<String>>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let mut b = app.dialog().file();
+    // 定位到当前值所在目录(start 传的是**文件**路径,得取它的父目录)。
+    if let Some(s) = start.filter(|s| !s.trim().is_empty()) {
+        if let Some(parent) = std::path::Path::new(&s).parent() {
+            b = b.set_directory(parent);
+        }
+    }
+    if let (Some(name), Some(exts)) = (filter_name, extensions) {
+        let refs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
+        b = b.add_filter(name, &refs);
+    }
+    b.pick_file(move |p| {
+        let _ = tx.send(p);
+    });
+    let picked = rx.await.map_err(|_| "选择文件被中断".to_string())?;
+    Ok(picked.map(|p| p.to_string()))
+}
+
+/// 截图目录设置。`dir` 为空 = 用默认(系统图片文件夹/LinPlayer);`effective` 是实际会用的路径。
+#[derive(serde::Serialize)]
+struct ScreenshotDir {
+    dir: Option<String>,
+    effective: String,
+}
+
+#[tauri::command]
+fn get_screenshot_dir(state: State<'_, AppState>) -> ScreenshotDir {
+    let dir = state.config.lock().unwrap().prefs.screenshot_dir.clone();
+    ScreenshotDir {
+        effective: resolve_screenshot_dir(dir.clone()).to_string_lossy().into_owned(),
+        dir,
+    }
+}
+
+/// 设截图目录。空串/None = 恢复默认。**当场建一次目录验证可写** ——
+/// 存下一个写不进去的路径,用户要到按下截图键才发现,那时提示离设置页已经很远了。
+#[tauri::command]
+fn set_screenshot_dir(state: State<'_, AppState>, dir: Option<String>) -> Result<ScreenshotDir, String> {
+    let dir = dir.map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
+    if let Some(d) = &dir {
+        let p = std::path::Path::new(d);
+        if !p.is_absolute() {
+            return Err("请填绝对路径(如 D:\\Shots)".into());
+        }
+        std::fs::create_dir_all(p).map_err(|e| format!("这个目录建不出来/写不进去: {e}"))?;
+    }
+    let mut cfg = state.config.lock().unwrap();
+    cfg.prefs.screenshot_dir = dir.clone();
+    cfg.save();
+    Ok(ScreenshotDir {
+        effective: resolve_screenshot_dir(dir.clone()).to_string_lossy().into_owned(),
+        dir,
+    })
+}
+
+/// 截图落点:显式参数 > 用户设置 > 系统图片文件夹/LinPlayer。
+///
+/// 默认**故意在包外**:截图是用户要拿去用的东西,塞进 userdata/ 反而难找。
+/// 这跟"绿色包不留残留"不冲突 —— 它只在用户主动截图时才产生,且位置就是他自己选的。
+fn resolve_screenshot_dir(configured: Option<String>) -> std::path::PathBuf {
+    configured
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::picture_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("LinPlayer")
+        })
+}
+
+#[tauri::command]
+fn data_paths() -> DataPaths {
+    use linplayer_core::paths as p;
+    let s = |x: std::path::PathBuf| x.to_string_lossy().into_owned();
+    DataPaths {
+        root: s(p::root()),
+        config: s(p::config_file()),
+        data: s(p::data_root()),
+        cache: s(p::cache_root()),
+        temp: s(p::temp_dir()),
+        webview: s(p::webview_dir()),
+        logs: s(p::logs_dir()),
+        downloads: s(p::downloads_dir()),
+        kind: p::root_kind(),
+        exe_dir: std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| s(d.to_path_buf())))
+            .unwrap_or_default(),
+    }
+}
+
+/// 缓存占用字节数。**同步递归遍历目录**,缓存大时会卡几百毫秒 —— 丢去阻塞线程池,别堵住 UI。
+#[tauri::command]
+async fn cache_size() -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(linplayer_core::paths::cache_size)
+        .await
+        .map_err(|e| format!("统计缓存失败: {e}"))
+}
+
+/// 清空缓存。只动 cache/,config/data/downloads 一根汗毛都不碰。
+#[tauri::command]
+async fn clear_cache() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        linplayer_core::paths::clear_cache()?;
+        /* 内存层必须一起清:只删磁盘的话内存里那份还在继续供图,
+           用户看着占用变 0、封面却还是旧的 —— 那不叫清理,叫骗人。 */
+        linplayer_core::image_cache::mem_clear();
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("清理缓存失败: {e}"))?
+}
+
+/// 在系统文件管理器里打开数据目录。
+#[tauri::command]
+fn open_data_dir(app: tauri::AppHandle, sub: Option<String>) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let p = match sub.as_deref() {
+        Some("logs") => linplayer_core::paths::logs_dir(),
+        Some("downloads") => linplayer_core::paths::downloads_dir(),
+        _ => linplayer_core::paths::root(),
+    };
+    app.opener()
+        .open_path(p.to_string_lossy(), None::<&str>)
+        .map_err(|e| format!("打开目录失败: {e}"))
 }
 
 /// 超分档位清单 `(id, 显示名, 滤镜家族)`。第三个字段是家族名(Anime4K/FSR/NVIDIA),UI 按它分三组。
@@ -2137,10 +2397,8 @@ struct ShaderApplied {
 /// (见 [[superres-and-toast]]:旧 Flutter 桌面软件纹理根本不跑 glsl,必须回读校验)。
 #[tauri::command]
 fn set_shader_level(state: State<'_, AppState>, level: String) -> Result<ShaderApplied, String> {
-    let dir = dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("LinPlayer")
-        .join("shaders");
+    // .glsl 是 include_str! 编进二进制、首次用时落盘的 —— 丢了能重生成,归 cache/。
+    let dir = linplayer_core::paths::cache_dir("shaders");
     let paths = shaders::shader_paths(&dir, &level)?;
     let guard = state.player.lock().unwrap();
     let p = guard.as_ref().ok_or("播放器未就绪")?;
@@ -2234,20 +2492,35 @@ fn set_prefs(
 
 // ---------- 弹幕 ----------
 fn danmaku_cfg(s: &DanmakuServer) -> DanmakuSourceConfig {
-    let auth_type = match s.auth_type.as_str() {
-        "pathToken" => DanmakuAuthType::PathToken,
-        "headerToken" => DanmakuAuthType::HeaderToken,
-        "queryToken" => DanmakuAuthType::QueryToken,
-        _ => DanmakuAuthType::None,
+    /* 鉴权**不再让用户选**,由地址推导(见 danmaku::derive_auth 上的查证依据)。
+       ★ 但老配置里显式存过 auth_type 的源要继续按老的走 —— 用户可能配着 headerToken
+         的自建端,推导不出来;为了「简化 UI」把人家配好的源弄失效,那是砸招牌。
+       所以:auth_type 为空 = 新源,走推导;非空 = 老源,尊重原值。 */
+    /* "" 和 "none" 都当「没选过」→ 走推导。
+       ★ 不能只认空串:老 UI 新建源时写死的就是 "none",全端存量源多半都是它。
+         只认空串的话推导对绝大多数源永远不生效(而且不报错)。
+         "none" 本身也不携带信息,推导出来只会更准(比如把 ?token= 拆对)。 */
+    let auto = matches!(s.auth_type.trim(), "" | "none");
+    let (api_url, auth_type, token) = if auto {
+        let (u, a, t) = linplayer_core::danmaku::derive_auth(&s.api_url);
+        (u, a, t)
+    } else {
+        let a = match s.auth_type.as_str() {
+            "pathToken" => DanmakuAuthType::PathToken,
+            "headerToken" => DanmakuAuthType::HeaderToken,
+            "queryToken" => DanmakuAuthType::QueryToken,
+            _ => DanmakuAuthType::None,
+        };
+        (s.api_url.clone(), a, (!s.token.is_empty()).then(|| s.token.clone()))
     };
     // id/name 必须逐源取,不能写死 —— 多源下写死会让所有源撞成同一身份,分组结果串台。
     DanmakuSourceConfig {
         id: if s.id.trim().is_empty() { s.api_url.clone() } else { s.id.clone() },
         name: if s.name.trim().is_empty() { "自建源".into() } else { s.name.clone() },
-        api_url: s.api_url.clone(),
+        api_url,
         official: false,
         auth_type: Some(auth_type),
-        token: (!s.token.is_empty()).then(|| s.token.clone()),
+        token,
         app_id: None,
         app_secret: None,
     }
@@ -2302,6 +2575,26 @@ fn require_danmaku_sources(state: &State<'_, AppState>) -> Result<Vec<DanmakuSou
 #[tauri::command]
 fn get_danmaku_config(state: State<'_, AppState>) -> Vec<DanmakuServer> {
     state.config.lock().unwrap().danmaku_sources.clone()
+}
+
+/// 内置的弹弹Play 默认源在设置页的展示信息。
+///
+/// 它**不在** `danmaku_sources` 里(凭据是编译期注入的,不落配置文件),所以设置页
+/// 原来根本看不见它 —— 用户会以为「一个弹幕源都没有」,而实际上默认源一直在工作。
+/// 这里单独透出来给 UI 显示,只读:名字固定、地址是官方的、凭据不给前端。
+#[derive(serde::Serialize)]
+struct OfficialDanmaku {
+    name: String,
+    /// 编译期没注入凭据的构建里它就是不可用的,得如实说,别显示成「已启用」。
+    available: bool,
+}
+
+#[tauri::command]
+fn get_official_danmaku() -> OfficialDanmaku {
+    OfficialDanmaku {
+        name: "弹弹Play".into(),
+        available: linplayer_core::secrets::dandan_creds().is_some(),
+    }
 }
 
 /// 覆写自建弹幕源表。id 为空的自动补一个(用 api_url 做稳定身份)。
@@ -2588,6 +2881,8 @@ async fn source_play(
         let guard = state.player.lock().unwrap();
         let p = guard.as_ref().ok_or("播放器未就绪")?;
         let _ = p.take_error_eof(); // 清历史失效标志
+        // 源播放没有 Emby 的 MediaStreams,判不出 DV → 按用户设的默认解码方式走。
+        apply_playback_defaults(&state, p, false);
         p.load_with_headers(
             &resolved.url,
             resume_secs,
@@ -3279,9 +3574,10 @@ fn download_clear_completed(state: State<'_, AppState>) -> usize {
 }
 
 /// 多线程加载(预取代理)设置。threads 引擎内部 clamp 到 2~4。
+/// `servers` = 开了这功能的账号 id(Account.server);空表 = 全关。
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PrefetchSettings {
-    enabled: bool,
+    servers: Vec<String>,
     threads: usize,
     cache_bytes: u64,
 }
@@ -3290,9 +3586,14 @@ struct PrefetchSettings {
 fn get_prefetch_settings(state: State<'_, AppState>) -> PrefetchSettings {
     let p = &state.config.lock().unwrap().prefs;
     PrefetchSettings {
-        enabled: p.prefetch_enabled,
+        servers: p.prefetch_servers.clone(),
         threads: p.prefetch_threads,
-        cache_bytes: p.prefetch_cache_bytes,
+        // 钳回合法区间再给前端:旧配置存的是 1GB,原样透出去会让设置页一保存就被拒
+        // (校验 16~32MB),连开关服务器都点不动。见 Prefs::prefetch_cache_bytes 上的说明。
+        cache_bytes: p.prefetch_cache_bytes.clamp(
+            linplayer_core::config::PREFETCH_CACHE_MIN,
+            linplayer_core::config::PREFETCH_CACHE_MAX,
+        ),
     }
 }
 
@@ -3305,15 +3606,177 @@ fn set_prefetch_settings(
     if !(2..=4).contains(&settings.threads) {
         return Err("预取线程数只支持 2~4".into());
     }
-    if settings.cache_bytes < 16 * 1024 * 1024 {
-        return Err("读前缓冲上限不能低于 16MB".into());
+    // 上下限都得拒:上限静默夹紧的话,用户设 512MB 实际只生效 32MB,毫无反馈。
+    // 32MB 的由来见 net/prefetch.rs 的 MAX_READ_AHEAD(缓冲是**每连接**的,会乘活跃连接数)。
+    if !(linplayer_core::config::PREFETCH_CACHE_MIN..=linplayer_core::config::PREFETCH_CACHE_MAX)
+        .contains(&settings.cache_bytes)
+    {
+        return Err("读前缓冲上限只支持 16~32MB(它是每条连接的内存缓冲,大缓冲交给播放器)".into());
     }
     let mut cfg = state.config.lock().unwrap();
-    cfg.prefs.prefetch_enabled = settings.enabled;
+    // 只留真实存在的账号:服务器删了它的 id 还赖在表里,下次加同地址的服会「自己就开着」。
+    let known: Vec<String> = cfg.accounts.iter().map(|a| a.server.clone()).collect();
+    cfg.prefs.prefetch_servers = settings
+        .servers
+        .into_iter()
+        .filter(|s| known.contains(s))
+        .collect();
     cfg.prefs.prefetch_threads = settings.threads;
     cfg.prefs.prefetch_cache_bytes = settings.cache_bytes;
     cfg.save();
     Ok(())
+}
+
+/// 播放器默认行为(设置页「播放器」区)。
+///
+/// 这一组 2026-07-19 之前只躺在前端 localStorage 里,**改了不影响播放**。现在
+/// get/set 走核心配置,消费点在 `play()` / `play_local()` / `play_external()`。
+/// 加字段时记得同步 `apply_playback_defaults` —— 存得下但没人读,就是又一次「假落地」。
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PlaybackPrefs {
+    /// "auto-safe"(硬解) | "no"(软解)
+    hwdec: String,
+    default_speed: f64,
+    skip_intro: bool,
+    skip_outro: bool,
+    preview_thumbs: bool,
+    dolby_auto_sw: bool,
+    external_player: String,
+}
+
+#[tauri::command]
+fn get_playback_prefs(state: State<'_, AppState>) -> PlaybackPrefs {
+    let p = &state.config.lock().unwrap().prefs;
+    PlaybackPrefs {
+        hwdec: p.hwdec.clone(),
+        default_speed: p.default_speed,
+        skip_intro: p.skip_intro,
+        skip_outro: p.skip_outro,
+        preview_thumbs: p.preview_thumbs,
+        dolby_auto_sw: p.dolby_auto_sw,
+        external_player: p.external_player.clone(),
+    }
+}
+
+#[tauri::command]
+fn set_playback_prefs(state: State<'_, AppState>, settings: PlaybackPrefs) -> Result<(), String> {
+    // 拒而不是夹:静默夹紧 = 用户以为设上了。同 set_prefetch_settings 的理由。
+    if !matches!(settings.hwdec.as_str(), "auto-safe" | "no") {
+        return Err(format!("未知的解码方式: {}", settings.hwdec));
+    }
+    if !(linplayer_core::config::SPEED_MIN..=linplayer_core::config::SPEED_MAX)
+        .contains(&settings.default_speed)
+    {
+        return Err(format!(
+            "默认倍速只支持 {:.2}~{:.2}×",
+            linplayer_core::config::SPEED_MIN,
+            linplayer_core::config::SPEED_MAX
+        ));
+    }
+    // 外部播放器:给了路径就必须真的存在。存一个打不开的路径,等到起播时才炸,
+    // 那时用户早忘了自己填过什么。
+    let ext = settings.external_player.trim().to_string();
+    if !ext.is_empty() && !std::path::Path::new(&ext).is_file() {
+        return Err(format!("找不到外部播放器: {ext}"));
+    }
+    let mut cfg = state.config.lock().unwrap();
+    cfg.prefs.hwdec = settings.hwdec;
+    cfg.prefs.default_speed = settings.default_speed;
+    cfg.prefs.skip_intro = settings.skip_intro;
+    cfg.prefs.skip_outro = settings.skip_outro;
+    cfg.prefs.preview_thumbs = settings.preview_thumbs;
+    cfg.prefs.dolby_auto_sw = settings.dolby_auto_sw;
+    cfg.prefs.external_player = ext;
+    cfg.save();
+    Ok(())
+}
+
+/// 章节(跳过片头片尾 + 进度条缩略图)。两个功能同一份数据,前端只拉一次。
+/// 返回 `(章节表, 片头区间, 片尾起点)` —— 区间判定放核层,免得前端各写一套匹配规则。
+#[derive(serde::Serialize)]
+struct ChapterInfo {
+    chapters: Vec<linplayer_core::emby::Chapter>,
+    /// 用户开了「自动跳过」且真识别出片头时才非空。关着开关时这里恒为 None ——
+    /// 前端不必再判一次开关(判两次早晚判岔)。
+    intro: Option<(f64, f64)>,
+    /// 片尾 `(开始, 结束)`。结束 == 总时长 = 片尾之后没别的了(别 seek,那等于强行结束播放)。
+    outro: Option<(f64, f64)>,
+    /// 缩略图开关(关着时前端别去加载章节图,白费流量)。
+    thumbs: bool,
+}
+
+#[tauri::command]
+async fn chapter_info(
+    state: State<'_, AppState>,
+    item_id: String,
+    runtime_secs: f64,
+) -> Result<ChapterInfo, String> {
+    let s = session_of(&state)?;
+    let (skip_intro, skip_outro, thumbs) = {
+        let p = &state.config.lock().unwrap().prefs;
+        (p.skip_intro, p.skip_outro, p.preview_thumbs)
+    };
+    // 三个开关都关 = 不用打服务器。省一次请求,也省得白拉几十张章节图。
+    if !skip_intro && !skip_outro && !thumbs {
+        return Ok(ChapterInfo { chapters: Vec::new(), intro: None, outro: None, thumbs: false });
+    }
+    let chapters = linplayer_core::emby::chapters(&state.http, &s, &item_id, 320).await;
+    let intro = skip_intro
+        .then(|| linplayer_core::emby::intro_range(&chapters, runtime_secs))
+        .flatten();
+    let outro = skip_outro
+        .then(|| linplayer_core::emby::outro_range(&chapters, runtime_secs))
+        .flatten();
+    poclog(&format!(
+        "chapters item={item_id} n={} intro={intro:?} outro={outro:?}",
+        chapters.len()
+    ));
+    Ok(ChapterInfo {
+        chapters: if thumbs { chapters } else { Vec::new() },
+        intro,
+        outro,
+        thumbs,
+    })
+}
+
+/// 外部播放器起播。前端在进播放页**之前**调:返回 Ok 就别再进内置播放器了。
+///
+/// 为什么单独一个命令而不是塞进 play():play() 的返回值是「起播秒数」,
+/// 全前端都按这个契约用。硬塞一个「其实没在本机播」的语义进去,调用点迟早判漏。
+#[tauri::command]
+async fn play_external(
+    state: State<'_, AppState>,
+    item_id: String,
+    resume_secs: f64,
+    media_source_id: Option<String>,
+) -> Result<String, String> {
+    let exe = state.config.lock().unwrap().prefs.external_player.clone();
+    if exe.is_empty() {
+        return Err("未设置外部播放器".into());
+    }
+    if !std::path::Path::new(&exe).is_file() {
+        return Err(format!("外部播放器不存在: {exe}"));
+    }
+    let s = session_of(&state)?;
+    let target = emby::resolve_stream(&state.http, &s, &item_id, media_source_id.as_deref()).await?;
+    // mpv 系通吃 --start=;不是 mpv 的播放器会忽略未知参数或直接报错,
+    // 所以进度参数只在文件名像 mpv 时才给 —— 给错参数导致压根打不开,比不续播糟得多。
+    let is_mpv = std::path::Path::new(&exe)
+        .file_stem()
+        .and_then(|x| x.to_str())
+        .is_some_and(|x| x.to_ascii_lowercase().contains("mpv"));
+    let mut cmd = std::process::Command::new(&exe);
+    if is_mpv && resume_secs > 1.0 {
+        cmd.arg(format!("--start={resume_secs}"));
+    }
+    cmd.arg(&target.url);
+    cmd.spawn().map_err(|e| format!("启动外部播放器失败: {e}"))?;
+    poclog(&format!("外部播放器 {exe} <- {}", target.url));
+    // 上报 start:交给外部播放器后我们收不到进度了,但至少让服务器知道这次播放发生过。
+    if let Err(e) = emby::report_start(&state.http, &s, &target, resume_secs).await {
+        poclog(&format!("report_start(外部) ERR: {e}"));
+    }
+    Ok(exe)
 }
 
 #[tauri::command]
@@ -3335,6 +3798,7 @@ fn play_local(state: State<'_, AppState>, id: String, resume_secs: f64) -> Resul
         let guard = state.player.lock().unwrap();
         let p = guard.as_ref().ok_or("播放器未就绪")?;
         let _ = p.take_error_eof();
+        apply_playback_defaults(&state, p, false); // 本地文件同理:无服务端流信息
         p.load_at(&path, resume_secs)?;
         p.set_pause(false);
     }
@@ -3672,14 +4136,35 @@ fn plugin_ui_respond(state: State<'_, AppState>, id: u64, value: Option<serde_js
     plugins_host::ui_respond(&state, id, value.unwrap_or(serde_json::Value::Null));
 }
 
+/// 把**进程级**的临时目录指进包里。
+///
+/// 为什么要动环境变量而不是逐个改自家 `temp_dir()` 调用:后者是白名单,漏一个就又往系统
+/// `%TEMP%` 拉一坨,而且我们管不到第三方库和 ffmpeg/whisper 子进程 —— 它们只认 TEMP/TMP。
+/// 改环境变量是**结构性**的:整个进程树的临时文件一次性全按进 userdata/temp。
+///
+/// ⚠️ 只能在 main 最前面调:`set_var` 在有别的线程跑时是 UB。
+fn redirect_process_dirs() {
+    let t = linplayer_core::paths::temp_dir();
+    for k in ["TEMP", "TMP", "TMPDIR"] {
+        std::env::set_var(k, &t);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    /* ★ 必须在 Tauri 起任何线程/子进程**之前**:把进程的 TEMP 指进包里。
+       set_var 在多线程下是 UB,这里是 main 的第一步,还没有别的线程。
+       (旧数据迁移不在这儿调 —— 它挂在 paths::root() 首次调用上自己会跑,
+        曾经是这里的一句显式调用,排在 AppConfig::load() 后面就会静默丢账号,见 paths::root() 注释。) */
+    redirect_process_dirs();
+
     // 每次启动重注册 linplayer:// —— 绿色包用户挪了文件夹,老路径就是死的。
+    // 它会在 HKCU 留一个键(删文件夹带不走),这是有意保留的:没有它深链就没法自动拉起本程序。
     register_deep_link_scheme();
     let config = AppConfig::load();
     // 先把代理写进全局,再建各 HTTP 客户端(含 Emby 主客户端/下载),使其启动即带代理。
     http::set_proxy(config.proxy.proxy_url());
-    let http = http::client();
+    let http = http::emby_client();
 
     // 源后端注册表(长驻,持各自 token 缓存)。逐 Phase 增量接入更多源。
     let mut source_backends: HashMap<SourceKind, Arc<dyn MediaSourceBackend>> = HashMap::new();
@@ -3704,22 +4189,19 @@ pub fn run() {
         .filter(|a| a.is_file_browse())
         .and_then(|a| a.source.clone().map(|s| (a.source_kind, s)));
 
-    // 下载目录:桌面便携场景放 exe 同级 downloads/。
-    let download_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("downloads")))
-        .unwrap_or_else(|| std::env::temp_dir().join("linplayer-downloads"));
+    // 下载目录:数据根下的 downloads/。旧实现放 exe 同级 —— 装进 Program Files 就写不动。
     let download = tauri::async_runtime::block_on(
-        linplayer_core::download::DownloadManager::new(download_dir),
+        linplayer_core::download::DownloadManager::new(linplayer_core::paths::downloads_dir()),
     );
 
-    // 清旧诊断日志
-    let _ = std::fs::remove_file(std::env::temp_dir().join("linplayer_poc.log"));
+    // 清旧诊断日志(上次运行的,不是别人的)
+    let _ = std::fs::remove_file(app_log_path());
     let _ = std::fs::remove_file(mpv::mpv_log_path());
 
     let builder = imgcache::register(tauri::Builder::default());
     builder
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             http,
             config: Mutex::new(config),
@@ -3747,7 +4229,23 @@ pub fn run() {
             ui_seq: AtomicU64::new(0),
         })
         .setup(|app| {
-            let window = app.get_webview_window("main").expect("main window");
+            /* 主窗口在这儿建而不是在 tauri.conf.json 里声明 —— 唯一的原因是 data_directory:
+               不显式给它,WebView2 就会自己在 %LOCALAPPDATA%\<identifier>\EBWebView 建 profile
+               (实测 126MB,还装着前端 localStorage),而我们是压缩包分发,数据必须全在包里。
+               config 里的 dataDirectory 只吃相对路径且强制拼在 %LOCALAPPDATA% 下,够不到 exe 同级。
+               尺寸/透明/无边框这些原本在 conf 里的属性一并搬来了,改窗口属性请改这里。 */
+            let window = tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::default(),
+            )
+            .title("LinPlayer")
+            .inner_size(1180.0, 720.0)
+            .min_inner_size(900.0, 560.0)
+            .transparent(true)
+            .decorations(false)
+            .data_directory(linplayer_core::paths::webview_dir())
+            .build()?;
             let parent = match hwnd_of(&window) {
                 Ok(p) => {
                     poclog(&format!("hwnd OK parent={p}"));
@@ -3803,17 +4301,11 @@ pub fn run() {
                 }
             });
 
-            /* 插件系统:host 持 AppHandle 落平台能力;基目录用应用配置目录。
-               ⚠️ app_config_dir() 是由 tauri.conf.json 的 **identifier** 推出来的
-               (现为 com.linplayer.poc)。改 identifier = 换目录 = 已装插件**静默失联**
-               (不报错,只是列表空了)。真要改先写迁移。
-               注意服务器/账号配置不在这儿:config.rs 写死 config_dir()/LinPlayer/config.json,
-               与 identifier 无关 —— 别看到这条就以为改 identifier 会丢服务器。 */
-            let base = app
-                .path()
-                .app_config_dir()
-                .unwrap_or_else(|_| std::env::temp_dir().join("LinPlayer"))
-                .join("plugins_root");
+            /* 插件系统:host 持 AppHandle 落平台能力。
+               基目录**不再用 app_config_dir()** —— 那是由 tauri.conf.json 的 identifier 推出来的
+               (com.linplayer.poc),等于在 %APPDATA% 下又开了一个跟 LinPlayer 无关的根,
+               而且改 identifier 就让已装插件静默失联。现在和其它数据一起进 data/plugins。 */
+            let base = linplayer_core::paths::data_dir("plugins");
             let host = plugins_host::make_host(app.handle().clone());
             let mgr = PluginManager::new(base, host);
             let _ = app.state::<AppState>().plugins.set(mgr.clone());
@@ -3844,6 +4336,9 @@ pub fn run() {
             item_media,
             list_favorites,
             set_favorite,
+            is_admin,
+            refresh_item,
+            scan_libraries,
             list_accounts,
             remove_account,
             update_account,
@@ -3883,6 +4378,14 @@ pub fn run() {
             set_secondary_sub_opts,
             add_subtitle,
             screenshot,
+            data_paths,
+            pick_directory,
+            pick_file,
+            get_screenshot_dir,
+            set_screenshot_dir,
+            cache_size,
+            clear_cache,
+            open_data_dir,
             shader_levels,
             set_shader_level,
             mpv_get,
@@ -3949,6 +4452,7 @@ pub fn run() {
             anirss_proxy_image_url,
             anirss_clear_token,
             get_danmaku_config,
+            get_official_danmaku,
             set_danmaku_config,
             danmaku_search,
             danmaku_load,
@@ -3973,6 +4477,10 @@ pub fn run() {
             download_clear_completed,
             get_prefetch_settings,
             set_prefetch_settings,
+            get_playback_prefs,
+            set_playback_prefs,
+            chapter_info,
+            play_external,
             play_local,
             watch_history_list,
             watch_history_scan_restore,
@@ -4038,6 +4546,93 @@ mod api_contract_tests {
     ///
     /// 这条测试把那个集合和本文件真实注册的命令表对一遍 —— TS 那边没有测试环境,
     /// 就让 Rust 来当这份跨语言契约的守门人。
+    /// 播放页 OSD 上的「死开关」清单守卫。
+    ///
+    /// App.tsx 的 `soon(...)` = 点了只弹「核层暂无对应命令,待接」的占位开关。它的问题是
+    /// **不报错、看着像做好了**:2026-07-19 用户发现「自动跳过片头/片尾」在设置页已接好、
+    /// 播放页却还是两个写死 false 的 soon() —— 后端早就有了,前端没跟上
+    /// (同 [[stale-waijie-lies]]:「待接」多半是谎)。
+    ///
+    /// 这条把占位项钉成一份白名单:接好了一个就从名单里删一个,新加占位必须显式登记。
+    /// 名单和代码对不上就红,不用再靠人眼扫 UI。
+    #[test]
+    fn player_panel_placeholder_switches_are_declared() {
+        let app_tsx = include_str!("../../src/App.tsx");
+        // 抠出所有 soon("xxx") 的参数
+        let mut found: Vec<&str> = app_tsx
+            .match_indices("soon(\"")
+            .map(|(i, _)| {
+                let rest = &app_tsx[i + 6..];
+                rest.split('"').next().unwrap_or("")
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+
+        /* 仍未实现、且**有意**留占位的项。删项时连这里一起删。
+           画中画:mpv 渲染在独立顶层窗口里,PiP 要另起一个小窗 + 重新对齐合成,
+           是独立一摊活,不在 2026-07-19 那批播放器默认值里。 */
+        let allowed = ["画中画"];
+
+        for f in &found {
+            assert!(
+                allowed.contains(f),
+                "App.tsx 里「{f}」还是 soon() 占位开关(点了只弹「待接」)。\
+                 要么把它接到真命令上,要么显式加进本测试的 allowed 名单说明为什么还留着。"
+            );
+        }
+        for a in allowed {
+            assert!(
+                found.contains(&a),
+                "allowed 里的「{a}」在 App.tsx 里已经没有 soon() 了 —— 接好了就把它从名单删掉,\
+                 别留着一条永远为真的豁免(那这条测试就白写了)。"
+            );
+        }
+    }
+
+    /* `.page` 的入场动画里**不能有 transform**。
+       带 transform 关键帧的动画会让元素永久成为 fixed 定位的包含块(Chromium 实测:
+       动画播完、fill-mode 改成 backwards 也照样保持)。于是页面里所有 position:fixed 的
+       浮层 —— 右键菜单、.toast —— 都不再相对视口,而是相对 .page,被侧栏宽度 + 标题栏
+       高度整体顶偏。2026-07-19 用户报的「右键条目菜单飘到隔壁条目上」就是这个。
+       肉眼看 .page 毫无异常(transform 终值 none),只能靠这条守着。
+       反向验证:把 page-enter 的关键帧改回带 translateY,此测试立刻红。 */
+    #[test]
+    fn page_entrance_animation_must_not_use_transform() {
+        let css = include_str!("../../src/theme/ui.css");
+        // .page 用的是哪个动画?
+        let page_rule = css
+            .split(".page {")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("ui.css 里找不到 .page 规则");
+        let anim = page_rule
+            .lines()
+            .find(|l| l.trim_start().starts_with("animation:"))
+            .expect(".page 没有 animation —— 若是刻意去掉的,把本测试一并改掉");
+        let name = anim
+            .split(':')
+            .nth(1)
+            .and_then(|v| v.split_whitespace().next())
+            .expect("解析不出 .page 的动画名");
+        assert_ne!(
+            name, "enter",
+            ".page 不能复用 .enter 那个动画:它的关键帧带 translateY,会把 .page 变成 \
+             fixed 的包含块,右键菜单和 toast 会整体偏移到错误位置。"
+        );
+        let frames = css
+            .split(&format!("@keyframes {name}"))
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .unwrap_or_else(|| panic!("找不到 @keyframes {name}"));
+        assert!(
+            !frames.contains("transform"),
+            "@keyframes {name} 里出现了 transform —— 这会让 .page 成为 fixed 包含块,\
+             页面内所有右键菜单/toast 都会偏位。入场只用 opacity。实际内容:{frames}"
+        );
+    }
+
     #[test]
     fn frontend_account_mutation_list_names_only_real_commands() {
         let api_ts = include_str!("../../src/lib/api.ts");
@@ -4080,5 +4675,58 @@ mod api_contract_tests {
                  这个名字永远不会命中,侧栏改完账号不会刷新,且不报错"
             );
         }
+    }
+
+    /* 前端 `invoke<T>("xxx")` 的每一个命令名都必须真的注册过。
+       漏注册**不会编译报错**,只在用户点到那个功能时抛「command not found」——
+       典型如新加了命令、写了 api.ts 绑定,却忘了往 generate_handler! 里加一行。
+       (本次加 get/set_screenshot_dir 就正好踩在这条路上,故把守门人补齐。)
+       反向验证:把 generate_handler! 里任意一行注释掉,此测试立刻红。 */
+    #[test]
+    fn every_frontend_invoke_names_a_registered_command() {
+        let api_ts = include_str!("../../src/lib/api.ts");
+        let me = include_str!("lib.rs");
+
+        let handlers = me
+            .split_once("generate_handler![")
+            .expect("找不到 generate_handler!")
+            .1
+            .split_once("])")
+            .expect("generate_handler! 没有收尾")
+            .0;
+        let registered: Vec<&str> = handlers
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty() && !s.starts_with("//"))
+            .collect();
+
+        // 抠 invoke<...>("cmd") / invoke("cmd") 里的命令名
+        let mut names: Vec<&str> = Vec::new();
+        for (i, _) in api_ts.match_indices("invoke") {
+            let rest = &api_ts[i + "invoke".len()..];
+            // 跳过泛型参数,定位到左括号
+            let Some(lp) = rest.find('(') else { continue };
+            if rest[..lp].contains(';') || rest[..lp].contains('\n') {
+                continue; // 不是调用(如 import/注释里的 invoke 字样)
+            }
+            let after = &rest[lp + 1..];
+            let after = after.trim_start();
+            let Some(q) = after.strip_prefix('"') else { continue };
+            let Some(end) = q.find('"') else { continue };
+            names.push(&q[..end]);
+        }
+        names.sort_unstable();
+        names.dedup();
+        assert!(names.len() > 50, "只抠出 {} 个 invoke,解析多半坏了", names.len());
+
+        let missing: Vec<&&str> = names
+            .iter()
+            .filter(|n| !registered.contains(*n))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "api.ts 调了这些命令,但它们没在 generate_handler! 注册 —— \
+             用户点到就报 command not found:{missing:?}"
+        );
     }
 }

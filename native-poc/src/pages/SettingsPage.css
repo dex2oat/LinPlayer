@@ -166,3 +166,24 @@
   padding-left: 10px;
   color: var(--ink-2);
 }
+
+/* 存储页的路径列:定宽,让每行右端对齐。
+   不定宽的话,带「打开」按钮的行会把路径挤左,不带按钮的行贴到最右 —— 右侧参差不齐。
+   路径本体 flex:1 + min-width:0,才轮得到省略号(否则按内容撑开,永不省略)。 */
+.st-pathrow {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  width: 420px;
+}
+.st-pathrow > code {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  user-select: text;
+  /* 路径共享同一个根,尾部(data/cache/temp)才是区分点 —— rtl 让省略号出现在开头、保住尾巴 */
+  direction: rtl;
+}

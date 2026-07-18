@@ -537,6 +537,9 @@ export type PlayerOpts = {
   sub_delay: number;
   hwdec: string;
   shader_count: number;
+  /** 当前在播这一版是不是杜比视界。「杜比视界软解」开关要照它显示真状态,
+   *  别写死 false —— 核层会自动切软解,写死就成了「已经在软解但开关显示关」。 */
+  dolby_vision: boolean;
 };
 
 /** OSD 一次拉齐当前可调项(别逐个 get)。 */
@@ -719,6 +722,16 @@ export const sourceWatchdog = (pos: number) =>
 export const listFavorites = () => invoke<Item[]>("list_favorites");
 export const setFavorite = (itemId: string, fav: boolean) =>
   invoke<void>("set_favorite", { itemId, fav });
+
+/* ---------- 管理员动作(对标 Emby web 的右键菜单) ----------
+   三项打的真实端点,别被名字糊弄:
+     刷新媒体库 = refreshItem(id, false)  只补缺失,不覆盖已有元数据
+     扫描媒体库 = scanLibraries()         整台服务器找新文件
+     刷新元数据 = refreshItem(id, true)   强制重刮,替换已有元数据 */
+export const isAdmin = () => invoke<boolean>("is_admin");
+export const refreshItem = (itemId: string, full: boolean) =>
+  invoke<void>("refresh_item", { itemId, full });
+export const scanLibraries = () => invoke<void>("scan_libraries");
 
 // ---------- 多账号/服务器 ----------
 export const listAccounts = () => invoke<AccountInfo[]>("list_accounts");
@@ -911,11 +924,53 @@ export const cfProxyDisable = (serverId: string) =>
 export const cfProxyStatus = () => invoke<CfProxyStatus[]>("cf_proxy_status");
 
 // ---------- 多线程加载(预取代理) ----------
-export type PrefetchSettings = { enabled: boolean; threads: number; cache_bytes: number };
+/** servers = 开了该功能的账号 id(= Account.server,和 server_id 参数同一个键);空表 = 全关。
+ *  粒度是服务器不是线路:选中一台服,它的所有线路都走预取。 */
+export type PrefetchSettings = { servers: string[]; threads: number; cache_bytes: number };
 export const getPrefetchSettings = () => invoke<PrefetchSettings>("get_prefetch_settings");
 /** threads 必须 2~4、cache_bytes ≥16MB,越界核层直接报错(不静默夹紧)。 */
 export const setPrefetchSettings = (settings: PrefetchSettings) =>
   invoke<void>("set_prefetch_settings", { settings });
+
+// ---------- 播放器默认行为 ----------
+/** 设置页「播放器」那一组。**核心配置**,不是 localStorage —— 2026-07-19 之前这 6 项
+ *  只存在浏览器本地,改了对播放毫无影响;现在由核层在每次起播时应用。
+ *  hwdec 直接是 mpv 的取值("auto-safe" 硬解 / "no" 软解),别在前端再翻译一层。 */
+export type PlaybackPrefs = {
+  hwdec: "auto-safe" | "no";
+  default_speed: number;
+  /** 片头/片尾是两个独立开关:播放页「更多」面板里就是两行。 */
+  skip_intro: boolean;
+  skip_outro: boolean;
+  preview_thumbs: boolean;
+  dolby_auto_sw: boolean;
+  external_player: string;
+};
+export const getPlaybackPrefs = () => invoke<PlaybackPrefs>("get_playback_prefs");
+/** 越界/路径不存在核层直接报错(不静默夹紧、不静默接受)。 */
+export const setPlaybackPrefs = (settings: PlaybackPrefs) =>
+  invoke<void>("set_playback_prefs", { settings });
+
+/** 章节。跳过片头片尾与进度条缩略图**共用**这一份数据,起播后拉一次即可。
+ *  chapters 为空 = 服务端没有章节(没刮削),两个功能都自动静默不工作 —— 这是正常情况。
+ *  intro/outro 已由核层按开关判好:开关关着时恒为 null,前端不用再判一次。 */
+export type Chapter = { index: number; start_secs: number; name: string; image_url: string | null };
+export type ChapterInfo = {
+  chapters: Chapter[];
+  intro: [number, number] | null;
+  /** 可跳过的片尾 [开始, 落点]。核层只在片尾**后面还有内容**(下集预告)时才给 ——
+   *  非 null 就是可跳的,不用再自己判总时长。片尾是最后一章时这里是 null(跳过去
+   *  等于把这集直接结束掉,那不是「跳过片尾」)。 */
+  outro: [number, number] | null;
+  thumbs: boolean;
+};
+export const chapterInfo = (itemId: string, runtimeSecs: number) =>
+  invoke<ChapterInfo>("chapter_info", { itemId, runtimeSecs });
+
+/** 交给外部播放器,返回它的路径。**调它就别再进内置播放页**。
+ *  未设置外部播放器时会报错 —— 调用前先看 playback prefs 的 external_player。 */
+export const playExternal = (itemId: string, resumeSecs: number, mediaSourceId?: string | null) =>
+  invoke<string>("play_external", { itemId, resumeSecs, mediaSourceId: mediaSourceId ?? null });
 
 // ---------- 跨服续播 / 回传 ----------
 export const getCrossServerResume = () => invoke<boolean>("get_cross_server_resume");
@@ -1003,6 +1058,9 @@ export const setProxy = (config: ProxyConfig) => invoke<void>("set_proxy", { con
    曾经这里写成单对象:读回来的数组塞进对象类型 → api_url 恒 undefined(输入框永远空),
    写出去少了 sources 参数 → invoke 直接被拒、还被 .catch 吞掉 → 「保存」永远是空操作。
    两头都不报错,所以别再改回单对象。 */
+/** 内置弹弹Play 默认源(凭据编译期注入,不在自建源表里)。available=false 表示这个构建没带凭据。 */
+export type OfficialDanmaku = { name: string; available: boolean };
+export const getOfficialDanmaku = () => invoke<OfficialDanmaku>("get_official_danmaku");
 export const getDanmakuConfig = () => invoke<DanmakuServer[]>("get_danmaku_config");
 export const setDanmakuConfig = (sources: DanmakuServer[]) =>
   invoke<void>("set_danmaku_config", { sources });
@@ -1168,3 +1226,61 @@ export function fmtTime(t: number): string {
   const h = Math.floor(t / 3600);
   return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
 }
+
+/* ============================================================
+   数据目录 —— 软件把东西放哪了,让用户看得见
+   ============================================================ */
+
+/** Portable=正常(exe 同级 userdata/) / Overridden=LP_DATA_DIR 指定 /
+ *  SystemFallback=**异常**,exe 目录写不进去,数据没能留在包里,UI 必须告警。 */
+export type RootKind = "Portable" | "Overridden" | "SystemFallback";
+
+export type DataPaths = {
+  root: string;
+  config: string;
+  data: string;
+  cache: string;
+  temp: string;
+  webview: string;
+  logs: string;
+  downloads: string;
+  kind: RootKind;
+  /** exe 所在目录(= 解压出来的那个文件夹)。 */
+  exe_dir: string;
+};
+
+export const dataPaths = () => invoke<DataPaths>("data_paths");
+/** 弹系统原生选择文件夹对话框。返回 null = 用户取消(不是错误,别弹提示)。 */
+export const pickDirectory = (start?: string | null) =>
+  invoke<string | null>("pick_directory", { start: start ?? null });
+/** 弹系统原生选择**文件**对话框。start 传当前文件路径(会定位到它所在目录)。
+ *  返回 null = 用户取消(不是错误,别弹提示)。 */
+export const pickFile = (
+  start?: string | null,
+  filterName?: string,
+  extensions?: string[],
+) =>
+  invoke<string | null>("pick_file", {
+    start: start ?? null,
+    filterName: filterName ?? null,
+    extensions: extensions ?? null,
+  });
+/** dir=null 表示用默认(系统图片文件夹/LinPlayer);effective 是实际会写入的路径。 */
+export type ScreenshotDir = { dir: string | null; effective: string };
+export const getScreenshotDir = () => invoke<ScreenshotDir>("get_screenshot_dir");
+/** 传 null / 空串 = 恢复默认。核层会当场建目录验证可写,不可写直接报错。 */
+export const setScreenshotDir = (dir: string | null) =>
+  invoke<ScreenshotDir>("set_screenshot_dir", { dir });
+
+/** 缓存占用字节数(递归统计,可能耗时几百 ms —— Rust 侧已丢阻塞线程池)。 */
+export const cacheSize = () => invoke<number>("cache_size");
+
+/** 清空缓存。只删 cache/,不碰账号/观看记录/下载/模型。 */
+export const clearCache = () => invoke<void>("clear_cache");
+
+/** 在系统文件管理器里打开数据目录。 */
+export const openDataDir = (sub?: "logs" | "downloads") =>
+  invoke<void>("open_data_dir", { sub });
+
+/* 字节格式化用现成的 fmtSize(本文件上方) —— 别再写一个。
+   它对 0 返回空串,占用为 0 时调用点自己 `|| "0 B"`。 */

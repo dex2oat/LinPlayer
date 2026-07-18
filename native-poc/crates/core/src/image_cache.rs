@@ -38,13 +38,7 @@ const SWEEP_EVERY: u64 = 64 * 1024 * 1024;
 static ADDED_SINCE_SWEEP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn cache_dir() -> PathBuf {
-    let d = dirs::cache_dir()
-        .or_else(dirs::config_dir)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("LinPlayer")
-        .join("images");
-    let _ = std::fs::create_dir_all(&d);
-    d
+    crate::paths::cache_dir("images")
 }
 
 /// 缓存键 → 文件名。键里有 `/` `:` 等字符,Windows 上直接当文件名建不出来;
@@ -137,7 +131,9 @@ pub fn mem_bytes() -> usize {
     with_mem(|m| m.bytes)
 }
 
-fn mem_clear() {
+/// 清空内存层。**清理缓存必须连它一起清** —— 只删磁盘的话,内存里那份还在继续供图,
+/// 用户看着占用变 0 却还是旧封面,那就是在骗他。
+pub fn mem_clear() {
     with_mem(|m| {
         m.map.clear();
         m.bytes = 0;

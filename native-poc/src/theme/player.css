@@ -109,17 +109,36 @@
 .p-scrub .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; }
 .p-scrub .knob { position: absolute; top: 50%; width: 13px; height: 13px; border-radius: 50%; background: #fff; transform: translate(-50%, -50%); box-shadow: 0 0 8px rgba(0, 0, 0, 0.5); }
 .p-scrub input { position: absolute; inset: -6px 0; width: 100%; opacity: 0; cursor: pointer; }
-/* 悬停时间气泡(草稿 pin 18 的 .prev)。缩略图那半需服务端 trickplay/BIF,核层没有该能力
-   → 按草稿「没有就不显示、不硬凑」,这里只做时间读数。
+/* 悬停预览气泡(草稿 pin 18 的 .prev):时间读数 +(有则)服务端章节图缩略图。
+   有图时是竖排(图在上、时间在下),没图时只剩时间读数 —— 布局两种情况都得成立,
+   所以用 flex column 而不是给 .tc 定位。
    pointer-events:none 必须有 —— 否则气泡挡在 input 上,鼠标一到气泡下方 seek 就点不动。 */
 .p-scrub .prev {
   position: absolute; bottom: 16px; transform: translateX(-50%);
   pointer-events: none; white-space: nowrap;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
   padding: 3px 7px; border-radius: 6px;
   background: rgba(12, 15, 20, 0.92); border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
 }
+/* 图按 16:9 给固定宽,高度自适应。宽度和后端请求的 maxWidth=320 是两回事:
+   那是取图的分辨率上限(清晰度),这里是显示尺寸 —— 别为了省事把它们对齐成一个数。 */
+.p-scrub .prev .shot {
+  display: block; width: 160px; height: auto; border-radius: 4px;
+  background: #000; /* 图加载前别露出气泡底色闪一下 */
+}
 .p-scrub .prev .tc { font-family: var(--mono); font-size: 11px; color: #fff; }
+
+/* 「已跳过片头/片尾 · 撤销」。放右下、贴在底栏上方 —— 不压视频中央,也不挡控制条。
+   z-index 理由见本文件 .p-stage 那条:绝对定位的舞台会盖住静态兄弟节点。 */
+.p-skiptip {
+  position: absolute; right: 24px; bottom: 132px; z-index: 3;
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-radius: 8px;
+  background: rgba(12, 15, 20, 0.92); border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  color: #fff; font-size: 13px;
+}
 
 .p-ctrls { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .p-grp { display: flex; align-items: center; gap: 6px; }

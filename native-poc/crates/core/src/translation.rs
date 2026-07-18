@@ -1310,10 +1310,8 @@ impl Default for TranslationSettings {
 }
 
 fn settings_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("LinPlayer")
-        .join("translation.json")
+    // 与 config.json 并排放在根:它俩都是"设置",用户打开数据目录一眼就该看见。
+    crate::paths::root().join("translation.json")
 }
 
 impl TranslationSettings {
@@ -1506,11 +1504,7 @@ pub async fn fetch_first_subtitle(urls: &[String], auth_token: Option<&str>) -> 
 }
 
 fn subtitle_cache_dir() -> PathBuf {
-    dirs::cache_dir()
-        .or_else(dirs::config_dir)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("LinPlayer")
-        .join("translated_subtitles")
+    crate::paths::cache_dir("translated-subtitles")
 }
 
 fn cache_key(source: &str, engine_id: &str, from: &str, to: &str, layout: BilingualLayout) -> String {
@@ -1786,13 +1780,10 @@ pub mod whisper {
     /// 下载进度:(已收字节, 总字节, 0..1)。总字节未知时为 0。
     pub type DownloadProgress = Arc<dyn Fn(u64, u64, f64) + Send + Sync>;
 
-    /// 模型目录(持久,不随缓存清理被删;对齐 Dart ApplicationSupport)。
+    /// 模型目录。**必须在 data/ 而不是 cache/** —— 一个模型几百 MB 到几 GB,
+    /// 被"清理缓存"顺手删掉等于让用户重下一晚上。
     pub fn models_dir() -> PathBuf {
-        dirs::data_dir()
-            .or_else(dirs::config_dir)
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("LinPlayer")
-            .join("whisper_models")
+        crate::paths::data_dir("whisper-models")
     }
 
     pub fn model_file(model: WhisperModel) -> PathBuf {
@@ -1891,12 +1882,9 @@ pub mod whisper {
         }
     }
 
+    /// 下载来的 whisper/ffmpeg 可执行文件。同 models_dir:重下代价高,放 data/ 不放 cache/。
     fn bin_dir() -> PathBuf {
-        dirs::data_dir()
-            .or_else(dirs::config_dir)
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("LinPlayer")
-            .join("bin")
+        crate::paths::data_dir("bin")
     }
 
     fn exe_dir() -> PathBuf {
@@ -2144,13 +2132,7 @@ pub mod whisper {
     // ---------- 音频抽取 / 转写 ----------
 
     fn work_dir(sub: &str) -> Result<PathBuf, String> {
-        let d = dirs::cache_dir()
-            .or_else(dirs::config_dir)
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("LinPlayer")
-            .join(sub);
-        std::fs::create_dir_all(&d).map_err(|e| format!("建工作目录失败: {e}"))?;
-        Ok(d)
+        Ok(crate::paths::cache_dir(sub))
     }
 
     fn fmt_ts(ms: u64) -> String {

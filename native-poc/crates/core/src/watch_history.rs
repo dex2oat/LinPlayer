@@ -607,10 +607,8 @@ fn titles_close_enough(left: &str, right: &str) -> bool {
 // ---------- 存盘 ----------
 
 fn default_history_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("LinPlayer")
-        .join("watch_history.json")
+    // data/ 不是 cache/:观看记录删了就真没了,不能被"清理缓存"顺手带走。
+    crate::paths::data_root().join("watch_history.json")
 }
 
 fn now_ms() -> i64 {

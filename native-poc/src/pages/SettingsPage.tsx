@@ -17,6 +17,8 @@ import {
   getProxy,
   setProxy,
   getDanmakuConfig,
+  getOfficialDanmaku,
+  type OfficialDanmaku,
   setDanmakuConfig,
   traktAccount,
   traktDeviceCode,
@@ -28,6 +30,20 @@ import {
   bangumiLogout,
   configExportQr,
   configImportQr,
+  type DataPaths,
+  type RootKind,
+  dataPaths,
+  getScreenshotDir,
+  pickDirectory,
+  pickFile,
+  type PlaybackPrefs,
+  getPlaybackPrefs,
+  setPlaybackPrefs,
+  setScreenshotDir,
+  type ScreenshotDir,
+  cacheSize,
+  clearCache,
+  openDataDir,
   fmtSize,
   getTranslationSettings,
   setTranslationSettings,
@@ -250,51 +266,26 @@ function AppearancePane({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme
 
 /* ============================================================
    通用 · 播放器
-   audio_lang / sub_lang / sub_enabled 真落 prefs(set_prefs);
-   记忆播放进度 · 跨服续播 真落 prefs.cross_server_resume
-     (get/set_cross_server_resume —— 核层默认**关**,别在前端硬编码 true 假装开着)。
+   ★ 这里**全部**真落核心配置,没有一项是本机暂存。
+   audio_lang / sub_lang / sub_enabled → prefs(set_prefs)
+   记忆播放进度 · 跨服续播        → prefs.cross_server_resume
+   解码/倍速/跳片头/缩略图/杜比/外部播放器 → prefs(set_playback_prefs),
+     由核层在**每次起播时**应用(src-tauri 的 apply_playback_defaults)。
 
-   其余仍是本机暂存,且是**已核实**的真缺口 —— core config.rs 的 Prefs 只有
-   audio_lang、sub_lang、sub_enabled、cross_server_resume、cross_server_writeback 三项、
-   prefetch 三项;
-   下面这几项核层压根没有落点(默认解码方式:set_hwdec 只作用于运行中的 mpv 实例,
-   不持久化;跳过片头片尾/缩略图/默认倍速/杜比软解/外部 MPV:无字段无命令)。
-   —— 有落点的别跟着一起被抹黑,没落点的别假装已接。
+   2026-07-19 之前这 6 项只写 localStorage("lp.playback.local"),Prefs 里根本没有字段,
+   页面上还挂着一段「核心尚无落点」的说明 —— 说明是诚实的,但功能是死的。
+   加新项时:落 Prefs → 在 apply_playback_defaults 里消费 → 才算做完。
+   只加字段不加消费点,就是又造一个「存得下、没人读」的假开关。
    ============================================================ */
-const LP_KEY = "lp.playback.local";
-type LocalPlayback = {
-  decode: "hw" | "sw";
-  skip: boolean;
-  thumbs: boolean;
-  speed: number;
-  dolby: boolean;
-  external: string;
-};
-const LP_DEFAULT: LocalPlayback = {
-  decode: "hw",
-  skip: false,
-  thumbs: true,
-  speed: 1,
-  dolby: true,
-  external: "",
-};
-function loadLocal(): LocalPlayback {
-  try {
-    return { ...LP_DEFAULT, ...JSON.parse(localStorage.getItem(LP_KEY) || "{}") };
-  } catch {
-    return LP_DEFAULT;
-  }
-}
-
 function PlaybackPane() {
   const f = useFlash();
   const [audio, setAudio] = useState("");
   const [sub, setSub] = useState("");
   const [subOn, setSubOn] = useState(true);
   const [loaded, setLoaded] = useState(false);
-  const [lp, setLp] = useState<LocalPlayback>(loadLocal);
-  /* null = 还没读回来。核层默认关,所以初值不能写 true —— 写死 true 会在读回前
-     把「关」画成「开」,用户以为开着其实没开。 */
+  /* null = 还没读回来。核层有自己的默认值,前端别硬编码一份 ——
+     两份默认值早晚对不上,用户看到的就是「显示的和实际生效的不是一回事」。 */
+  const [lp, setLp] = useState<PlaybackPrefs | null>(null);
   const [resume, setResume] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -311,10 +302,23 @@ function PlaybackPane() {
     getCrossServerResume()
       .then((v) => alive && setResume(v))
       .catch(f.err);
+    getPlaybackPrefs()
+      .then((v) => alive && setLp(v))
+      .catch(f.err);
     return () => {
       alive = false;
     };
   }, []);
+
+  /* 原生文件选择器。取消(返回 null)不是错误,别弹提示。 */
+  async function pickExternal() {
+    try {
+      const p = await pickFile(lp?.external_player, "可执行文件", ["exe"]);
+      if (p) await patchLp({ external_player: p });
+    } catch (e) {
+      f.err(e);
+    }
+  }
 
   /* 跨服续播:点即调命令。失败要回滚 UI —— 否则开关停在「开」而磁盘是「关」。 */
   async function toggleResume(v: boolean) {
@@ -329,13 +333,20 @@ function PlaybackPane() {
     }
   }
 
-  // 本机偏好:改完即存(localStorage),播放核接入后消费。
-  function patchLocal(p: Partial<LocalPlayback>) {
-    setLp((prev) => {
-      const next = { ...prev, ...p };
-      localStorage.setItem(LP_KEY, JSON.stringify(next));
-      return next;
-    });
+  /* 改完即落核心配置。失败要**回滚 UI** —— 否则开关停在新位置而磁盘是旧值,
+     用户下次起播发现没生效,回来一看开关明明开着(同 toggleResume 的教训)。 */
+  async function patchLp(p: Partial<PlaybackPrefs>) {
+    if (!lp) return;
+    const prev = lp;
+    const next = { ...lp, ...p };
+    setLp(next);
+    try {
+      await setPlaybackPrefs(next);
+      f.ok("已保存");
+    } catch (e) {
+      setLp(prev);
+      f.err(e);
+    }
   }
 
   // 真 prefs:改完即调命令(输入 blur / 开关点按)。
@@ -358,51 +369,68 @@ function PlaybackPane() {
       <p className="hint">解码、进度、字幕默认行为。</p>
 
       <Row t="默认解码方式" d="硬解省电、软解兼容">
-        <Seg<"hw" | "sw">
-          value={lp.decode}
+        <Seg<"auto-safe" | "no">
+          value={lp?.hwdec ?? "auto-safe"}
           opts={[
-            { id: "hw", label: "硬解" },
-            { id: "sw", label: "软解" },
+            { id: "auto-safe", label: "硬解" },
+            { id: "no", label: "软解" },
           ]}
-          onChange={(decode) => patchLocal({ decode })}
+          onChange={(hwdec) => patchLp({ hwdec })}
         />
       </Row>
       <Row t="记忆播放进度 · 跨服续播" d="同一部片在多台服务器上取最大进度续播">
         <Sw on={resume ?? false} disabled={resume === null} onChange={toggleResume} />
       </Row>
-      <Row t="自动跳过片头 / 片尾">
-        <Sw on={lp.skip} onChange={(skip) => patchLocal({ skip })} />
+      {/* 两行,和播放页「更多」面板同粒度 —— 那边就是两个开关。 */}
+      <Row t="自动跳过片头" d="需服务端有章节,认不出就不跳">
+        <Sw on={lp?.skip_intro ?? false} disabled={!lp} onChange={(v) => patchLp({ skip_intro: v })} />
       </Row>
-      <Row t="进度条缩略图预览" d="需服务端提供 trickplay,缺失则不显示">
-        <Sw on={lp.thumbs} onChange={(thumbs) => patchLocal({ thumbs })} />
+      <Row t="自动跳过片尾" d="片尾后面还有内容(如预告)时才跳">
+        <Sw on={lp?.skip_outro ?? false} disabled={!lp} onChange={(v) => patchLp({ skip_outro: v })} />
       </Row>
-      <Row t="默认倍速">
-        <Stepper
-          value={lp.speed}
-          min={0.25}
-          max={3}
-          step={0.25}
-          fmt={(v) => `${v.toFixed(2)}×`}
-          onChange={(speed) => patchLocal({ speed })}
+      <Row t="进度条缩略图预览" d="用服务端章节图,没有则只显示时间">
+        <Sw
+          on={lp?.preview_thumbs ?? true}
+          disabled={!lp}
+          onChange={(v) => patchLp({ preview_thumbs: v })}
         />
       </Row>
-      <Row t="杜比视界自动软解">
-        <Sw on={lp.dolby} onChange={(dolby) => patchLocal({ dolby })} />
+      <Row t="默认倍速" d="每次起播套用,播放中临时调整不改这里">
+        <Stepper
+          value={lp?.default_speed ?? 1}
+          min={0.25}
+          max={4}
+          step={0.25}
+          fmt={(v) => `${v.toFixed(2)}×`}
+          onChange={(default_speed) => patchLp({ default_speed })}
+        />
+      </Row>
+      <Row t="杜比视界自动软解" d="DV 硬解常有色偏,软解画面才对">
+        <Sw
+          on={lp?.dolby_auto_sw ?? true}
+          disabled={!lp}
+          onChange={(v) => patchLp({ dolby_auto_sw: v })}
+        />
       </Row>
 
       <div className="fld" style={{ marginTop: 14 }}>
-        <label>外部播放器(外部 MPV 路径)</label>
-        <input
-          className="field"
-          placeholder="未设置 —— 留空用内置播放器"
-          value={lp.external}
-          onChange={(e) => patchLocal({ external: e.target.value })}
-        />
+        <label>外部播放器</label>
+        <div className="st-pathrow">
+          <code className="muted" title={lp?.external_player || undefined}>
+            {lp?.external_player || "未设置 —— 用内置播放器"}
+          </code>
+          <button className="btn" disabled={!lp} onClick={pickExternal}>
+            选择…
+          </button>
+          {lp?.external_player ? (
+            <button className="btn" onClick={() => patchLp({ external_player: "" })}>
+              清除
+            </button>
+          ) : null}
+        </div>
       </div>
       <p className="hint" style={{ margin: "2px 0 18px" }}>
-        其中<b>默认解码方式 / 自动跳过片头片尾 / 进度条缩略图 / 默认倍速 / 杜比视界自动软解 /
-        外部播放器</b>这 6 项核心尚无落点,仅存本机、<b>尚未影响实际播放</b>;
-        「记忆播放进度 · 跨服续播」与下方轨道语言偏好已真落核心配置,改完即生效。
+        设了外部播放器后,点播放会直接交给它打开,不再进内置播放器。
       </p>
 
       <h4 style={{ marginTop: 6 }}>轨道语言偏好</h4>
@@ -446,17 +474,12 @@ function PlaybackPane() {
 /* ============================================================
    通用 · 弹幕
    ============================================================ */
-const DANMAKU_AUTH = [
-  { id: "none", label: "无鉴权" },
-  { id: "pathToken", label: "路径 Token" },
-  { id: "headerToken", label: "请求头 Token" },
-  { id: "queryToken", label: "查询参数 Token" },
-];
 /* 核层存的一直是**一张源表**(Vec<DanmakuServer>),并行拉取后按 priority 挑主源。
    之前这里只编辑单个源 —— 读回来的数组塞进对象、写出去少个参数,两头都静默失败。 */
 function DanmakuPane() {
   const f = useFlash();
   const [list, setList] = useState<DanmakuServer[] | null>(null);
+  const [official, setOfficial] = useState<OfficialDanmaku | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -464,6 +487,10 @@ function DanmakuPane() {
     getDanmakuConfig()
       .then((l) => alive && setList(l))
       .catch(f.err);
+    // 默认源单独取:它不在源表里(凭据编译期注入)。失败不打断自建源的编辑。
+    getOfficialDanmaku()
+      .then((o) => alive && setOfficial(o))
+      .catch(() => {});
     return () => {
       alive = false;
     };
@@ -501,12 +528,22 @@ function DanmakuPane() {
   return (
     <div className="mdpane">
       <h4>弹幕</h4>
-      <p className="hint">
-        弹弹play 兼容的弹幕源,可配多个:并行拉取,按优先级(越小越先)挑主源;
-        单源失败不影响其它源。
-      </p>
+      <p className="hint">可配多个源,按优先级挑主源。</p>
 
-      {list.length === 0 && <p className="hint">还没有弹幕源,点下方「添加源」。</p>}
+      {/* 默认源必须显示出来。它的凭据是编译期注入的、不在源表里,所以设置页原来完全看不见它 ——
+          用户会以为「一个源都没有」,而它其实一直在工作。只读展示,没有可编辑项。 */}
+      {official && (
+        <div className="st-card">
+          <div className="setrow">
+            <span className="l">
+              <span className="t">{official.name}</span>
+              <span className="d">{official.available ? "内置默认源" : "此构建未内置凭据,不可用"}</span>
+            </span>
+          </div>
+        </div>
+      )}
+
+      {list.length === 0 && <p className="hint">还没有自建源,点下方「添加源」。</p>}
 
       {list.map((s, i) => (
         <div className="st-card" key={s.id || i}>
@@ -542,33 +579,10 @@ function DanmakuPane() {
               onBlur={() => commit(list)}
             />
           </div>
-          <div className="fld">
-            <label>鉴权方式</label>
-            <select
-              className="field"
-              style={{ cursor: "pointer" }}
-              value={s.auth_type || "none"}
-              onChange={(e) => commit(list.map((x, j) => (j === i ? { ...x, auth_type: e.target.value } : x)))}
-            >
-              {DANMAKU_AUTH.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          {s.auth_type !== "none" && (
-            <div className="fld">
-              <label>Token</label>
-              <input
-                className="field"
-                placeholder="鉴权令牌"
-                value={s.token}
-                onChange={(e) => patch(i, { token: e.target.value })}
-                onBlur={() => commit(list)}
-              />
-            </div>
-          )}
+          {/* 鉴权方式/Token 两个输入框已删。用户 2026-07-19:「用户也不知道啥是鉴权方式」。
+              主流自建端(danmu_api / misaka_danmu_server)都把 token 放在**路径**里,
+              也就是本来就在上面那条链接里 —— 核层 derive_auth 自动认,不用问用户。
+              老配置里显式选过鉴权方式的源仍按原值走(danmaku_cfg 里做了兼容),不会失效。 */}
           <div className="setrow">
             <span className="l">
               <span className="t">优先级</span>
@@ -595,7 +609,10 @@ function DanmakuPane() {
           onClick={() =>
             commit([
               ...list,
-              { id: "", name: "", api_url: "", auth_type: "none", token: "", enabled: true, priority: list.length },
+              /* auth_type 留空 = 交给核层按地址推导(derive_auth)。
+                 ★ 别写 "none":那是个**显式值**,核层会当成「用户选过了」而跳过推导,
+                   于是带 ?token= 的地址永远修不好 —— 又一个「加了逻辑但永不触发」。 */
+              { id: "", name: "", api_url: "", auth_type: "", token: "", enabled: true, priority: list.length },
             ])
           }
         >
@@ -1294,11 +1311,22 @@ const MB = 1024 * 1024;
 function PrefetchPane() {
   const f = useFlash();
   const [s, setS] = useState<PrefetchSettings | null>(null);
+  // 开关按服务器给,所以得把账号表也拉来。只列 Emby 账号:预取只对 Emby 直传流生效,
+  // 给网盘/浏览型源摆个永远不起作用的开关等于骗人。
+  const [servers, setServers] = useState<AccountInfo[]>([]);
+  // CF 优选状态一起拉:两者叠着用才是完全体(优选解决「连得快」,多线程解决「喂得满」),
+  // 所以要让用户在这一页就看见哪台服已经开了优选,而不是靠他自己去另一页对。
+  const [cfOn, setCfOn] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let alive = true;
-    getPrefetchSettings()
-      .then((v) => alive && setS(v))
+    Promise.all([getPrefetchSettings(), listAccounts(), cfProxyStatus()])
+      .then(([v, accs, cf]) => {
+        if (!alive) return;
+        setS(v);
+        setServers(accs.filter((a) => !a.is_file_browse));
+        setCfOn(new Set(cf.map((c) => c.server_id)));
+      })
       .catch(f.err);
     return () => {
       alive = false;
@@ -1332,21 +1360,35 @@ function PrefetchPane() {
 
   return (
     <div className="mdpane">
+      {/* 说明一句话讲完。用户 2026-07-19:「那么多描述 看的眼睛都花了」。 */}
       <h4>多线程加载</h4>
-      <p className="hint">
-        本地预取代理:播放器走 127.0.0.1,由代理并发 Range 超前拉流再喂给它,
-        缓解边下边播的卡顿。只对 Emby 直传流生效(直链 / 转码流会跳过)。
-      </p>
-      {/* 默认关,且必须当面告诉用户为什么 —— 悄悄关掉等于把一个已知缺陷藏起来。 */}
-      <p className="hint st-warn">
-        ⚠ 默认关闭:实测开启后部分影片会「有流量但黑屏无声、一直缓冲」(尤其带大字体
-        附件、索引在文件末尾的 MKV)。原因是每次跳转都会丢弃已下好的缓存并反复重下。
-        修好之前请保持关闭;开了放不出来,先把它关回去。
-      </p>
-      <Row t="启用多线程加载" d="已知缺陷,建议保持关闭">
-        <Sw on={s.enabled} onChange={(enabled) => commit({ enabled })} />
-      </Row>
-      <Row t="并发线程数" d="核心只接受 2~4;超出会被拒绝并提示">
+      <p className="hint">多线程顺序拉流,缓解卡顿。按服务器开,默认全关。</p>
+      {/* ★ 每行只显示服务器名称。**不显示线路、更不显示地址** —— 除了「线路管理」窗口,
+          全端任何地方都不直接暴露线路地址(同 App.tsx / DetailPage 线路面板的口径)。
+          开关本来就按服务器给:服主允许了,这台服的所有线路一起生效,没什么可选的。 */}
+      {servers.length === 0 ? (
+        <p className="hint">还没有 Emby 服务器;先添加账号再回来开。</p>
+      ) : (
+        servers.map((a) => (
+          <Row
+            key={a.server}
+            t={a.name || hostOf(a.server)}
+            d={cfOn.has(a.server) ? "CF 优选已开" : ""}
+          >
+            <Sw
+              on={s.servers.includes(a.server)}
+              onChange={(on) =>
+                commit({
+                  servers: on
+                    ? [...s.servers, a.server]
+                    : s.servers.filter((x) => x !== a.server),
+                })
+              }
+            />
+          </Row>
+        ))
+      )}
+      <Row t="并发线程数" d="对每条播放连接生效;核心只接受 2~4,超出会被拒绝并提示">
         <Stepper
           value={s.threads}
           min={1}
@@ -1356,12 +1398,14 @@ function PrefetchPane() {
           onChange={(threads) => commit({ threads })}
         />
       </Row>
-      <Row t="读前缓冲上限" d="核心要求不低于 16MB">
+      <Row t="读前缓冲上限" d="每条连接的内存缓冲;最多 32MB(大缓冲由播放器自己扛),不低于 16MB">
+        {/* 上限 32MB:超了核层会拒。别把 max 放大成 512 —— 那样用户设 512 也只生效 32,
+            属于「设了没反应」的静默欺骗(本页的规矩是越界让核层报错,不偷偷夹紧)。 */}
         <Stepper
           value={s.cache_bytes / MB}
-          min={8}
-          max={512}
-          step={16}
+          min={16}
+          max={32}
+          step={8}
           fmt={(v) => `${v} MB`}
           onChange={(v) => commit({ cache_bytes: v * MB })}
         />
@@ -1957,6 +2001,179 @@ function PluginsPane() {
 /* ============================================================
    其它 · 更新 · 备份 · 关于
    ============================================================ */
+/* ============================================================
+   其它 · 存储与数据目录
+   ------------------------------------------------------------
+   这一页存在的唯一理由:用户 2026-07-17「我不知道你放哪里了 我不希望软件乱拉」。
+   重构前数据散在 6 个根(Roaming/Local/identifier 目录/%TEMP% 散文件/exe 同级),
+   而 UI 里一个字都没提过 —— 路径不摆出来,再干净的目录结构用户也不知道。
+   ============================================================ */
+function StoragePane() {
+  const f = useFlash();
+  const [p, setP] = useState<DataPaths | null>(null);
+  const [size, setSize] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [shot, setShot] = useState<ScreenshotDir | null>(null);
+  const [shotEdit, setShotEdit] = useState("");
+
+  /** 存截图目录(null=恢复默认)。核层会建目录验证可写,失败原样弹出来不吞。 */
+  function saveShotDir(dir: string | null) {
+    setScreenshotDir(dir)
+      .then((v) => {
+        setShot(v);
+        setShotEdit(v.dir ?? "");
+        f.ok(v.dir ? "已保存" : "已恢复默认");
+      })
+      .catch(f.err);
+  }
+
+  async function refresh() {
+    try {
+      setP(await dataPaths());
+      const sd = await getScreenshotDir();
+      setShot(sd);
+      setShotEdit(sd.dir ?? "");
+      setSize(null); // 先清空:统计要遍历目录,别让旧数字冒充新结果
+      setSize(await cacheSize());
+    } catch (e) {
+      f.err(e);
+    }
+  }
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  async function doClear() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await clearCache();
+      f.ok("缓存已清空");
+      setSize(await cacheSize());
+    } catch (e) {
+      f.err(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /* 单行显示,过长省略号收尾,hover 看全文。样式在 .st-pathrow > code(SettingsPage.css)。
+     原来是 wordBreak:"break-all" 让它换行 —— 一行路径折成三行,整页糊成一团。 */
+  const Path = ({ v }: { v: string }) => (
+    <code className="muted" title={v}>
+      {v}
+    </code>
+  );
+
+  const KIND_NOTE: Record<RootKind, string> = {
+    Portable: "删掉这个文件夹即卸载干净",
+    Overridden: "由 LP_DATA_DIR 指定",
+    SystemFallback: "程序目录不可写,数据落在系统目录",
+  };
+
+  return (
+    <div className="mdpane">
+      <h4>存储与数据目录</h4>
+      <p className="hint">数据全在程序目录的 userdata/ 里。</p>
+      {f.node}
+
+      {p?.kind === "SystemFallback" && (
+        <p className="hint" style={{ color: "var(--warn, #e0a030)" }}>
+          ⚠️ 程序目录写不进去,数据放在了系统目录 —— 删程序文件夹清不干净。把整个文件夹移到 D 盘等可写位置再启动即可。
+        </p>
+      )}
+
+      <Row t="数据根目录" d={p ? KIND_NOTE[p.kind] : ""}>
+        <span className="st-pathrow">
+          {p && <Path v={p.root} />}
+          <button className="btn" onClick={() => p && copy(p.root)} disabled={!p}>
+            复制
+          </button>
+          <button className="btn" onClick={() => openDataDir().catch(f.err)} disabled={!p}>
+            打开
+          </button>
+        </span>
+      </Row>
+      <Row t="程序目录" d="">
+        <span className="st-pathrow">{p && <Path v={p.exe_dir} />}</span>
+      </Row>
+
+      <Row t="设置 · 账号" d="账号与偏好">
+        <span className="st-pathrow">{p && <Path v={p.config} />}</span>
+      </Row>
+      <Row t="用户数据" d="观看记录 / 插件 / 模型">
+        <span className="st-pathrow">{p && <Path v={p.data} />}</span>
+      </Row>
+      <Row t="缓存" d="可随时清,会自动重建">
+        <span className="st-pathrow">{p && <Path v={p.cache} />}</span>
+      </Row>
+      <Row t="临时文件" d="">
+        <span className="st-pathrow">{p && <Path v={p.temp} />}</span>
+      </Row>
+      <Row t="浏览器内核数据" d="清缓存不会动它">
+        <span className="st-pathrow">{p && <Path v={p.webview} />}</span>
+      </Row>
+      <Row t="日志" d="">
+        <span className="st-pathrow">
+          {p && <Path v={p.logs} />}
+          <button className="btn" onClick={() => openDataDir("logs").catch(f.err)} disabled={!p}>
+            打开
+          </button>
+        </span>
+      </Row>
+      <Row t="下载" d="默认下载目录">
+        <span className="st-pathrow">
+          {p && <Path v={p.downloads} />}
+          <button className="btn" onClick={() => openDataDir("downloads").catch(f.err)} disabled={!p}>
+            打开
+          </button>
+        </span>
+      </Row>
+      {/* 截图**故意**默认在包外:它是用户要拿去用的产物,塞进 userdata/ 反而难找。 */}
+      <Row t="截图保存位置" d={shot?.dir ? "自定义" : "默认:系统图片文件夹"}>
+        <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {/* 路径框仍可手填(粘贴/网络路径比翻对话框快),但主路径是右边的原生选择器。 */}
+          <input
+            className="input"
+            style={{ minWidth: 220 }}
+            value={shotEdit}
+            placeholder={shot?.effective ?? ""}
+            onChange={(e) => setShotEdit(e.target.value)}
+          />
+          <button
+            className="btn"
+            onClick={() => {
+              // 从当前生效目录起步,省得每次从盘符翻起。取消返回 null —— 什么都不做,别报错。
+              pickDirectory(shotEdit.trim() || shot?.effective)
+                .then((picked) => picked && saveShotDir(picked))
+                .catch(f.err);
+            }}
+          >
+            选择…
+          </button>
+          <button className="btn" onClick={() => saveShotDir(shotEdit.trim() || null)}>
+            保存
+          </button>
+          {shot?.dir && (
+            <button className="btn" onClick={() => saveShotDir(null)}>
+              恢复默认
+            </button>
+          )}
+        </span>
+      </Row>
+
+      <Row t="缓存占用" d="缓存 + 临时文件。账号 / 观看记录 / 下载 / 模型 / 界面设置都不受影响">
+        <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <span className="muted">{size === null ? "统计中…" : fmtSize(size) || "0 B"}</span>
+          <button className="btn" onClick={doClear} disabled={busy || size === null}>
+            {busy ? "清理中…" : "清空缓存"}
+          </button>
+        </span>
+      </Row>
+    </div>
+  );
+}
+
 function AboutPane() {
   const f = useFlash();
   const [payload, setPayload] = useState("");
@@ -2118,6 +2335,7 @@ const SECTIONS: { sec: string; items: ItemDef[] }[] = [
     sec: "其它",
     items: [
       { id: "plugins", label: "插件", icon: <IconSettings size={16} /> },
+      { id: "storage", label: "存储与数据目录", icon: <IconFile size={16} /> },
       { id: "about", label: "更新 · 备份 · 关于", icon: <IconInfo size={16} /> },
     ],
   },
@@ -2200,6 +2418,7 @@ export default function SettingsPage({ theme, setTheme }: Props) {
             {active === "sync" && <SyncPane />}
             {active === "account" && <AccountPane />}
             {active === "plugins" && <PluginsPane />}
+            {active === "storage" && <StoragePane />}
             {active === "about" && <AboutPane />}
           </div>
         </div>

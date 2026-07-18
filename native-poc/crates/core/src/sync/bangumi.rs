@@ -35,10 +35,7 @@ static BROADCAST_IDX: tokio::sync::OnceCell<std::collections::HashMap<String, St
     tokio::sync::OnceCell::const_new();
 
 fn broadcast_cache_path() -> std::path::PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("LinPlayer")
-        .join("bangumi_broadcast.json")
+    crate::paths::cache_root().join("bangumi_broadcast.json")
 }
 
 /// `"R/2026-07-06T14:30:00.000Z/P7D"` → `"2026-07-06T14:30:00.000Z"`(重复间隔的起始时刻)。

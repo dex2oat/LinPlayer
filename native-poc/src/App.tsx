@@ -34,6 +34,12 @@ import {
   play,
   playLocal,
   playerOpts,
+  type ChapterInfo,
+  chapterInfo,
+  type PlaybackPrefs,
+  getPlaybackPrefs,
+  setPlaybackPrefs,
+  playExternal,
   posterUrl,
   probeLine,
   reportProgress,
@@ -272,6 +278,27 @@ export default function App() {
   // 进度条悬停时间气泡(草稿 pin 18);x 是条内像素偏移。
   const [hoverT, setHoverT] = useState<{ x: number; t: number } | null>(null);
 
+  /* 章节:进度条缩略图 + 自动跳过片头片尾共用这一份。null = 还没拉到 / 没有章节。
+     ★ 同时存一份 ref:500ms 状态轮询的回调只在 [playing] 变化时重建,
+       回调里读 state 拿到的永远是建时的旧值(这里就是 null)→ 自动跳过一次都不会触发。
+       ref 才读得到当前值。改这份数据必须走 putChapters,别单独 setChapters。 */
+  const [chapters, setChapters] = useState<ChapterInfo | null>(null);
+  const chaptersRef = useRef<ChapterInfo | null>(null);
+  function putChapters(c: ChapterInfo | null) {
+    chaptersRef.current = c;
+    setChapters(c);
+  }
+  /* 每片只跳一次。放 ref 不放 state:轮询回调里读的必须是**当前值**,
+     state 闭包会读到旧值 → 跳完又跳,用户想倒回去看片头根本退不回来。 */
+  const skipped = useRef({ intro: false, outro: false });
+  // 刚跳过时给个可撤销的提示条(自动跳错了得让人跳回去)。
+  const [skipTip, setSkipTip] = useState<{ from: number; label: string } | null>(null);
+  const skipTipTimer = useRef<number | null>(null);
+  /* 播放器默认行为(设置页那一组)。播放页「更多」里的跳片头/片尾两行绑的就是它 ——
+     它们和设置页是**同一个偏好**,不是本次播放的临时调整,所以在这儿改也要落盘。
+     (倍速/解码方式相反:那两个是本次临时,面板改了不写回默认值。) */
+  const [pbPrefs, setPbPrefs] = useState<PlaybackPrefs | null>(null);
+
   /* 长按 +/− 连调的句柄。必须放 ref —— 放 state 一重渲染就换了新值,松手时 clear 的是旧句柄,
      结果按一次停不下来,一路调到底。 */
   const repeat = useRef<number | null>(null);
@@ -356,8 +383,86 @@ export default function App() {
     }
   }
 
+  /* 自动跳过片头/片尾。挂在已有的 500ms 状态轮询上,不另开定时器。
+     ★ 每片各跳一次(skipped ref):不设这个闸,用户手动倒回去看片头会被立刻再踹走一次,
+       等于「退不回去」。
+     ★ 片尾只在**后面还有东西**(下集预告)时才跳。片尾是最后一个章节时 seek 过去
+       等于强行结束这一集 —— 用户要的是跳过片尾,不是提前结束。 */
+  function autoSkip(t: number) {
+    const c = chaptersRef.current;
+    if (!c) return;
+    if (c.intro && !skipped.current.intro) {
+      const [s, e] = c.intro;
+      if (t >= s && t < e - 1) {
+        skipped.current.intro = true;
+        seekApi(e).catch(() => {});
+        showSkipTip(t, "已跳过片头");
+        return; // 一拍只跳一次
+      }
+    }
+    if (c.outro && !skipped.current.outro) {
+      /* 核层只在「片尾后面还有内容」时才给 outro —— 收到就是可跳的,这里不用再判总时长
+         (轮询闭包里的 status 会过期,拿旧值判会误跳)。 */
+      const [s, e] = c.outro;
+      if (t >= s && t < e - 1) {
+        skipped.current.outro = true;
+        seekApi(e).catch(() => {});
+        showSkipTip(t, "已跳过片尾");
+      }
+    }
+  }
+
+  /* 悬停时刻对应的章节图。取**不晚于**该时间点的最后一张 —— 章节图是每章一张,
+     离散的;取最近的一张会在章节边界前就换成下一章的画面,和实际内容对不上。 */
+  function thumbAt(t: number): string | null {
+    const list = chapters?.chapters;
+    if (!list?.length) return null;
+    let hit: string | null = null;
+    for (const c of list) {
+      if (c.start_secs > t) break;
+      if (c.image_url) hit = c.image_url;
+    }
+    return hit;
+  }
+
+  /* 播放页「更多」里翻跳片头/片尾。和设置页是同一个偏好 → 落盘。
+     ★ 翻完必须**重拉一次章节**:intro/outro 是核层按开关算好的,开关变了那两个值就过期了。
+       不重拉的话,用户在片头前打开开关,这一集照样不跳(而开关明明是开的)——
+       最气人的那种「设了没用」。 */
+  async function toggleSkip(key: "skip_intro" | "skip_outro", on: boolean) {
+    if (!pbPrefs) return;
+    const prev = pbPrefs;
+    const next = { ...pbPrefs, [key]: on };
+    setPbPrefs(next);
+    try {
+      await setPlaybackPrefs(next);
+      const label = key === "skip_intro" ? "片头" : "片尾";
+      say(on ? `自动跳过${label}:开` : `自动跳过${label}:关`);
+      if (playing) {
+        const info = await chapterInfo(playing.id, playing.runtime_secs).catch(() => null);
+        putChapters(info);
+        // 开了却什么都没识别出来,得说清是**服务端没有章节**,不是开关没生效。
+        if (on && !info?.[key === "skip_intro" ? "intro" : "outro"]) {
+          say(`这一集没识别出${label}(服务端章节缺失或命名不常见),不会跳`);
+        }
+      }
+    } catch (e) {
+      setPbPrefs(prev); // 回滚:开关停在新位置而磁盘是旧值 = 又一个「显示的不是生效的」
+      fail("自动跳过", e);
+    }
+  }
+
+  /* 跳过提示条:自动跳过认错了得让人跳得回来(章节名匹配不可能 100% 准)。 */
+  function showSkipTip(from: number, label: string) {
+    setSkipTip({ from, label });
+    if (skipTipTimer.current) window.clearTimeout(skipTipTimer.current);
+    skipTipTimer.current = window.setTimeout(() => setSkipTip(null), 6000);
+  }
+
   async function afterStart(it: Item) {
     setReady(false); // 新片:先黑屏,等出画
+    putChapters(null); // 换片先清:否则新片的进度条上挂着上一集的缩略图和片头区间
+    skipped.current = { intro: false, outro: false };
     setDmComments([]);
     /* ★ 这里以前有 setDmOn(false) —— 换片就把弹幕开关拍回关,
        用户上一集调好的东西下一集全废。开关现在是持久化偏好,换片不动它。 */
@@ -377,6 +482,15 @@ export default function App() {
     setAspect(""); setShaderLv("off");
     setSleepMin(null); setSleepOpen(false); setDolby(false); // 定时句柄由 [playing] 的 cleanup 清
     autoDanmaku(it); // 不 await:弹幕匹配要打网络,不能拖住起播后的 OSD 初始化
+    /* 章节(跳过片头片尾 + 进度条缩略图)。同样不 await —— 它也是网络请求,
+       而且**没有章节是常态**(库没刮削过就是空表),绝不能让它拖住或拦住起播。
+       两个开关都关时核层直接返回空表,不会打服务器。 */
+    chapterInfo(it.id, it.runtime_secs)
+      .then(putChapters)
+      .catch(() => putChapters(null)); // 拿不到就当没有,静默降级
+    /* 本地下载/网盘源不走 playItem,也得把偏好读进来 —— 否则「更多」面板里
+       跳片头/片尾两行永远是灰的。 */
+    getPlaybackPrefs().then(setPbPrefs).catch(() => {});
     setTimeout(async () => {
       await applyPrefs().catch(() => {});
       /* 音轨/字幕**不在这里一次性拉**(见 [playing] 的轮询 effect)。
@@ -392,6 +506,9 @@ export default function App() {
         setADelay(round1(o.audio_delay));
         setSDelay(round1(o.sub_delay));
         setHw(normHwdec(o.hwdec));
+        /* 杜比视界软解:核层可能**已经自动切好了**(设置页那个开关 + 这片是 DV)。
+           这行以前恒初始化成 false,于是「已经在软解、开关却显示关」。照实回读。 */
+        setDolby(o.dolby_vision && normHwdec(o.hwdec) === "no");
         setShaderLv((lv) => (o.shader_count > 0 ? lv : "off"));
       } catch { /* 播放器未就绪:保持占位值,不弹错打扰起播 */ }
     }, 1200);
@@ -402,6 +519,26 @@ export default function App() {
       默认版本,且**不报错** —— TS 上少参函数可赋给多参形参,编译期抓不到。 */
   async function playItem(it: Item, mediaSourceId?: string | null) {
     try {
+      /* 外部播放器:设了就整条交出去,不进内置播放页。
+         ★ 必须在 play() **之前**判 —— play() 会真的让内置 mpv 起播,
+           之后再拉外部播放器就是两个播放器同时出声(本项目在
+           [[desktop-double-audio-orphan-player]] 上栽过一模一样的跟头)。
+         起不来时如实报错并回落内置播放器:外部程序可能被杀毒删了/被挪走了。
+         ★ 这是个挡在起播前的串行 await([[perceived-slowness]] 点名的那类)。留着是权衡后的:
+           它读的是**核层内存里的配置**,不打网络(~1ms);换成前端缓存就得自己做失效,
+           缓存一旦过期 = 用户刚设完外部播放器却仍走内置,比 1ms 难受得多。 */
+      const prefs = await getPlaybackPrefs().catch(() => null);
+      setPbPrefs(prefs); // 顺手存下:播放页「更多」的跳片头/片尾两行要拿它显示真状态
+      const ext = prefs?.external_player ?? "";
+      if (ext) {
+        try {
+          await playExternal(it.id, it.resume_secs, mediaSourceId ?? null);
+          say(`已用外部播放器打开:${ext.split(/[\\/]/).pop()}`);
+          return;
+        } catch (e) {
+          say(`外部播放器启动失败(${e}),改用内置播放器`);
+        }
+      }
       const resume = await play(it.id, it.resume_secs, mediaSourceId ?? null);
       setPlaying(it);
       // 版本:详情页指定了就照它高亮,否则等 item_media 回来按服务端第一个初始化。
@@ -563,6 +700,7 @@ export default function App() {
         tick.current++;
         if (tick.current % 10 === 0) reportProgress(st.time, st.paused);
         sourceWatchdog(st.time);
+        autoSkip(st.time);
       } catch { /* 未就绪忽略 */ }
     }, 500);
     return () => { if (timer.current) window.clearInterval(timer.current); window.clearTimeout(readyFallback); };
@@ -819,7 +957,9 @@ export default function App() {
      故这里只切 hwdec:运行时改 vo 会触发 VO 重初始化(白闪/d3d11 上下文churn,
      本项目在这类坑上栽过),为设一个本就设好的值去冒这风险不值。 */
   async function applyDolby(on: boolean) {
-    const mode = on ? "no" : "auto-safe";
+    /* 关掉时回到**用户设的默认解码方式**,不是写死 auto-safe ——
+       默认设成软解的人关一下这个开关,反而被切成硬解,那叫帮倒忙。 */
+    const mode = on ? "no" : (pbPrefs?.hwdec ?? "auto-safe");
     setDolby(on);
     setHw(mode);
     try {
@@ -1120,12 +1260,32 @@ export default function App() {
             </span>
           </div>
 
+          {/* 跳过片头/片尾的撤销条。章节名匹配不可能 100% 准,跳错了必须能一键跳回去 ——
+              没有退路的自动跳过,比不跳还烦人。6 秒后自淡出。 */}
+          {skipTip && (
+            <div className="p-skiptip">
+              <span>{skipTip.label}</span>
+              <button
+                className="btn"
+                onClick={() => {
+                  seekApi(skipTip.from).catch(() => {});
+                  setSkipTip(null);
+                }}
+              >
+                撤销
+              </button>
+            </div>
+          )}
+
           {/* 底栏 */}
           <div className="p-bot">
             <div className="p-scrubrow">
               <span className="p-tc l">{fmtTime(curTime)}</span>
-              {/* 悬停时间提示(草稿 pin 18)。缩略图那半要服务端 trickplay/BIF,核层确实没有
-                  → 按草稿「没有就不显示、不硬凑」,只给时间读数,不画假缩略图。 */}
+              {/* 悬停预览(草稿 pin 18):时间读数 + 服务端章节图缩略图。
+                  缩略图是**尽力而为**——服务端没刮削章节图(chapters 空 / image_url 为 null)
+                  就只出时间读数。按草稿「没有就不显示、不硬凑」,绝不画假缩略图。
+                  精度也如实说:章节图每章一张(通常几分钟一张),不是逐秒的 trickplay 雪碧图,
+                  悬停到哪就取**不晚于该时间点**的那一张。 */}
               <div
                 className="p-scrub"
                 onMouseMove={(e) => {
@@ -1139,7 +1299,22 @@ export default function App() {
                 <span className="fill" style={{ width: `${pct}%` }} />
                 <span className="knob" style={{ left: `${pct}%` }} />
                 {hoverT && status.duration > 0 && (
-                  <span className="prev" style={{ left: hoverT.x }}><span className="tc">{fmtTime(hoverT.t)}</span></span>
+                  <span className="prev" style={{ left: hoverT.x }}>
+                    {(() => {
+                      const src = thumbAt(hoverT.t);
+                      // onError 兜底:章节图 401/404 时把自己藏掉,只留时间读数,
+                      // 不要在气泡里留一个碎图图标(那比没有还难看)。
+                      return src ? (
+                        <img
+                          className="shot"
+                          src={src}
+                          alt=""
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                        />
+                      ) : null;
+                    })()}
+                    <span className="tc">{fmtTime(hoverT.t)}</span>
+                  </span>
                 )}
                 <input
                   type="range" min={0} max={Math.max(1, status.duration)} step={0.5}
@@ -1548,8 +1723,12 @@ export default function App() {
                         ))}
                       </div>
                     )}
-                    {swRow("自动跳过片头", false, () => soon("自动跳过片头"))}
-                    {swRow("自动跳过片尾", false, () => soon("自动跳过片尾"))}
+                    {swRow("自动跳过片头", pbPrefs?.skip_intro ?? false, () =>
+                      toggleSkip("skip_intro", !pbPrefs?.skip_intro),
+                    )}
+                    {swRow("自动跳过片尾", pbPrefs?.skip_outro ?? false, () =>
+                      toggleSkip("skip_outro", !pbPrefs?.skip_outro),
+                    )}
                     {swRow("画中画 (PiP)", false, () => soon("画中画"))}
                     {/* 定时已开时整行点亮,不翻面板也看得出来 */}
                     <div className={`p-li static${sleepMin != null ? " on" : ""}`}>

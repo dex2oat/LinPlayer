@@ -217,6 +217,14 @@ struct RawMediaSource {
     runtime_ticks: Option<i64>,
     #[serde(rename = "MediaStreams")]
     media_streams: Option<Vec<RawStream>>,
+    /* ↓ 这两个字段原本属于 resolve_stream 里另一个私有的 `MediaSource` 结构体。
+       同一个 JSON 对象被建了**两份模型**,于是取流那条路上 MediaStreams 被静默丢弃 ——
+       「杜比视界自动软解」判不出 DV 的根因就是这个:数据一直在线上,只是没人接。
+       两份模型合成一份,这类「字段在别处解析过了,这里却没有」的坑才不会再长出来。 */
+    #[serde(rename = "DirectStreamUrl")]
+    direct_stream_url: Option<String>,
+    #[serde(rename = "TranscodingUrl")]
+    transcoding_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -245,6 +253,10 @@ struct RawStream {
     frame_rate: Option<f64>,
     #[serde(rename = "VideoRange")]
     video_range: Option<String>,
+    /// `VideoRange` 只有 SDR/HDR 两档,**分不出 DoVi 和 HDR10** —— 判杜比视界必须看这个
+    /// (取值 DOVI / HDR10 / HLG / HDR10Plus)。老服务器可能不发,故还要看 codec/profile 兜底。
+    #[serde(rename = "VideoRangeType")]
+    video_range_type: Option<String>,
     #[serde(rename = "IsDefault")]
     is_default: Option<bool>,
     #[serde(rename = "Index")]
@@ -267,7 +279,32 @@ pub struct StreamInfo {
     pub channel_layout: Option<String>,
     pub frame_rate: Option<f64>,
     pub video_range: Option<String>,
+    pub video_range_type: Option<String>,
     pub is_default: bool,
+}
+
+/// 这条视频流是不是杜比视界。判定顺序 = 从最权威到最兜底:
+///   1. `VideoRangeType == DOVI`(新版 Emby/Jellyfin 直接给结论)
+///   2. codec 里带 dvhe/dvh1(DV 独立轨的编码标识)
+///   3. profile 里带 "dolby vision"(老服务器只在人类可读串里体现)
+/// 只看 `VideoRange=HDR` 会把 HDR10 一起误判成 DV → 无谓地掉进软解、白白卡顿。
+pub fn is_dolby_vision(s: &StreamInfo) -> bool {
+    if s.type_ != "Video" {
+        return false;
+    }
+    let range_type = s.video_range_type.as_deref().unwrap_or("").to_ascii_lowercase();
+    if range_type.contains("dovi") || range_type.contains("dolby") {
+        return true;
+    }
+    let codec = s.codec.to_ascii_lowercase();
+    if codec.contains("dvhe") || codec.contains("dvh1") || codec.contains("dav1") {
+        return true;
+    }
+    s.profile
+        .as_deref()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .contains("dolby vision")
 }
 
 /// 一个版本(= 一个 MediaSource)。草稿的「版本 1 · 4K HDR · 主线」一整块。
@@ -308,6 +345,7 @@ impl From<RawMediaSource> for MediaVersion {
                 channel_layout: s.channel_layout.filter(|x| !x.is_empty()),
                 frame_rate: s.frame_rate,
                 video_range: s.video_range.filter(|x| !x.is_empty() && x != "Unknown"),
+                video_range_type: s.video_range_type.filter(|x| !x.is_empty() && x != "Unknown"),
                 is_default: s.is_default.unwrap_or(false),
             })
             .collect();
@@ -737,6 +775,86 @@ pub async fn set_favorite(
         .send()
         .await
         .map_err(|e| format!("网络错误: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("请求失败: HTTP {}", resp.status()));
+    }
+    Ok(())
+}
+
+/* ---------------- 管理员(admin)动作 ----------------
+   对标 Emby web。名字容易混,这里把每一项打的**真实端点**钉死:
+
+     刷新媒体库  → POST /Items/{id}/Refresh  Default 模式(只补缺失,不覆盖已有)
+     扫描媒体库  → POST /Library/Refresh     整台服务器找新文件(Emby 的「扫描所有媒体库」)
+     刷新元数据  → POST /Items/{id}/Refresh  FullRefresh + ReplaceAllMetadata(强制重刮)
+
+   所以前两项**不是**一回事:一个作用于选中的库/条目,一个作用于整台服务器。 */
+
+/// 当前登录用户是不是管理员。
+///
+/// 不从登录响应里取:配置里存下来的老账号根本不会再走一次 login,
+/// 那样升级后老账号会永远判成非管理员(菜单静默不出现,还以为是权限没给)。
+pub async fn is_admin(http: &reqwest::Client, s: &Session) -> Result<bool, String> {
+    let url = format!("{}/Users/{}", s.server, s.user_id);
+    let resp = http
+        .get(&url)
+        .header("X-Emby-Token", &s.token)
+        .send()
+        .await
+        .map_err(|e| format!("网络错误: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("请求失败: HTTP {}", resp.status()));
+    }
+    let v: serde_json::Value = resp.json().await.map_err(|e| format!("解析失败: {e}"))?;
+    Ok(admin_flag(&v))
+}
+
+/// 从 /Users/{id} 响应里读管理员位。缺 Policy / 缺字段一律判**否** —— 宁可少给按钮。
+fn admin_flag(user: &serde_json::Value) -> bool {
+    user.get("Policy")
+        .and_then(|p| p.get("IsAdministrator"))
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false)
+}
+
+/// 刷新某个库/条目。`full=false` 只补缺失,`full=true` 强制重刮(替换已有元数据)。
+///
+/// Recursive=true:对库卡片来说不递归等于什么都没做(库本身没有元数据可刮)。
+/// ReplaceAllImages 恒 false —— 用户自己换过的封面不该被一次「刷新元数据」抹掉。
+pub async fn refresh_item(
+    http: &reqwest::Client,
+    s: &Session,
+    item_id: &str,
+    full: bool,
+) -> Result<(), String> {
+    post_admin(http, s, &refresh_url(&s.server, item_id, full)).await
+}
+
+fn refresh_url(server: &str, item_id: &str, full: bool) -> String {
+    let mode = if full { "FullRefresh" } else { "Default" };
+    format!(
+        "{server}/Items/{item_id}/Refresh?Recursive=true&MetadataRefreshMode={mode}&ImageRefreshMode={mode}&ReplaceAllMetadata={full}&ReplaceAllImages=false"
+    )
+}
+
+/// 扫描整台服务器的媒体库文件(Emby web 的「扫描所有媒体库」)。
+pub async fn scan_all_libraries(http: &reqwest::Client, s: &Session) -> Result<(), String> {
+    let url = format!("{}/Library/Refresh", s.server);
+    post_admin(http, s, &url).await
+}
+
+async fn post_admin(http: &reqwest::Client, s: &Session, url: &str) -> Result<(), String> {
+    let resp = http
+        .post(url)
+        .header("X-Emby-Token", &s.token)
+        .header("Content-Length", "0") // 无 body 的 POST,少了这个有的反代直接 411
+        .send()
+        .await
+        .map_err(|e| format!("网络错误: {e}"))?;
+    // 403 = 服务端说你不是管理员。菜单本不该出现,出现了就把真话说出来。
+    if resp.status().as_u16() == 403 {
+        return Err("服务器拒绝:当前账号没有管理员权限".into());
+    }
     if !resp.status().is_success() {
         return Err(format!("请求失败: HTTP {}", resp.status()));
     }
@@ -1224,20 +1342,9 @@ async fn fetch_items(http: &reqwest::Client, s: &Session, url: &str) -> Result<V
 #[derive(Deserialize)]
 struct PlaybackInfoResp {
     #[serde(rename = "MediaSources")]
-    media_sources: Vec<MediaSource>,
+    media_sources: Vec<RawMediaSource>,
     #[serde(rename = "PlaySessionId")]
     play_session_id: Option<String>,
-}
-#[derive(Deserialize)]
-struct MediaSource {
-    #[serde(rename = "Id")]
-    id: String,
-    #[serde(rename = "Container")]
-    container: Option<String>,
-    #[serde(rename = "DirectStreamUrl")]
-    direct_stream_url: Option<String>,
-    #[serde(rename = "TranscodingUrl")]
-    transcoding_url: Option<String>,
 }
 
 /// 一次播放会话的目标 + 上报三件套共享的 id。
@@ -1249,6 +1356,170 @@ pub struct PlaybackTarget {
     pub media_source_id: String,
     pub play_session_id: String,
     pub play_method: String, // "DirectStream" | "Transcode"
+    /// 这一版是不是杜比视界(供「杜比视界自动软解」判断)。
+    /// 在这里算而不是丢给前端:PlaybackInfo 的 MediaStreams 只有这条路上拿得到,
+    /// 前端手里的 media_versions 是**另一次请求**,两边可能选的不是同一个版本。
+    pub is_dolby_vision: bool,
+}
+
+// ---------- 章节(「跳过片头/片尾」与「进度条缩略图预览」共用同一份数据)----------
+//
+// 为什么这两个功能合并成一次请求:Emby 的章节既带时间点(拿来判片头片尾区间),
+// 又带 ImageTag(拿来当进度条悬停缩略图)。分两条链路去打服务器纯属重复劳动。
+//
+// ⚠️ 现实边界,别高估它:
+//   * 章节是**服务端**生成的。没刮削过章节的库 → 返回空表 → 两个功能都自动静默不工作。
+//   * 章节图要服务端开了「章节图片提取」才有 ImageTag;只有时间点没有图时,
+//     跳过片头照常工作,缩略图则退回纯时间气泡(现有行为)。
+//   * 片头识别靠**章节名**。番剧组/刮削器给的名字五花八门,这里只认常见写法,
+//     认不出就不跳 —— 宁可不跳,也不能把正片切掉。
+
+#[derive(Deserialize)]
+struct RawChapter {
+    #[serde(rename = "StartPositionTicks")]
+    start: Option<i64>,
+    #[serde(rename = "Name")]
+    name: Option<String>,
+    #[serde(rename = "ImageTag")]
+    image_tag: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ChapterHolder {
+    #[serde(rename = "Chapters")]
+    chapters: Option<Vec<RawChapter>>,
+}
+
+/// 一个章节点。`image_url` 已经拼好 api_key,前端直接塞 `<img src>`。
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Chapter {
+    pub index: usize,
+    pub start_secs: f64,
+    pub name: String,
+    pub image_url: Option<String>,
+}
+
+/// 取条目章节。失败/无章节都返回空表 —— 这两个功能都是增值项,不该拦住播放。
+pub async fn chapters(
+    http: &reqwest::Client,
+    s: &Session,
+    item_id: &str,
+    thumb_width: u32,
+) -> Vec<Chapter> {
+    let url = format!(
+        "{}/Users/{}/Items/{}?Fields=Chapters",
+        s.server, s.user_id, item_id
+    );
+    let Ok(resp) = http
+        .get(&url)
+        .header("X-Emby-Token", &s.token)
+        .header("X-Emby-Authorization", auth_header(&s.device_id))
+        .send()
+        .await
+    else {
+        return Vec::new();
+    };
+    if !resp.status().is_success() {
+        return Vec::new();
+    }
+    let Ok(holder) = resp.json::<ChapterHolder>().await else {
+        return Vec::new();
+    };
+    holder
+        .chapters
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| Chapter {
+            index: i,
+            start_secs: c.start.unwrap_or(0) as f64 / 1e7,
+            name: c.name.unwrap_or_default(),
+            image_url: c.image_tag.filter(|t| !t.is_empty()).map(|tag| {
+                format!(
+                    "{}/Items/{}/Images/Chapter/{}?tag={}&maxWidth={}&api_key={}",
+                    s.server, item_id, i, tag, thumb_width, s.token
+                )
+            }),
+        })
+        .collect()
+}
+
+/// 章节名是不是「片头」。
+///
+/// 短词(op/ed)必须**整词**匹配,不能用 contains —— 否则 "Opera"、"Stop"、"Wedding"
+/// 都会被当成片头,把正片开头切掉。长词才放开 contains。
+fn name_hits(name: &str, whole_words: &[&str], substrings: &[&str]) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if whole_words.iter().any(|w| tokens.contains(w)) {
+        return true;
+    }
+    substrings.iter().any(|w| lower.contains(w))
+}
+
+fn is_intro_name(name: &str) -> bool {
+    name_hits(
+        name,
+        &["op", "intro", "avant"],
+        &["opening", "片头", "オープニング", "主题曲"],
+    )
+}
+
+fn is_outro_name(name: &str) -> bool {
+    name_hits(
+        name,
+        &["ed", "outro", "credits"],
+        &["ending", "片尾", "エンディング", "end credit", "next episode", "预告"],
+    )
+}
+
+/// 片头区间 `(开始, 结束)`。结束 = 下一个章节的开始(没有下一个就用总时长)。
+///
+/// 只在**前 40%** 里找:有些剧集把片尾曲也叫 "OP"(插入曲/同名主题曲),
+/// 不设这道闸会在快看完时把人一脚踹到片尾。
+pub fn intro_range(chapters: &[Chapter], runtime_secs: f64) -> Option<(f64, f64)> {
+    let limit = if runtime_secs > 0.0 { runtime_secs * 0.4 } else { f64::MAX };
+    let i = chapters
+        .iter()
+        .position(|c| c.start_secs < limit && is_intro_name(&c.name))?;
+    let start = chapters[i].start_secs;
+    let end = chapters
+        .get(i + 1)
+        .map(|c| c.start_secs)
+        .unwrap_or(runtime_secs);
+    // 结束点必须真的在开始之后,且别长得离谱(>5 分钟的"片头"多半是误判的正片章节)。
+    if end <= start + 1.0 || end - start > 300.0 {
+        return None;
+    }
+    Some((start, end))
+}
+
+/// 可跳过的片尾区间 `(开始, 落点)`。只在**后 25%** 里找,理由同 intro_range(反向)。
+///
+/// ★ 只有片尾**后面还有内容**(通常是「下集预告」)时才返回 Some。
+///   片尾是最后一个章节 = 跳过去就等于把这一集直接结束掉 —— 用户要的是「跳过片尾」,
+///   不是「提前结束」,这两件事差得远。那种情况返回 None,什么都不做。
+///
+/// 判定放在这里而不是留给前端:前端那份总时长在 500ms 轮询的闭包里会过期,
+/// 拿旧值去判「后面还有没有东西」迟早判错(而且错的方式是**误跳**,最难受的那种)。
+pub fn outro_range(chapters: &[Chapter], runtime_secs: f64) -> Option<(f64, f64)> {
+    if runtime_secs <= 0.0 {
+        return None;
+    }
+    let floor = runtime_secs * 0.75;
+    let i = chapters
+        .iter()
+        .position(|c| c.start_secs >= floor && is_outro_name(&c.name))?;
+    let start = chapters[i].start_secs;
+    let landing = chapters.get(i + 1)?.start_secs; // 没有下一章 = 后面没内容,不跳
+    // 落点太贴近结尾(<5s)也当没内容:跳过去只看到一秒黑屏,不如不跳。
+    if landing <= start + 1.0 || landing >= runtime_secs - 5.0 {
+        return None;
+    }
+    Some((start, landing))
 }
 
 fn secs_to_ticks(secs: f64) -> i64 {
@@ -1321,7 +1592,7 @@ pub async fn resolve_stream(
         Some(want) => info
             .media_sources
             .into_iter()
-            .find(|m| m.id == want)
+            .find(|m| m.id.as_deref() == Some(want))
             .ok_or_else(|| format!("该条目没有版本 {want}(服务器可能已改动媒体源)"))?,
         None => info
             .media_sources
@@ -1329,7 +1600,25 @@ pub async fn resolve_stream(
             .next()
             .ok_or("该条目无可播放源")?,
     };
-    let media_source_id = ms.id.clone();
+    let media_source_id = ms.id.clone().unwrap_or_default();
+    // 取流这一跳顺手把 DV 判了 —— MediaStreams 就在同一份响应里,不用再打一次服务器。
+    let is_dolby_vision = ms
+        .media_streams
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .any(|s| {
+            let range_type = s.video_range_type.as_deref().unwrap_or("").to_ascii_lowercase();
+            let codec = s.codec.as_deref().unwrap_or("").to_ascii_lowercase();
+            let profile = s.profile.as_deref().unwrap_or("").to_ascii_lowercase();
+            s.type_.as_deref() == Some("Video")
+                && (range_type.contains("dovi")
+                    || range_type.contains("dolby")
+                    || codec.contains("dvhe")
+                    || codec.contains("dvh1")
+                    || codec.contains("dav1")
+                    || profile.contains("dolby vision"))
+        });
 
     let (url, play_method) = if let Some(d) = ms.direct_stream_url.filter(|x| !x.is_empty()) {
         (abs_url(s, &d), "DirectStream")
@@ -1358,6 +1647,7 @@ pub async fn resolve_stream(
         media_source_id,
         play_session_id,
         play_method: play_method.to_string(),
+        is_dolby_vision,
     })
 }
 
@@ -1443,6 +1733,149 @@ pub async fn report_stopped(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ch(start: f64, name: &str) -> Chapter {
+        Chapter { index: 0, start_secs: start, name: name.into(), image_url: None }
+    }
+
+    /// 非管理员必须判 false。判错了 = 把三个管理动作发给没权限的账号,一点就 403。
+    /// 老 Emby / 精简响应可能整个没有 Policy —— 缺字段也必须是 false,不能默认放行。
+    #[test]
+    fn admin_flag_defaults_to_no_when_unknown() {
+        let admin = serde_json::json!({ "Id": "u", "Policy": { "IsAdministrator": true } });
+        let user = serde_json::json!({ "Id": "u", "Policy": { "IsAdministrator": false } });
+        let no_policy = serde_json::json!({ "Id": "u" });
+        let empty_policy = serde_json::json!({ "Id": "u", "Policy": {} });
+
+        assert!(admin_flag(&admin));
+        assert!(!admin_flag(&user));
+        assert!(!admin_flag(&no_policy), "缺 Policy 不能当管理员");
+        assert!(!admin_flag(&empty_policy), "缺 IsAdministrator 不能当管理员");
+    }
+
+    /// 「刷新媒体库」和「刷新元数据」打的是同一个端点、不同的模式 ——
+    /// 参数写反的话前者会**覆盖用户改过的元数据**,而界面上只写着「刷新」。
+    #[test]
+    fn refresh_modes_do_not_swap() {
+        let light = refresh_url("http://h", "lib1", false);
+        let full = refresh_url("http://h", "lib1", true);
+
+        assert!(light.contains("MetadataRefreshMode=Default"), "{light}");
+        assert!(light.contains("ReplaceAllMetadata=false"), "轻刷新不能替换已有元数据: {light}");
+        assert!(full.contains("MetadataRefreshMode=FullRefresh"), "{full}");
+        assert!(full.contains("ReplaceAllMetadata=true"), "{full}");
+        // 不递归 = 对库卡片什么都不做(库本身没有元数据可刮)
+        assert!(light.contains("Recursive=true") && full.contains("Recursive=true"));
+        // 用户手动换过的封面不该被「刷新元数据」抹掉
+        assert!(full.contains("ReplaceAllImages=false"), "{full}");
+    }
+
+    /// PlaybackInfo 里的 MediaStreams 曾被 resolve_stream 的**第二份** MediaSource 模型
+    /// 整个丢掉,于是「杜比视界自动软解」永远判不出 DV。两份模型合一后必须真解析出来。
+    #[test]
+    fn playback_info_keeps_media_streams_for_dolby_check() {
+        let raw = r#"{
+            "MediaSources": [{
+                "Id": "ms1",
+                "DirectStreamUrl": "/videos/1/stream.mkv",
+                "MediaStreams": [
+                    { "Type": "Video", "Codec": "hevc", "VideoRange": "HDR", "VideoRangeType": "DOVI" },
+                    { "Type": "Audio", "Codec": "eac3" }
+                ]
+            }],
+            "PlaySessionId": "psid"
+        }"#;
+        let info: PlaybackInfoResp = serde_json::from_str(raw).unwrap();
+        let ms = &info.media_sources[0];
+        let streams = ms.media_streams.as_deref().unwrap();
+        assert_eq!(streams.len(), 2, "MediaStreams 被丢了 —— DV 判定拿不到数据");
+        assert_eq!(streams[0].video_range_type.as_deref(), Some("DOVI"));
+        // DirectStreamUrl 也必须还在(合并模型时最容易漏掉的那个字段)
+        assert_eq!(ms.direct_stream_url.as_deref(), Some("/videos/1/stream.mkv"));
+    }
+
+    /// HDR10 ≠ 杜比视界。只看 VideoRange=HDR 就判 DV,会把所有 HDR 片子无谓拖进软解。
+    #[test]
+    fn hdr10_is_not_mistaken_for_dolby_vision() {
+        let dv = StreamInfo {
+            index: 0, type_: "Video".into(), codec: "hevc".into(), profile: None,
+            display_title: None, language: None, width: None, height: None, bitrate: None,
+            channels: None, channel_layout: None, frame_rate: None,
+            video_range: Some("HDR".into()), video_range_type: Some("DOVI".into()), is_default: true,
+        };
+        let hdr10 = StreamInfo { video_range_type: Some("HDR10".into()), ..dv.clone() };
+        let dv_by_codec = StreamInfo { codec: "dvhe.08".into(), video_range_type: None, ..dv.clone() };
+        let dv_by_profile = StreamInfo {
+            codec: "hevc".into(), video_range_type: None,
+            profile: Some("Main 10 / Dolby Vision".into()), ..dv.clone()
+        };
+        let audio = StreamInfo { type_: "Audio".into(), ..dv.clone() };
+
+        assert!(is_dolby_vision(&dv));
+        assert!(!is_dolby_vision(&hdr10), "HDR10 被误判成 DV");
+        assert!(is_dolby_vision(&dv_by_codec), "老服务器不发 VideoRangeType,得靠 codec 兜底");
+        assert!(is_dolby_vision(&dv_by_profile));
+        assert!(!is_dolby_vision(&audio), "音频轨不该参与 DV 判定");
+    }
+
+    /// 片头识别靠章节名。短词用 contains 会把正片切掉 —— 这是本功能最贵的一类误伤。
+    #[test]
+    fn intro_detection_does_not_eat_the_feature() {
+        let normal = vec![ch(0.0, "Opening"), ch(90.0, "Part A"), ch(1200.0, "Ending")];
+        assert_eq!(intro_range(&normal, 1440.0), Some((0.0, 90.0)));
+        // 片尾是最后一个章节 → 跳过去 = 直接结束这一集,不是用户要的「跳过片尾」
+        assert_eq!(outro_range(&normal, 1440.0), None);
+
+        // 片尾后面还有下集预告 → 可以跳,落点是预告的开始
+        let with_preview = vec![ch(0.0, "OP"), ch(90.0, "Part A"), ch(1200.0, "ED"), ch(1380.0, "次回予告")];
+        assert_eq!(outro_range(&with_preview, 1440.0), Some((1200.0, 1380.0)));
+
+        // "Opera" / "Stop Motion" 含 op,但都不是片头
+        let trap = vec![ch(0.0, "The Phantom of the Opera"), ch(120.0, "Stop Motion Scene")];
+        assert_eq!(intro_range(&trap, 1440.0), None, "contains 匹配把正片当成了片头");
+
+        // 中文命名
+        let cn = vec![ch(12.0, "片头曲"), ch(102.0, "正片"), ch(1300.0, "片尾")];
+        assert_eq!(intro_range(&cn, 1440.0), Some((12.0, 102.0)));
+        assert_eq!(outro_range(&cn, 1440.0), None); // 片尾后面没东西了
+    }
+
+    /// 边界闸门:后半段的 "OP"(同名插入曲)不能当片头,否则快看完时被踹到片尾;
+    /// 超长"片头"多半是误命名的正片章节,宁可不跳。
+    #[test]
+    fn intro_range_rejects_late_and_overlong_matches() {
+        let late = vec![ch(100.0, "Part A"), ch(1200.0, "OP")]; // 1200/1440 = 83%,太靠后
+        assert_eq!(intro_range(&late, 1440.0), None);
+
+        let overlong = vec![ch(0.0, "Intro"), ch(600.0, "Part A")]; // 10 分钟的"片头"
+        assert_eq!(intro_range(&overlong, 1440.0), None);
+
+        let zero_len = vec![ch(0.0, "Intro"), ch(0.5, "Part A")];
+        assert_eq!(intro_range(&zero_len, 1440.0), None);
+
+        assert_eq!(intro_range(&[], 1440.0), None, "没有章节时必须静默不工作,不能崩");
+        assert_eq!(outro_range(&[], 1440.0), None);
+        assert_eq!(outro_range(&[ch(10.0, "Ending")], 0.0), None, "时长未知时不猜");
+        // 前 75% 里的 "Ending"(剧情章节名)不是片尾
+        assert_eq!(outro_range(&[ch(100.0, "The Ending Begins")], 1440.0), None);
+    }
+
+    /// 章节图 URL 必须带 api_key,否则前端 <img> 直接 401 —— 缩略图会静默全白。
+    /// 服务端没生成图(无 ImageTag)时必须是 None,不能拼出一个必然 404 的地址。
+    #[test]
+    fn chapter_image_url_is_authenticated_and_optional() {
+        let raw = r#"{ "Chapters": [
+            { "StartPositionTicks": 0, "Name": "Opening", "ImageTag": "abc" },
+            { "StartPositionTicks": 900000000, "Name": "Part A" }
+        ] }"#;
+        let holder: ChapterHolder = serde_json::from_str(raw).unwrap();
+        let list = holder.chapters.unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].image_tag.as_deref(), Some("abc"));
+        assert_eq!(list[1].image_tag, None);
+        // 90 秒 = 900000000 ticks
+        assert_eq!(list[1].start.unwrap() as f64 / 1e7, 90.0);
+    }
 
     /// 真实载荷回归:smart.uhdnow.com 的 /Items/Resume 原样返回(2026-07-15 实抓)。
     /// Episode.Name 只有「第 35 集」,剧名单独在 SeriesName —— 丢了它列表就没法认剧。

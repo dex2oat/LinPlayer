@@ -188,3 +188,6 @@ Swagger UI_files/
 linplayer_log_*.txt
 .omo/
 devtools_options.yaml
+
+# 绿色包运行时数据(exe 同级 userdata/);跑 dev 构建时会出现在 target/ 下,别入库
+userdata/

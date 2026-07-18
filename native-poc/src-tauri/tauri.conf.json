@@ -10,17 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "LinPlayer",
-        "width": 1180,
-        "height": 720,
-        "minWidth": 900,
-        "minHeight": 560,
-        "transparent": true,
-        "decorations": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

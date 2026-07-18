@@ -17,6 +17,10 @@ linplayer-core = { path = "../crates/core" }
 dirs = "5"                                   # 截图/shader 落盘目录(与 core 的 config_path 同源)
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+# 原生目录选择器。**只用它的 Rust API**(包在我们自己的 pick_directory 命令里),
+# 所以不需要 npm 包,也不用往 capabilities 里加 dialog 权限
+# —— 那些只在前端直接 invoke 插件命令时才需要。
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["json", "socks"] }

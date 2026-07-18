@@ -227,10 +227,7 @@ fn val_to_str(v: &serde_json::Value) -> String {
 
 // ---------- 6h 文件缓存 + 聚合 ----------
 fn cache_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("LinPlayer")
-        .join("ranking_cache")
+    crate::paths::cache_dir("ranking")
 }
 
 #[derive(Serialize, Deserialize)]

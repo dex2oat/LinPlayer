@@ -22,6 +22,7 @@ import {
   thumbUrl,
   views,
 } from "../lib/api";
+import { AdminMenuItems, useIsAdmin } from "../lib/admin";
 import Poster from "../components/Poster";
 import {
   IconCheck,
@@ -146,6 +147,7 @@ export default function HomePage({
   /** 取 Logo 失败的条目 id。按 id 记而不是一个 bool —— 否则翻到下一张 Hero 还顶着上一张的失败态。 */
   const [logoFail, setLogoFail] = useState<Set<string>>(new Set());
   const [ctx, setCtx] = useState<{ x: number; y: number; item: Item } | null>(null);
+  const admin = useIsAdmin(session.server);
   const [toast, setToast] = useState("");
   const [err, setErr] = useState("");
   const hover = useRef(false);
@@ -583,6 +585,16 @@ export default function HomePage({
           >
             <IconHeart size={15} /> {favIds.has(ctx.item.id) ? "从喜欢中移除" : "添加到喜欢"}
           </div>
+          {/* 管理员三项(对标 Emby web)。非管理员**整段不出现** —— 出现了也只会 403。 */}
+          {admin && (
+            <AdminMenuItems
+              itemId={ctx.item.id}
+              onDone={(m) => {
+                setToast(m);
+                setCtx(null);
+              }}
+            />
+          )}
         </div>
       )}
 

@@ -12,12 +12,7 @@ use std::path::PathBuf;
 const MAX_ICON_BYTES: u64 = 4 * 1024 * 1024;
 
 fn cache_dir() -> PathBuf {
-    let d = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("LinPlayer")
-        .join("icons");
-    let _ = std::fs::create_dir_all(&d);
-    d
+    crate::paths::cache_dir("icons")
 }
 
 /// server_id(是个 URL)不能直接当文件名 —— 里面有 `:` `/`,Windows 上直接建不了。

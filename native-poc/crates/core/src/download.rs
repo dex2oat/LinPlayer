@@ -154,7 +154,9 @@ pub struct DownloadManager {
 }
 
 impl DownloadManager {
-    /// dir 由调用方决定(桌面:exe 同级 downloads/)。load 恢复既有索引。
+    /// dir 由调用方决定(桌面:`paths::downloads_dir()` = 数据根下的 downloads/)。
+    /// index.json 跟着 dir 走 —— 换 dir 等于换一份索引,旧目录里的文件不会自动出现在列表里。
+    /// load 恢复既有索引。
     pub async fn new(dir: PathBuf) -> Self {
         let _ = tokio::fs::create_dir_all(&dir).await;
         let index_path = dir.join("index.json");
@@ -182,7 +184,7 @@ impl DownloadManager {
                 pending_removal: Default::default(),
                 threads: 2,
             })),
-            client: crate::http::client(),
+            client: crate::http::emby_client(),
         };
         mgr.process_queue();
         mgr

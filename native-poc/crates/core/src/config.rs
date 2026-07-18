@@ -180,29 +180,87 @@ pub struct Prefs {
     /// 回传时是否连播放进度一起同步(关掉则只同步「已看完」标记)。默认开。
     #[serde(default = "default_true")]
     pub cross_server_writeback_progress: bool,
-    /* 多线程加载(本地预取代理)开关。**默认关**。
-       2026-07-15 真机实测:开着会让 Emby 直传流放不出来(有流量、黑屏、无声、永远缓冲),
-       关掉立刻正常 —— 同一个包、只翻这一个开关的 A/B 对照。
-       已修掉其中一个死锁(见 net/prefetch.rs 的 bump_gen),但那只是一环,整体仍不可靠:
-       每次 seek 的 reset() 会 ready.clear() 把已下好的缓存全丢,而 mpv 探测 MKV 时
-       (尤其带大字体附件、cues 在文件末尾的片子)会来回大跳,等于反复重下。
-       它是**优化**不是功能:不确定能加速之前,绝不能默认开着换来「放不了」。
-       修好并有端到端验证之前别改回 default_true。 */
+    /* 多线程加载(本地预取代理)开在**哪些服务器**上。存 Account.server(归一化身份键),
+       空表 = 全部关闭,也是默认值。
+       ## 为什么是「按服务器」而不是一个全局开关
+       它是**优化**不是功能:能不能加速取决于对端(远程 Emby 有收益;局域网/NAS 本就跑满,
+       多开几条 Range 只是白白多占连接)。所以只能由用户按服务器主动开,不给全开的入口。
+       ## 粒度是服务器,不是线路
+       一台服的多条线路(直连/CDN/内网)是同一个源的不同入口,选中这台服 = 它**所有**线路
+       都走预取;线路是用户随手切的,再让他逐线路配一遍纯属折腾。
+       ## 默认关
+       2026-07-15 实测开着会放不出来(有流量、黑屏无声、永远缓冲);根因(并发连接共用
+       一份取数游标)已于 2026-07-17 修掉,见 net/prefetch.rs 顶部说明 + 那条并发回归测试。
+       但「修好了」不等于「该默认开」—— 它仍是拿风险换速度,继续让用户按服务器自己选。 */
     #[serde(default)]
-    pub prefetch_enabled: bool,
+    pub prefetch_servers: Vec<String>,
     /// 预取并发线程数。引擎内部 clamp(2,4),这里存原值。
     #[serde(default = "default_prefetch_threads")]
     pub prefetch_threads: usize,
-    /// 读前缓冲上限(字节)。默认 1GB。
+    /// 截图保存目录。`None` = 系统图片文件夹下的 `LinPlayer/`。
+    ///
+    /// 截图是**用户要拿去用的产物**,不是程序残留 —— 所以默认落系统图片文件夹(好找),
+    /// 而不是跟着 downloads 一起塞进 userdata/(那儿翻起来费劲)。
+    #[serde(default)]
+    pub screenshot_dir: Option<String>,
+    /// 读前缓冲上限(字节)。**每条播放连接**各占这么多内存,故上限 32MB。
+    ///
+    /// 旧配置里存的是 1GB(那时它被误当成下限用,见 net/prefetch.rs 的 read_ahead_bytes)。
+    /// 引擎会把超限值钳回 32MB,但**读出来给设置页时也要钳**——否则设置页拿到 1GB、
+    /// 一保存就被核层拒(新校验是 16~32MB),用户连"打开某台服务器"都点不动。
     #[serde(default = "default_prefetch_cache")]
     pub prefetch_cache_bytes: u64,
+
+    /* ===== 播放器默认行为 =====
+       这 6 项 2026-07-19 前只存在前端 localStorage("lp.playback.local"),设置页自己都写着
+       「核心尚无落点,仅存本机、尚未影响实际播放」—— 用户改了没有任何效果。现在落到这里,
+       由 src-tauri 的 play()/play_external() 在**每次起播时**应用。
+       为什么归 Prefs 而不是按服务器:它们是**播放器**行为(解码器、倍速、外部程序),
+       跟对端服务器无关 —— 与 prefetch_servers 那种「取决于对端」的优化不是一回事。 */
+    /// 默认解码方式:`"auto-safe"` 硬解(默认) / `"no"` 软解。
+    /// 值直接喂 mpv 的 hwdec,别在这里存 "hw"/"sw" 再到处翻译。
+    #[serde(default = "default_hwdec")]
+    pub hwdec: String,
+    /// 默认倍速。起播时应用一次,播放中用户再调不回写这里(那是临时调整)。
+    #[serde(default = "default_speed")]
+    pub default_speed: f64,
+    /// 自动跳过片头。依赖**服务端章节**,没刮削章节的库自动静默不工作。
+    /// 片头片尾是**两个**开关:播放页「更多」面板里就是两行,一个字段喂两行会出现
+    /// 「点片头把片尾也翻了」。设置页也照这个粒度给两行,两处口径必须一致。
+    #[serde(default)]
+    pub skip_intro: bool,
+    /// 自动跳过片尾。只在片尾后面还有内容(下集预告)时才会真跳,见 emby::outro_range。
+    #[serde(default)]
+    pub skip_outro: bool,
+    /// 进度条悬停缩略图。数据来自服务端章节图,没有则退回纯时间气泡。
+    #[serde(default = "default_true")]
+    pub preview_thumbs: bool,
+    /// 杜比视界自动软解:识别到 DV 时强制 `hwdec=no`。
+    /// 默认开 —— DV 走硬解在多数 Windows 显卡上出色偏移(发绿/发紫),软解画面才是对的。
+    #[serde(default = "default_true")]
+    pub dolby_auto_sw: bool,
+    /// 外部播放器可执行文件路径。非空 = 起播时交给它,不走内置 mpv。
+    #[serde(default)]
+    pub external_player: String,
 }
+fn default_hwdec() -> String {
+    "auto-safe".to_string()
+}
+fn default_speed() -> f64 {
+    1.0
+}
+/// 倍速合法区间。设置页与命令层共用 —— 别各写各的(prefetch_cache 就吃过这个亏)。
+pub const SPEED_MIN: f64 = 0.25;
+pub const SPEED_MAX: f64 = 4.0;
 fn default_prefetch_threads() -> usize {
     3
 }
 fn default_prefetch_cache() -> u64 {
-    1024 * 1024 * 1024
+    32 * 1024 * 1024
 }
+/// 读前缓冲的合法区间(字节)。设置页与命令层共用,别各写各的。
+pub const PREFETCH_CACHE_MIN: u64 = 16 * 1024 * 1024;
+pub const PREFETCH_CACHE_MAX: u64 = 32 * 1024 * 1024;
 fn default_writeback_range() -> String {
     "all".to_string()
 }
@@ -216,9 +274,17 @@ impl Default for Prefs {
             cross_server_writeback: false,
             cross_server_writeback_range: default_writeback_range(),
             cross_server_writeback_progress: true,
-            prefetch_enabled: false, // 见字段上的说明:开着会放不了,修好前默认关
+            screenshot_dir: None, // 系统图片文件夹/LinPlayer
+            prefetch_servers: Vec::new(), // 见字段上的说明:空表=全关,只能按服务器主动开
             prefetch_threads: default_prefetch_threads(),
             prefetch_cache_bytes: default_prefetch_cache(),
+            hwdec: default_hwdec(),
+            default_speed: default_speed(),
+            skip_intro: false,
+            skip_outro: false,
+            preview_thumbs: true,
+            dolby_auto_sw: true,
+            external_player: String::new(),
         }
     }
 }
@@ -341,10 +407,7 @@ pub struct AppConfig {
 }
 
 fn config_path() -> PathBuf {
-    let dir = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("LinPlayer");
-    dir.join("config.json")
+    crate::paths::config_file()
 }
 
 fn gen_device_id() -> String {
@@ -485,6 +548,8 @@ impl AppConfig {
         let was_active = self.active == Some(i);
         let active_server = self.active_account().map(|a| a.server.clone());
         self.accounts.remove(i);
+        // 按服务器存的开关跟着账号走:留着的话,重新加同一地址的服会「自己就开着」。
+        self.prefs.prefetch_servers.retain(|s| s != server_id);
         self.active = if self.accounts.is_empty() {
             None
         } else if was_active {
@@ -503,6 +568,66 @@ mod tests {
 
     fn acc(server: &str) -> Account {
         Account { server: server.into(), ..Default::default() }
+    }
+
+    /* 老配置里 prefetch_cache_bytes 存的是 1GB。新校验只收 16~32MB,若把旧值原样
+       透给设置页,用户一点任何开关(保存整个结构体)就会被核层拒 —— 连"给某台服开多线程"
+       都点不动。这里钉死:旧值必须能被钳进合法区间。
+       反向验证:去掉 get_prefetch_settings 里的 clamp,这条断言仍绿(它测的是区间本身),
+       真正的守卫是下面 legacy_1gb 那条。 */
+    /* 老配置(没有这次新加的 6 个播放器字段)必须照常读出来,新字段吃默认值。
+       这条守的是**账号丢失**:Prefs 少一个 #[serde(default)],整个 config.json 就解析失败,
+       用户升级一次 = 服务器和 token 全没了。加字段时这条测试必须跟着加一个键进去验。
+       反向验证方式:把某个新字段的 #[serde(default)] 删掉,这条立刻红。 */
+    #[test]
+    fn legacy_config_without_new_playback_fields_still_loads() {
+        // 2026-07-19 之前真实 config.json 的 prefs 形状(6 个新字段一个都没有)
+        let legacy = r#"{
+            "audio_lang": "chi",
+            "sub_lang": null,
+            "sub_enabled": true,
+            "cross_server_resume": true,
+            "prefetch_servers": ["https://example.com"],
+            "prefetch_threads": 3,
+            "prefetch_cache_bytes": 33554432
+        }"#;
+        let p: Prefs = serde_json::from_str(legacy).expect("老配置必须能解析 —— 解析失败=用户账号全丢");
+        // 老字段原样保留
+        assert_eq!(p.audio_lang.as_deref(), Some("chi"));
+        assert!(p.cross_server_resume);
+        assert_eq!(p.prefetch_servers.len(), 1);
+        // 新字段吃默认值,且默认值必须是"保持原有行为"的那个
+        assert_eq!(p.hwdec, "auto-safe", "默认必须是硬解(老行为),不能因为加字段就把人切到软解");
+        assert_eq!(p.default_speed, 1.0);
+        assert!(!p.skip_intro, "自动跳过必须默认关 —— 默认开会让人莫名其妙被跳走");
+        assert!(!p.skip_outro);
+        assert!(p.preview_thumbs);
+        assert!(p.dolby_auto_sw);
+        assert_eq!(p.external_player, "");
+    }
+
+    /// 倍速区间必须包含默认值,否则老用户一进设置页就存不下(prefetch 的 1GB 就是这么炸的)。
+    #[test]
+    fn default_speed_is_inside_the_legal_range() {
+        assert!((SPEED_MIN..=SPEED_MAX).contains(&Prefs::default().default_speed));
+        assert!(SPEED_MIN > 0.0, "0 倍速 = 永远不动");
+    }
+
+    #[test]
+    fn prefetch_cache_range_absorbs_legacy_1gb() {
+        let legacy_1gb: u64 = 1024 * 1024 * 1024;
+        assert!(legacy_1gb > PREFETCH_CACHE_MAX, "前提:旧值确实超限");
+        assert_eq!(
+            legacy_1gb.clamp(PREFETCH_CACHE_MIN, PREFETCH_CACHE_MAX),
+            PREFETCH_CACHE_MAX,
+            "旧配置必须能钳成合法值,否则设置页整个存不进去"
+        );
+        // 新装默认值本身必须合法(否则首次进设置页就存不了)。
+        let d = Prefs::default().prefetch_cache_bytes;
+        assert!(
+            (PREFETCH_CACHE_MIN..=PREFETCH_CACHE_MAX).contains(&d),
+            "默认值 {d} 不在 {PREFETCH_CACHE_MIN}~{PREFETCH_CACHE_MAX} 内"
+        );
     }
 
     fn ext(name: &str, url: &str) -> crate::emby::ExtDomain {
