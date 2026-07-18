@@ -474,12 +474,10 @@ async fn similar_items(state: State<'_, AppState>, item_id: String) -> Result<Ve
 /// 网络图标库(改图标弹窗浏览用)。默认命中 24h 缓存,force=true 重新拉四源。
 /// 返回空 = 从没拉成功过且本次也失败 → 前端提示「拉取失败」。
 #[tauri::command]
-async fn icon_library(
-    state: State<'_, AppState>,
-    force: bool,
-) -> Result<Vec<linplayer_core::icon_library::IconEntry>, String> {
-    // async + State(引用) 的命令 tauri 要求返 Result;库本身不报错(失败回退旧缓存/空)。
-    // 图标库拉的是公共图标仓库,不是 Emby → 用默认 UA 的通用客户端(见 http.rs UA 口径)。
+// 不再收 State:图标库拉的是公共图标仓库、不是 Emby,用默认 UA 的通用客户端就够
+// (见 http.rs 的 UA 口径),不需要 AppState 里那个 Emby 客户端。
+async fn icon_library(force: bool) -> Result<Vec<linplayer_core::icon_library::IconEntry>, String> {
+    // async 命令 tauri 要求返 Result;库本身不报错(失败回退旧缓存/空)。
     Ok(linplayer_core::icon_library::library(&http::client(), force).await)
 }
 
@@ -4032,6 +4030,17 @@ async fn afdian_verify(
     Ok(linplayer_core::sync::afdian_verify(&order_no).await)
 }
 
+/// 赞助下单页地址。
+///
+/// ★ 前端**不许自己写这个 URL**。2026-07-19 踩过:核层早有正确的
+/// `AFDIAN_SPONSOR_URL`,CalendarPage.tsx 却自己硬编了一个 `afdian.com/a/linplayer`
+/// —— 页面不是作者本人的,点「前往爱发电赞助」的人全被送错地方,赞助收益直接落空,
+/// 而功能本身看起来一切正常。付款地址这种东西必须只有一份。
+#[tauri::command]
+fn afdian_sponsor_url() -> String {
+    linplayer_core::sync::AFDIAN_SPONSOR_URL.to_string()
+}
+
 // ---------- 排行榜命令 ----------
 /// 当前构建可用的榜单分类(动漫需弹弹凭据、影视需 TMDB 密钥,均编译期注入)。
 #[tauri::command]
@@ -4507,6 +4516,7 @@ pub fn run() {
             ranking_categories,
             ranking_fetch,
             afdian_verify,
+            afdian_sponsor_url,
             trakt_device_code,
             trakt_poll,
             trakt_account,
@@ -4630,6 +4640,51 @@ mod api_contract_tests {
             !frames.contains("transform"),
             "@keyframes {name} 里出现了 transform —— 这会让 .page 成为 fixed 包含块,\
              页面内所有右键菜单/toast 都会偏位。入场只用 opacity。实际内容:{frames}"
+        );
+    }
+
+    /* 收款地址只能有一份 —— 前端不许出现任何硬编的爱发电 URL。
+       2026-07-19 用户发现:CalendarPage.tsx 写死了 `https://afdian.com/a/linplayer`,
+       而核层 AFDIAN_SPONSOR_URL 一直是正确的 `.../zzzwannasleep`。仓库里 README ×3、
+       Dart 侧、Rust 核层**全都是对的**,只有这一个前端副本是错的,偏偏它是用户唯一
+       会点到的那个按钮 —— 功能看着完全正常,赞助收益却全部流去了别人的页面。
+       这类错误没有任何运行期信号,只能靠这条钉死。
+       反向验证:在任意 .tsx/.ts 里写一个 afdian.com/a/xxx,此测试立刻红。 */
+    #[test]
+    fn frontend_never_hardcodes_a_sponsor_url() {
+        let mut offenders = Vec::new();
+        let mut walk = |dir: &std::path::Path| {
+            let mut stack = vec![dir.to_path_buf()];
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                    } else if matches!(
+                        p.extension().and_then(|x| x.to_str()),
+                        Some("ts") | Some("tsx")
+                    ) {
+                        let s = std::fs::read_to_string(&p).unwrap_or_default();
+                        for line in s.lines() {
+                            // 注释里可以提(本次就留了说明这段历史的注释),代码里不行。
+                            let t = line.trim_start();
+                            let is_comment =
+                                t.starts_with("//") || t.starts_with("*") || t.starts_with("/*");
+                            if !is_comment && (line.contains("afdian.com") || line.contains("afdian.net"))
+                            {
+                                offenders.push(format!("{}: {}", p.display(), line.trim()));
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        walk(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../src")));
+        assert!(
+            offenders.is_empty(),
+            "前端硬编了赞助/收款地址,必须改用 afdianSponsorUrl() 从核层取 —— \
+             写错一个字母,钱就进别人口袋,而且没有任何报错。\n{}",
+            offenders.join("\n")
         );
     }
 

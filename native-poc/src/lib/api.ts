@@ -1168,6 +1168,8 @@ export const bangumiCalendar = (onlyMine: boolean) =>
   invoke<CalendarEntry[]>("bangumi_calendar", { onlyMine });
 export const afdianVerify = (orderNo: string) =>
   invoke<AfdianVerifyResult>("afdian_verify", { orderNo });
+/** 赞助下单页地址。**别在前端硬编 URL** —— 收款地址只有核层那一份(见 lib.rs 的长注释)。 */
+export const afdianSponsorUrl = () => invoke<string>("afdian_sponsor_url");
 
 // ---------- 配置迁移(扫码搬服务器) ----------
 export const configExportQr = () => invoke<string>("config_export_qr");

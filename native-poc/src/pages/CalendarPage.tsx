@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   type CalendarEntry,
   type Item,
+  afdianSponsorUrl,
   afdianVerify,
   bangumiCalendar,
   bangumiSummary,
@@ -29,8 +30,11 @@ type View = "week" | "day";
 const WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 // 软锁:存校验通过的订单号即视为已解锁,不每次联网重校(爱发电校验要网络)。
 const LOCK_KEY = "cal:afdian";
-/** 赞助下单页。爱发电校验走 afdianVerify(订单号),这里只负责把人送到下单页。 */
-const kAfdianSponsorUrl = "https://afdian.com/a/linplayer";
+/* 赞助下单页地址来自核层(afdianSponsorUrl 命令),**不在这里硬编**。
+   2026-07-19 就是栽在这:这里曾写死一个凭空猜的爱发电主页(用项目名当用户名),
+   而核层 `AFDIAN_SPONSOR_URL` 一直是对的。那个页面不是作者本人的,点「前往爱发电
+   赞助」的人全被送错地方 —— 功能看着完全正常,赞助收益却是零。
+   收款地址必须只有一份;守卫测试 frontend_never_hardcodes_a_sponsor_url 钉着它。 */
 
 /* 追剧日历(用户 2026-07-16):
    - 提到侧栏(见 nav.ts),不再藏在 设置 里。
@@ -240,9 +244,10 @@ export default function CalendarPage({
                   onClick={() =>
                     // 外部浏览器打开:app 内没有浏览器壳,塞进 webview 只会把人困在 webview 里。
                     // 失败要说出来 —— 静默失败会让用户以为按钮是坏的(本仓最烂的 bug 类型)。
-                    openUrl(kAfdianSponsorUrl).catch((e) =>
-                      say(`打不开浏览器：${e}。请手动访问 ${kAfdianSponsorUrl}`, true),
-                    )
+                    void afdianSponsorUrl()
+                      .then((u) => openUrl(u).catch(() => say(`打不开浏览器，请手动访问 ${u}`, true)))
+                      // 地址取不到就别猜一个 —— 猜错等于把赞助送给别人。
+                      .catch((e) => say(`取赞助地址失败：${e}`, true))
                   }
                 >
                   前往爱发电赞助
