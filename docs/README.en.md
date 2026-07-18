@@ -171,11 +171,14 @@ Thanks to the following Emby servers for providing UI demos and long-term suppor
 
 ## Star History
 
-<a href="https://www.star-history.com/?type=date&repos=zzzwannasleep%2FLinPlayer">
+<!-- 自建实时图(oauth-proxy/functions/star/history.svg.js)。
+     不用 star-history.com:它没命中缓存就现场去 GitHub 拉,超过自己 10 秒上限就回 500，
+     README 里那张图「时不时看不了」就是这么来的（实测连 facebook/react 都 500）。 -->
+<a href="https://github.com/zzzwannasleep/LinPlayer/stargazers">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=zzzwannasleep/linplayer&type=date&theme=dark&legend=top-left&sealed_token=YzGbSgSFzLcAXL2bfZUBGY625cNArNjNErV_fzvJkGSGpr_Xo8X3sXD8xRJf0Nehyt_OzmkyLq61xHqLXMn2i9APoG2uXgW_Z7nNRZArCQ-HjjGtU6fMFg" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=zzzwannasleep/linplayer&type=date&legend=top-left&sealed_token=YzGbSgSFzLcAXL2bfZUBGY625cNArNjNErV_fzvJkGSGpr_Xo8X3sXD8xRJf0Nehyt_OzmkyLq61xHqLXMn2i9APoG2uXgW_Z7nNRZArCQ-HjjGtU6fMFg" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=zzzwannasleep/linplayer&type=date&legend=top-left&sealed_token=YzGbSgSFzLcAXL2bfZUBGY625cNArNjNErV_fzvJkGSGpr_Xo8X3sXD8xRJf0Nehyt_OzmkyLq61xHqLXMn2i9APoG2uXgW_Z7nNRZArCQ-HjjGtU6fMFg" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://291277.xyz/star/history.svg?theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://291277.xyz/star/history.svg" />
+   <img alt="Star History Chart" src="https://291277.xyz/star/history.svg" />
  </picture>
 </a>
 
