@@ -18,7 +18,7 @@
 // 只代理 Emby 直传流(直链/转码由调用方跳过);故只带全局 UA,无逐流鉴权头。
 // 取不到文件大小 / 起服失败 → start() 返回 None,调用方回退直连在线地址。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,18 +31,26 @@ use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 
 const CHUNK_SIZE: u64 = 4 * 1024 * 1024; // 每段 4MB
-/// 单连接内存读前缓冲硬上限。
-///
-/// 曾是 128MB,配上「窗口改成每连接」后就成了 **128MB × 活跃连接数** —— mpv 探测/跳转
-/// 期间会短暂并存两条连接,峰值 256MB+ 只为缓存几秒钟的画面,不值。
-/// 真正的大缓冲本来就该由 mpv 自己的 demuxer cache 扛,代理这层只需喂满它。
-const MAX_READ_AHEAD: u64 = 32 * 1024 * 1024;
 
-/// 单连接读前缓冲字节数 = 用户设的上限,钳进 [每 worker 一段, MAX_READ_AHEAD]。
+/// **预取超前窗口**上限:一条连接最多比播放位置提前拉这么多。
+///
+/// ★ 2026-07-19 从「缓存上限」里**拆出来** —— 这两件事以前共用一个值,是个真雷:
+/// 缓存上限放开到 GB 级后,预取窗口跟着变成 GB 级,一条连接会一路狂拉几个 G。
+/// 而被播放器丢下的连接**正是照着这个窗口把量拉满才停**(见 abandoned_connection 测试),
+/// 于是「跳一次进度条」的代价从白拉 32MB 升级成白拉几 GB。
+///
+/// 超前量本来也不需要大:真正的大缓冲由 mpv 自己的 demuxer cache 扛,代理这层
+/// 只要能把它喂满就行。64MB 在最慢的实测链路(~1.3MB/s)上也有 ~45 秒余量。
+const MAX_READ_AHEAD: u64 = 64 * 1024 * 1024;
+
+/// 预取超前窗口字节数,钳进 [每 worker 一段, MAX_READ_AHEAD]。
+///
+/// ★ 入参是用户设的**缓存上限**,但它在这里只当天花板用(用户把缓存调得很小时,
+/// 超前量不该超过缓存本身,否则刚拉回来的段立刻被环形覆盖掉)。
+/// 缓存上限本身有多大是 [`DiskCache`] 的事,不由这里决定。
 ///
 /// ★ 原来写的是 `MAX_READ_AHEAD.min((CHUNK*threads*2).max(cache_limit))` —— `max` 用反了:
-/// 用户的缓存上限本该是**天花板**(对齐 Dart 的「不超用户视频缓存上限」),那样写却成了
-/// 下限,默认 1GB 直接把窗口顶到硬上限。改成 clamp,语义才和设置项的名字一致。
+/// 用户的缓存上限本该是**天花板**,那样写却成了下限,默认 1GB 直接把窗口顶到硬上限。
 fn read_ahead_bytes(threads: usize, cache_limit_bytes: u64) -> u64 {
     let floor = CHUNK_SIZE * threads as u64; // 每个 worker 至少能有一段在手
     cache_limit_bytes.clamp(floor.min(MAX_READ_AHEAD), MAX_READ_AHEAD)
@@ -82,7 +90,8 @@ pub async fn start(
     let t = threads.clamp(2, 4);
     let read_ahead = read_ahead_bytes(t, cache_limit_bytes);
 
-    let origin = Origin::probe(upstream_url.clone(), t, read_ahead, on_invalid).await?;
+    let origin =
+        Origin::probe(upstream_url.clone(), t, read_ahead, cache_limit_bytes, on_invalid).await?;
 
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.ok()?;
     let port = listener.local_addr().ok()?.port();
@@ -114,9 +123,10 @@ pub async fn start(
 
     let url = format!("http://127.0.0.1:{port}/play");
     eprintln!(
-        "[Prefetch] 多线程预取代理启动 {url} <- {upstream_url} ({}MB, 每连接 {t} 线程, 读前缓冲 {}MB)",
+        "[Prefetch] 多线程预取代理启动 {url} <- {upstream_url} ({}MB, 每连接 {t} 线程, 预取窗口 {}MB, 磁盘缓存 {}MB)",
         origin.total_size / (1024 * 1024),
         read_ahead / (1024 * 1024),
+        origin.disk.ring * CHUNK_SIZE / (1024 * 1024),
     );
     Some(ProxyHandle {
         url,
@@ -127,6 +137,16 @@ pub async fn start(
 
 struct UpstreamState {
     url: String,
+    /// 跟随 302 后的**最终**地址(CDN 直链);worker 优先打它,省掉每段一次重定向。
+    ///
+    /// ★ 为什么值得单独存:UHD 那类服务端(v1.uhdnow.com)的直传流是 302 跳 CDN,
+    /// 而 `fetch_chunk` 每段都是一次独立请求 —— 不缓存最终地址,就是**每 4MB 重走一遍
+    /// 302**。实测 0.67s/段,占单段 TTFB(1.4s)的一半,并行省下的时间全赔在建连上:
+    /// 3 线程 4.0MB/s 反而**慢于**单连接 4.3MB/s,多线程加载成了负优化。
+    /// 原版 Emby 无重定向(实测 redirect=0.000000),此字段恒为 None,零影响。
+    ///
+    /// CDN 直链通常自带时效签名,过期即失效 → 失败时清空回退 `url` 重新解析(见 fetch_chunk)。
+    resolved: Option<String>,
     resign_disabled: bool,
     resign_in_flight: bool,
 }
@@ -141,14 +161,127 @@ struct Origin {
     closed: AtomicBool,
     client: reqwest::Client,
     on_invalid: Option<ResignFn>,
+    disk: Arc<DiskCache>,
 }
 
-/// 每连接的顺序取数窗口。连接结束即 done,它的 worker 随之退出、缓冲随 Arc 释放。
+/// 落盘的分段缓存 —— **全会话共享**(所有连接共用一份),不是每连接一份。
+///
+/// ## 为什么必须落盘(2026-07-19 用户定)
+/// 原来分段全存在内存 `HashMap<u64, Arc<Vec<u8>>>` 里,峰值 = 单连接窗口 × 存活连接数。
+/// 实测(见 `abandoned_connection_keeps_fetching_after_client_disconnect`):播放器一 seek
+/// 就丢下旧连接新开一条,而被丢下的连接**还会把整个窗口填满才罢休** —— 快速拖 N 次进度条
+/// 就是 32MB × N 瞬时占用,内存不足直接闪退。因为不敢放大,用户设置项被硬钳在 16~32MB,
+/// 「视频缓存上限」这个设置形同虚设。
+/// 落盘后内存只剩**正在传输的那几段**(threads × 4MB),窗口上限才敢跟着用户设置走。
+///
+/// ## 为什么共享而不是每连接一份
+/// 共享才有"缓存"的意义:seek 回看过的区域直接命中磁盘,不重新下载(省用户流量/服务器压力)。
+/// 每连接一份的话,拖回去一次就得重下一次,那只是"缓冲"不是"缓存"。
+///
+/// 稀疏文件:按 `chunk * CHUNK_SIZE` 定位写入,实际占用只有已下载的部分。
+/// 会话结束(ProxyHandle Drop)即删除,不跨会话保留。
+struct DiskCache {
+    file: std::sync::Mutex<std::fs::File>,
+    /// 槽位 -> 当前存的分段号。`slots[c % n] == Some(c)` 才算命中。
+    ///
+    /// ★ 环形复用而不是无限增长:磁盘占用恒定 = 用户设的缓存上限。整片直存看着简单,
+    /// 但测试服里随手就有 29.6GB 的片子 —— 顺序看完一遍就把用户硬盘吃掉 29.6GB,
+    /// 这和「内存爆掉」是同一个错误换了个介质。环形写下来,旧段被新段覆盖,
+    /// 上限内的回看照样命中。
+    slots: Mutex<std::collections::HashMap<u64, u64>>,
+    ring: u64, // 槽位数
+    path: std::path::PathBuf,
+}
+
+impl DiskCache {
+    /// `cache_bytes` = 用户设的缓存上限,决定环形槽位数(磁盘占用封顶就是它)。
+    /// 槽位至少要比并发 worker 多,否则 worker 之间会互相覆盖对方刚写的段。
+    fn create(total: u64, cache_bytes: u64, threads: usize) -> Option<Arc<DiskCache>> {
+        let dir = crate::paths::cache_dir("prefetch");
+        std::fs::create_dir_all(&dir).ok()?;
+        // 进程 id + 总长做名字:同一进程内多次起播不会互相踩(旧的先 Drop 删掉)。
+        let path = dir.join(format!("s{}_{}.part", std::process::id(), total));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .ok()?;
+        let want = (cache_bytes / CHUNK_SIZE).max(threads as u64 * 2);
+        let ring = want.min(total.div_ceil(CHUNK_SIZE)); // 比整片还大就没必要 // 比整片还大就没必要
+        Some(Arc::new(DiskCache {
+            file: std::sync::Mutex::new(file),
+            slots: Mutex::new(std::collections::HashMap::new()),
+            ring: ring.max(1),
+            path,
+        }))
+    }
+
+    /// 分段 c 在盘上的槽位偏移。
+    fn off(&self, c: u64) -> u64 {
+        (c % self.ring) * CHUNK_SIZE
+    }
+
+    /// 该段是否就绪(槽位没被别的段覆盖掉)。
+    async fn has(&self, c: u64) -> bool {
+        self.slots.lock().await.get(&(c % self.ring)) == Some(&c)
+    }
+
+    /// 写入一段并标记就绪。写盘走 spawn_blocking,不阻塞 runtime。
+    async fn put(self: &Arc<Self>, c: u64, data: Vec<u8>) -> bool {
+        let me = self.clone();
+        let ok = tokio::task::spawn_blocking(move || {
+            use std::io::{Seek, SeekFrom, Write};
+            let mut f = me.file.lock().ok()?;
+            f.seek(SeekFrom::Start(me.off(c))).ok()?;
+            f.write_all(&data).ok()?;
+            Some(())
+        })
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+        if ok {
+            self.slots.lock().await.insert(c % self.ring, c);
+        }
+        ok
+    }
+
+    /// 读回一段(调用方已确认 have 命中)。
+    async fn get(self: &Arc<Self>, c: u64, len: usize) -> Option<Vec<u8>> {
+        let me = self.clone();
+        let buf = tokio::task::spawn_blocking(move || {
+            use std::io::{Read, Seek, SeekFrom};
+            let mut f = me.file.lock().ok()?;
+            f.seek(SeekFrom::Start(me.off(c))).ok()?;
+            let mut buf = vec![0u8; len];
+            f.read_exact(&mut buf).ok()?;
+            Some(buf)
+        })
+        .await
+        .ok()
+        .flatten();
+        // 读完复核:并发下别的 worker 可能刚把这个槽覆盖成另一段,那就当没命中重下。
+        match buf {
+            Some(b) if self.has(c).await => Some(b),
+            _ => None,
+        }
+    }
+}
+
+impl Drop for DiskCache {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path); // 会话内缓存,退出即清,不留垃圾
+    }
+}
+
+/// 每连接的顺序取数窗口。连接结束即 done,它的 worker 随之退出。
+/// **不再持有分段数据**(数据在 [`DiskCache`] 里,全连接共享)。
 struct ChunkState {
-    ready: HashMap<u64, Arc<Vec<u8>>>, // 已就绪分段(顺序消费后即清,内存有界)
-    failed: HashSet<u64>,              // 永久失败(供给端遇到即断流)
-    serve_chunk: u64,                  // 下一个要供给的分段
-    fetch_cursor: u64,                 // 下一个要分配给 worker 的分段
+    failed: HashSet<u64>, // 永久失败(供给端遇到即断流)
+    serve_chunk: u64,     // 下一个要供给的分段
+    fetch_cursor: u64,    // 下一个要分配给 worker 的分段
 }
 
 struct Stream {
@@ -157,19 +290,29 @@ struct Stream {
     state: Mutex<ChunkState>,
     data_notify: Notify,   // worker -> serve:某段就绪/失败
     window_notify: Notify, // serve -> worker:窗口推进
+    /// 连接结束(播放器断开/跳转)-> 立刻叫停正在飞的 fetch,别再烧用户流量。
+    done_notify: Notify,
     done: AtomicBool,
 }
 
 impl Origin {
+    /// 分段 c 的真实长度(末段可能不足 CHUNK_SIZE)。
+    fn chunk_len(&self, c: u64) -> usize {
+        let start = c * CHUNK_SIZE;
+        ((start + CHUNK_SIZE).min(self.total_size) - start) as usize
+    }
+
     async fn probe(
         upstream_url: String,
         threads: usize,
         read_ahead_bytes: u64,
+        cache_limit_bytes: u64,
         on_invalid: Option<ResignFn>,
     ) -> Option<Arc<Origin>> {
         // 预取拉上游用 LinPlayerPreload UA(用户 2026-07-19 定):服主要能把「替 mpv
         // 提前拉的旁路请求」和「用户正在看的那一路」在日志里分开。
         let client = crate::http::preload_client();
+        let mut resolved: Option<String> = None;
 
         // 探总大小 + Content-Type:Range bytes=0-0 -> 206 Content-Range: bytes 0-0/<total>。
         let (total, ctype) = match tokio::time::timeout(
@@ -182,6 +325,11 @@ impl Origin {
         .await
         {
             Ok(Ok(resp)) => {
+                // 探测本来就跟完了 302,顺手把落点记下来给 worker 用(只在真发生跳转时存)。
+                let final_url = resp.url().as_str().to_string();
+                if final_url != upstream_url {
+                    resolved = Some(final_url);
+                }
                 let total = resp
                     .headers()
                     .get("content-range")
@@ -215,9 +363,16 @@ impl Origin {
         // (预算 16MB / 4 线程时会算出 8 段 = 32MB)。.max(1) 只是防
         // worker 里 `serve_chunk + read_ahead_chunks - 1` 下溢。
         let read_ahead_chunks = (read_ahead_bytes / CHUNK_SIZE).max(1);
+        // ★ 给磁盘缓存的是**用户设的缓存上限**,不是预取窗口 —— 两者已拆开(见 MAX_READ_AHEAD)。
+        //   传错的话缓存会被压回 64MB,用户设的 GB 级上限又变成摆设。
+        let disk = DiskCache::create(total, cache_limit_bytes, threads).or_else(|| {
+            logw("建不了磁盘缓存文件(权限/空间?),不启用多线程加载,回退直连");
+            None
+        })?;
         Some(Arc::new(Origin {
             upstream: Mutex::new(UpstreamState {
                 url: upstream_url,
+                resolved,
                 resign_disabled: false,
                 resign_in_flight: false,
             }),
@@ -228,6 +383,7 @@ impl Origin {
             closed: AtomicBool::new(false),
             client,
             on_invalid,
+            disk,
         }))
     }
 
@@ -243,7 +399,14 @@ impl Origin {
         let end = (start + CHUNK_SIZE).min(self.total_size) - 1;
         let want = (end - start + 1) as usize;
         for attempt in 0..3 {
-            let url = self.upstream.lock().await.url.clone();
+            // 优先打 302 落点(CDN 直链),省掉每段一次重定向;没跳转过就还是原地址。
+            let (url, used_resolved) = {
+                let up = self.upstream.lock().await;
+                match &up.resolved {
+                    Some(r) => (r.clone(), true),
+                    None => (up.url.clone(), false),
+                }
+            };
             let resp = self
                 .client
                 .get(&url)
@@ -268,7 +431,15 @@ impl Origin {
                          它连不上 CF 时会自己造一个 502(见 net/cf/proxy.rs 的 Bad Gateway 分支)。
                          所以重签拿回同一个地址是常态,不能据此停用重签 —— 见 refresh_upstream。 */
                     let _ = r.status();
-                    self.refresh_upstream().await;
+                    /* ★ 先怪 CDN 直链,再怪签名链。CDN 落点通常自带时效签名,过期后
+                       只需重走一次 302 就能拿到新落点 —— 这时候去调重签回调(重走
+                       PlaybackInfo)是杀鸡用牛刀,还平白给服务端加一次接口压力。
+                       清空 resolved 后下一 attempt 自动回落 url 并重新跟随重定向。 */
+                    if used_resolved {
+                        self.upstream.lock().await.resolved = None;
+                    } else {
+                        self.refresh_upstream().await;
+                    }
                 }
                 Err(_) => {} // 纯网络抖动,重试同一 URL
             }
@@ -305,6 +476,7 @@ impl Origin {
         match fresh {
             Some(f) if !f.is_empty() && f != up.url => {
                 up.url = f;
+                up.resolved = None; // 换了签名链,旧的 302 落点一并作废,下次重新跟随
                 eprintln!("[Prefetch] 上游链接失效,已重签换新地址继续拉流");
             }
             // 地址没变:链还有效,是对端/网关抖动(CF 反代 502 就长这样)。retry 即可,不停用。
@@ -330,9 +502,14 @@ impl Origin {
             None => (0, self.total_size - 1),
         };
 
-        if range.is_some() && start >= self.total_size {
+        // ★ 越界判定必须在**钳位之前**用原始 start:原来先 `s.min(total-1)` 再判
+        // `start >= total_size`,这个分支就永远进不去(死代码),越界请求会被悄悄
+        // 挪回最后一字节回一个 206 —— 播放器拿到的是"有效但错位"的数据。
+        if range.is_some_and(|(s, _)| s >= self.total_size) {
             stream
-                .write_all(b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\n\r\n")
+                .write_all(
+                    b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
                 .await?;
             return Ok(());
         }
@@ -349,6 +526,17 @@ impl Origin {
             head.push_str("HTTP/1.1 200 OK\r\n");
         }
         head.push_str("Accept-Ranges: bytes\r\n");
+        /* ★ 必须显式 `Connection: close`(2026-07-19 修:这就是「有流量、没画面没声音」的根因)。
+           我们每条 TCP 只读**一个**请求(read_request 一次),然后在 serve() 里把 body 一直
+           喂到结束。可 HTTP/1.1 默认是**长连接**,不写这个头就是在对播放器承诺"这条连接还能
+           再发请求"。ffmpeg 一 seek(MKV 索引在末尾,起播必 seek;续播还要再跳一次)就把
+           `Range: bytes=<末尾>-` **管线化发在同一条 socket 上** —— 那个请求没人读,响应永远
+           不来。实测 ffprobe:`1 connection, 1 request, 0 seeks`,seek 静默失败后退化成**从头
+           线性读完整个文件**(289MB 全下,73 段全拉),而播放器在干等 → 有流量、黑屏无声。
+           声明 close 后 ffmpeg 每次 seek 老老实实新开一条连接,正好落进「每连接独立窗口」的设计。
+           (真做长连接得在 handle 里循环收请求 + 复用 socket,代码多得多,而收益为零:
+            seek 本来就要换窗口,换连接反而正是我们想要的语义。) */
+        head.push_str("Connection: close\r\n");
         head.push_str(&format!("Content-Type: {}\r\n", self.content_type));
         head.push_str(&format!("Content-Length: {len}\r\n\r\n"));
         stream.write_all(head.as_bytes()).await?;
@@ -363,13 +551,13 @@ impl Origin {
             origin: self.clone(),
             last_chunk: end / CHUNK_SIZE,
             state: Mutex::new(ChunkState {
-                ready: HashMap::new(),
                 failed: HashSet::new(),
                 serve_chunk: first,
                 fetch_cursor: first,
             }),
             data_notify: Notify::new(),
             window_notify: Notify::new(),
+            done_notify: Notify::new(),
             done: AtomicBool::new(false),
         });
         for _ in 0..self.threads {
@@ -378,8 +566,9 @@ impl Origin {
         }
 
         let r = st.serve(&mut stream, start, end).await;
-        st.done.store(true, Ordering::SeqCst); // 供给结束 -> 本连接 worker 退出、缓冲释放
+        st.done.store(true, Ordering::SeqCst); // 供给结束 -> 本连接 worker 退出
         st.window_notify.notify_waiters();
+        st.done_notify.notify_waiters(); // 取消在飞的 fetch(跳进度条时省流量的关键)
         r
     }
 }
@@ -402,6 +591,10 @@ impl Stream {
                 } else {
                     let c = st.fetch_cursor;
                     st.fetch_cursor += 1;
+                    // 已在盘上就别再下一遍(seek 回看/两条连接区间重叠时命中)。
+                    if self.origin.disk.has(c).await {
+                        continue;
+                    }
                     Some(c)
                 }
             };
@@ -418,17 +611,26 @@ impl Stream {
                 }
             };
 
-            let fetched = self.origin.fetch_chunk(c).await;
-            {
-                let mut st = self.state.lock().await;
-                match fetched {
-                    Some(d) => {
-                        st.ready.insert(c, Arc::new(d));
-                    }
-                    None => {
-                        st.failed.insert(c);
-                    }
-                }
+            /* ★ 在飞的请求也要能取消。只靠循环顶部的 over() 判断,是「这一段拉完了才发现
+               连接早没了」—— 播放器跳一次进度条,每条被丢下的连接还要把 threads 段
+               (12MB)拉完才罢休,纯烧用户流量。
+               notified() 必须在检查 over() **之前**注册,否则 done 恰好在两者之间置位
+               就会丢掉这次唤醒,worker 卡到 fetch 自然结束。 */
+            let stop = self.done_notify.notified();
+            if self.over() {
+                break;
+            }
+            let fetched = tokio::select! {
+                f = self.origin.fetch_chunk(c) => f,
+                _ = stop => break, // 播放器走了,这段不要了(drop future = 断掉上游连接)
+            };
+            // 落盘成功才算就绪;写盘失败(磁盘满/被删)等同取数失败,断流回退直连。
+            let ok = match fetched {
+                Some(d) => self.origin.disk.put(c, d).await,
+                None => false,
+            };
+            if !ok {
+                self.state.lock().await.failed.insert(c);
             }
             self.data_notify.notify_waiters();
         }
@@ -442,8 +644,7 @@ impl Stream {
                 return;
             }
             for c in st.serve_chunk..next {
-                st.ready.remove(&c);
-                st.failed.remove(&c);
+                st.failed.remove(&c); // 分段数据留在盘上,seek 回看可直接命中
             }
             st.serve_chunk = next;
         }
@@ -456,18 +657,37 @@ impl Stream {
             if self.over() {
                 return None;
             }
-            {
-                let st = self.state.lock().await;
-                if let Some(d) = st.ready.get(&c) {
-                    return Some(d.clone());
-                }
-                if st.failed.contains(&c) {
-                    return None;
-                }
+            if self.origin.disk.has(c).await {
+                let len = self.origin.chunk_len(c);
+                return self.origin.disk.get(c, len).await.map(Arc::new);
+            }
+            if self.state.lock().await.failed.contains(&c) {
+                return None;
             }
             // 250ms 兜底重查:防丢失 notify 唤醒,无需逐段 oneshot 记账。
             let _ = tokio::time::timeout(Duration::from_millis(250), self.data_notify.notified())
                 .await;
+        }
+    }
+
+    /// 播放器是不是已经走了(跳进度条/退出)。
+    ///
+    /// ★ 光靠 `write_all` 报错是**不够及时**的:等分段的那段时间里我们根本没在写,
+    /// 而那恰恰是浪费发生的时段 —— worker 正照着预取窗口一路拉。响应已声明
+    /// `Connection: close`,播放器不会再往这条连接上发东西,所以「可读」只可能是
+    /// 对端关闭(EOF/RST)。读到就立刻收摊。
+    async fn peer_gone(stream: &TcpStream) {
+        loop {
+            if stream.readable().await.is_err() {
+                return;
+            }
+            let mut b = [0u8; 1];
+            match stream.try_read(&mut b) {
+                Ok(0) => return,  // EOF = 对端关了
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(_) => return, // RST 等
+                Ok(_) => continue, // 已声明 close,不该有;丢弃继续等
+            }
         }
     }
 
@@ -476,9 +696,12 @@ impl Stream {
         let mut pos = start;
         while pos <= end && !self.over() {
             let c = pos / CHUNK_SIZE;
-            let bytes = match self.await_chunk(c).await {
-                Some(b) => b,
-                None => break, // 失败/停服 -> 断流,播放器回退 fallback
+            let bytes = tokio::select! {
+                b = self.await_chunk(c) => match b {
+                    Some(b) => b,
+                    None => break, // 失败/停服 -> 断流,播放器回退 fallback
+                },
+                _ = Self::peer_gone(stream) => break, // 播放器跳走了,别再等也别再拉
             };
             let within = (pos - c * CHUNK_SIZE) as usize;
             if within >= bytes.len() {
@@ -559,14 +782,16 @@ fn parse_range(header: &str) -> Option<(u64, Option<u64>)> {
 mod tests {
     use super::*;
 
-    /* 读前缓冲是**每连接**的,所以峰值 = 窗口 × 活跃连接数(mpv 探测/跳转时会并存两条)。
-       旧公式 `MAX.min((CHUNK*t*2).max(cache_limit))` 把用户的 1GB 缓存上限当**下限**用,
-       窗口直接顶到硬上限 —— 配上每连接窗口就是几百 MB 只为存几秒画面。 */
+    /* 预取超前窗口必须**独立于**缓存上限被兜住(2026-07-19 拆分)。
+       这两件事一度共用一个值:缓存上限放开到 GB 级后,预取窗口跟着变 GB 级,
+       一条连接一路狂拉几个 G,而被播放器丢下的连接正是照着这个窗口拉满才停 ——
+       跳一次进度条白烧几 G 流量。缓存要多大是 DiskCache 的事,和超前量无关。
+       旧公式 `MAX.min((CHUNK*t*2).max(cache_limit))` 还把上限当**下限**用,一并修掉。 */
     #[test]
     fn read_ahead_is_capped_and_respects_user_limit() {
-        // 默认 1GB 缓存上限:被硬上限压到 32MB,不是跟着 1GB 走。
+        // 用户把缓存设成 1GB,预取窗口**不能**跟着变 1GB —— 被 MAX_READ_AHEAD 兜住。
         assert_eq!(read_ahead_bytes(3, 1024 * 1024 * 1024), MAX_READ_AHEAD);
-        assert!(MAX_READ_AHEAD <= 32 * 1024 * 1024, "每连接窗口别再往上放");
+        assert!(MAX_READ_AHEAD <= 64 * 1024 * 1024, "超前量别再往上放,大缓冲交给 mpv 自己");
         // 用户调小,就要真的小(它是天花板,不是地板)。
         assert_eq!(read_ahead_bytes(2, 16 * 1024 * 1024), 16 * 1024 * 1024);
         // 但至少给每个 worker 一段,否则 worker 抢不到活。
@@ -578,6 +803,29 @@ mod tests {
                 assert!((b / CHUNK_SIZE).max(1) * CHUNK_SIZE <= MAX_READ_AHEAD, "t={t} limit={limit}");
             }
         }
+    }
+
+    /* 磁盘占用必须**封顶在用户设的上限**,不能跟着片子大小涨。
+       测试服里随手就有 29.6GB 的片子,整片直存 = 把用户硬盘吃光,
+       这和「内存爆掉」是同一个错误换了介质。环形复用:槽位数 = 上限/段大小。
+       反向验证:把 DiskCache::create 里的 `ring` 改成 `total.div_ceil(CHUNK_SIZE)`
+       (即整片直存),本测试立刻红。 */
+    #[test]
+    fn disk_cache_is_capped_not_proportional_to_file_size() {
+        let huge = 30 * 1024 * 1024 * 1024u64; // 30GB 的片子
+        let limit = 256 * 1024 * 1024; // 用户只给 256MB
+        let d = DiskCache::create(huge, limit, 3).expect("该建得出");
+        let on_disk = d.ring * CHUNK_SIZE;
+        assert!(
+            on_disk <= limit,
+            "30GB 的片子占了 {}MB 盘,超出用户设的 {}MB 上限",
+            on_disk / 1048576,
+            limit / 1048576
+        );
+        // 小片子不该白占:环形不超过整片本身。
+        let small = 20 * 1024 * 1024u64;
+        let d2 = DiskCache::create(small, limit, 3).expect("该建得出");
+        assert!(d2.ring * CHUNK_SIZE <= small + CHUNK_SIZE, "小片子不该按上限撑大");
     }
 
     #[test]
@@ -612,10 +860,13 @@ mod tests {
 
         let cli = crate::http::client();
         // 三处取样:头部(mpv 先读头)、跨 chunk 边界、深处 seek。
+        // ★ 深处 seek 的位置必须**按总长算**,不能硬编码 300MB —— 片子比它小的话
+        //   (实测那部 289MB)就越界了,上游返 0 字节,测试红的是它自己不是代理。
+        let deep = h.origin.total_size / 2;
         for (name, s, e) in [
             ("头部", 0u64, 65_535u64),
             ("跨4MB边界", CHUNK_SIZE - 1024, CHUNK_SIZE + 1023),
-            ("深处seek", 300 * 1024 * 1024, 300 * 1024 * 1024 + 65_535),
+            ("深处seek", deep, deep + 65_535),
         ] {
             let rg = format!("bytes={s}-{e}");
             let up = cli.get(&url).header("Range", &rg).send().await.unwrap();
@@ -896,6 +1147,7 @@ mod tests {
         Origin {
             upstream: Mutex::new(UpstreamState {
                 url: "http://127.0.0.1:1/s".into(),
+                resolved: None,
                 resign_disabled: false,
                 resign_in_flight: false,
             }),
@@ -906,6 +1158,8 @@ mod tests {
             closed: AtomicBool::new(false),
             client: crate::http::preload_client(),
             on_invalid: cb,
+            disk: DiskCache::create(100 * CHUNK_SIZE, 32 * 1024 * 1024, 2)
+                .expect("测试环境该建得出缓存文件"),
         }
     }
 
@@ -933,6 +1187,301 @@ mod tests {
         assert!(o2.upstream.lock().await.resign_disabled, "no url from callback = disable resign");
     }
 
+    /* 起一个假上游 + 一条真连接,返回响应头文本。 */
+    async fn head_of_first_response(range: &str) -> String {
+        const TOTAL: u64 = 40 * 1024 * 1024;
+        let up = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let up_port = up.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut c, _)) = up.accept().await {
+                tokio::spawn(async move {
+                    let (_m, rg) = match read_request(&mut c).await {
+                        Ok(v) => v,
+                        Err(_) => return,
+                    };
+                    let (s, e) = match rg {
+                        Some((s, e)) => (s, e.unwrap_or(TOTAL - 1).min(TOTAL - 1)),
+                        None => (0, TOTAL - 1),
+                    };
+                    let body = vec![0u8; (e - s + 1) as usize];
+                    let nl = String::from_utf8(vec![13, 10]).unwrap();
+                    let head = format!(
+                        "HTTP/1.1 206 Partial Content{nl}Content-Range: bytes {s}-{e}/{TOTAL}{nl}Content-Type: video/x-matroska{nl}Content-Length: {}{nl}{nl}",
+                        body.len()
+                    );
+                    let _ = c.write_all(head.as_bytes()).await;
+                    let _ = c.write_all(&body).await;
+                });
+            }
+        });
+        let h = start(format!("http://127.0.0.1:{up_port}/f"), 2, 16 * 1024 * 1024, None)
+            .await
+            .expect("代理该起得来");
+        let mut cli = TcpStream::connect(("127.0.0.1", url_port(&h.url))).await.unwrap();
+        let nl = String::from_utf8(vec![13, 10]).unwrap();
+        cli.write_all(format!("GET /play HTTP/1.1{nl}Range: {range}{nl}{nl}").as_bytes())
+            .await
+            .unwrap();
+        let mut w = Vec::new();
+        let mut one = [0u8; 1];
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if cli.read_exact(&mut one).await.is_err() {
+                    return;
+                }
+                w.push(one[0]);
+                // CRLFCRLF 用字节构造:本文件里直接写转义序列会被工具链吃掉反斜杠。
+                if w.len() >= 4 && w[w.len() - 4..] == [13u8, 10, 13, 10] {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("读响应头不该超时");
+        String::from_utf8_lossy(&w).to_string()
+    }
+
+    /* 回归:响应必须声明 `Connection: close`。
+       我们每条 TCP 只读一个请求,而 HTTP/1.1 默认长连接 —— 不声明 close 就是在骗播放器
+       "还能再发"。ffmpeg 一 seek 就把下一个 Range 管线化发在同一条 socket 上,没人读、
+       响应不来 → seek 静默失败,退化成从头线性读完整个文件 = 用户报的「有流量没画面没声音」。
+       反向验证:把 handle() 里那行 `head.push_str("Connection: close
+
+")` 删掉,本测试立刻红。 */
+    #[tokio::test]
+    async fn response_declares_connection_close() {
+        let head = head_of_first_response("bytes=0-").await;
+        assert!(
+            head.to_ascii_lowercase().contains("connection: close"),
+            "没声明 Connection: close,播放器会把 seek 请求管线化到同一条连接上永远等不到响应
+{head}"
+        );
+    }
+
+    /* 回归:越界 Range 必须回 416,不能钳回最后一字节假装 206。
+       原来先 `s.min(total-1)` 再判 `start >= total_size`,判定永远为假 = 死代码。
+       反向验证:把 handle() 里的越界判定改回用钳位后的 start,本测试立刻红。 */
+    #[tokio::test]
+    async fn out_of_range_start_gets_416_not_bogus_206() {
+        let head = head_of_first_response("bytes=99999999999-").await;
+        assert!(head.starts_with("HTTP/1.1 416"), "越界 Range 该回 416,实得:
+{head}");
+    }
+
+    /* 回归:上游**不支持 Range** 时必须起服失败(返 None),让调用方回退直连。
+       实测(2026-07-19)原版 Emby(mecf.mebimmer.de)对 Static=true 直传流完整支持 Range:
+       206 + Content-Range + Accept-Ranges,4MB 分段一字不差 —— 所以这条路本身是普适的。
+       但万一碰上忽略 Range 的服务端(自建反代/某些 fork),代理**绝不能**硬上:
+       没有 Content-Range 就拿不到 total,分段定位全错,喂给播放器就是黑屏。
+       此处用「回 200 且不给 Content-Range」的假上游守住这个降级。
+       反向验证:把 probe 里的 `if total <= CHUNK_SIZE { return None }` 去掉,本测试立刻红。 */
+    #[tokio::test]
+    async fn upstream_without_range_support_refuses_to_start() {
+        let up = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let up_port = up.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut c, _)) = up.accept().await {
+                tokio::spawn(async move {
+                    if read_request(&mut c).await.is_err() {
+                        return;
+                    }
+                    // 忽略 Range:回 200 全量,**不给 Content-Range**(不支持 Range 的服务端就长这样)。
+                    let body = vec![0u8; 4096];
+                    let nl = String::from_utf8(vec![13, 10]).unwrap();
+                    let head = format!(
+                        "HTTP/1.1 200 OK{nl}Content-Type: video/mp4{nl}Content-Length: {}{nl}{nl}",
+                        body.len()
+                    );
+                    let _ = c.write_all(head.as_bytes()).await;
+                    let _ = c.write_all(&body).await;
+                });
+            }
+        });
+        let h = start(format!("http://127.0.0.1:{up_port}/f"), 3, 16 * 1024 * 1024, None).await;
+        assert!(
+            h.is_none(),
+            "上游不支持 Range 却把代理起起来了 —— 分段定位必然错位,播放器直接黑屏;             正确行为是返 None 让调用方回退直连在线地址"
+        );
+    }
+
+    /* 回归:上游 302 跳 CDN 时,重定向**只能走一次**(探测那次),不能每段重走。
+       UHD 那类服务端(v1.uhdnow.com)的直传流就是 302 跳 CDN,实测每次重定向 0.67s,
+       占单段 TTFB 的一半 —— 每 4MB 重走一遍的话,3 线程(4.0MB/s)反而慢于
+       单连接(4.3MB/s),多线程加载直接变负优化。
+       此处假上游:/redir 一律 302 到 /real,统计 /redir 被打的次数。
+       反向验证:把 fetch_chunk 里的 `up.resolved` 分支去掉(恒用 up.url),
+       /redir 会被打成「段数+1」次,本测试立刻红。 */
+    #[tokio::test]
+    async fn follows_redirect_once_not_per_chunk() {
+        use std::sync::atomic::AtomicUsize;
+
+        const TOTAL: u64 = 40 * 1024 * 1024; // 10 段
+        let redir_hits = Arc::new(AtomicUsize::new(0));
+
+        let up = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let up_port = up.local_addr().unwrap().port();
+        let hits = redir_hits.clone();
+        tokio::spawn(async move {
+            while let Ok((mut c, _)) = up.accept().await {
+                let hits = hits.clone();
+                tokio::spawn(async move {
+                    // 需要看路径,自己读一遍请求行(read_request 只回 method/range)。
+                    let mut buf = Vec::new();
+                    let mut one = [0u8; 1];
+                    loop {
+                        match c.read(&mut one).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(_) => {}
+                        }
+                        buf.push(one[0]);
+                        if buf.len() >= 4 && buf[buf.len() - 4..] == [13u8, 10, 13, 10] {
+                            break;
+                        }
+                    }
+                    let text = String::from_utf8_lossy(&buf).to_string();
+                    let path = text.split(' ').nth(1).unwrap_or("/").to_string();
+                    let nl = String::from_utf8(vec![13, 10]).unwrap();
+
+                    if path.starts_with("/redir") {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        let loc = format!("http://127.0.0.1:{up_port}/real");
+                        let head = format!(
+                            "HTTP/1.1 302 Found{nl}Location: {loc}{nl}Content-Length: 0{nl}{nl}"
+                        );
+                        let _ = c.write_all(head.as_bytes()).await;
+                        return;
+                    }
+                    // /real:正常 206
+                    let rg = text
+                        .lines()
+                        .find(|l| l.to_ascii_lowercase().starts_with("range:"))
+                        .and_then(|l| parse_range(l[6..].trim()));
+                    let (s, e) = match rg {
+                        Some((s, e)) => (s, e.unwrap_or(TOTAL - 1).min(TOTAL - 1)),
+                        None => (0, TOTAL - 1),
+                    };
+                    let body = vec![0u8; (e - s + 1) as usize];
+                    let head = format!(
+                        "HTTP/1.1 206 Partial Content{nl}Content-Range: bytes {s}-{e}/{TOTAL}{nl}Content-Type: video/mp4{nl}Content-Length: {}{nl}{nl}",
+                        body.len()
+                    );
+                    let _ = c.write_all(head.as_bytes()).await;
+                    let _ = c.write_all(&body).await;
+                });
+            }
+        });
+
+        let h = start(format!("http://127.0.0.1:{up_port}/redir"), 3, 16 * 1024 * 1024, None)
+            .await
+            .expect("跟随 302 后拿得到 Content-Range,代理该起得来");
+
+        let mut cli = TcpStream::connect(("127.0.0.1", url_port(&h.url))).await.unwrap();
+        let nl = String::from_utf8(vec![13, 10]).unwrap();
+        cli.write_all(format!("GET /play HTTP/1.1{nl}Range: bytes=0-{nl}{nl}").as_bytes())
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(30), async {
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                match cli.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
+        })
+        .await;
+
+        let n = redir_hits.load(Ordering::SeqCst);
+        assert_eq!(
+            n, 1,
+            "302 被重走了 {n} 次(该只有探测那一次)—— 每段重定向会把多线程的收益全部赔光"
+        );
+    }
+
+    /* 回归:播放器**抛弃连接**(跳进度条 = 每次 seek 开新连接、丢旧连接)后,
+       旧连接必须**立刻停止拉取**,不能照着预取窗口把量拉满。
+       修之前:断开后 3 秒内还会继续取 6 段(24MB);而预取窗口跟着缓存上限
+       放开到 GB 级之后,同一个洞会变成白拉几个 G —— 跳一次进度条烧掉用户几 G 流量。
+       修法两层:serve 等分段时用 peer_gone 感知断开;worker 用 done_notify 取消在飞的请求。
+       反向验证(两层缺一都红,已各自验过):去掉 serve 的 peer_gone 分支 -> 漏 12544KB;
+       去掉 worker 的 stop 分支 -> 漏 12288KB(正好 3 个 worker 各一段在飞)。
+       ★ 口径必须按**字节**而不是请求数:在飞取消发生在请求已发出之后,省的是剩余传输,
+       按请求数计的话 worker 那层怎么改都是绿的(踩过这个坑)。 */
+    #[tokio::test]
+    async fn abandoned_connection_stops_fetching_immediately() {
+        use std::sync::atomic::AtomicUsize;
+        const TOTAL: u64 = 400 * 1024 * 1024;
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        let up = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let up_port = up.local_addr().unwrap().port();
+        let f = fetches.clone();
+        tokio::spawn(async move {
+            while let Ok((mut c, _)) = up.accept().await {
+                let f = f.clone();
+                tokio::spawn(async move {
+                    let (_m, rg) = match read_request(&mut c).await {
+                        Ok(v) => v,
+                        Err(_) => return,
+                    };
+                    let (s, e) = match rg {
+                        Some((s, e)) => (s, e.unwrap_or(TOTAL - 1).min(TOTAL - 1)),
+                        None => (0, TOTAL - 1),
+                    };
+                    let len = (e - s + 1) as usize;
+                    let nl = String::from_utf8(vec![13, 10]).unwrap();
+                    let head = format!(
+                        "HTTP/1.1 206 Partial Content{nl}Content-Range: bytes {s}-{e}/{TOTAL}{nl}Content-Type: video/mp4{nl}Content-Length: {len}{nl}{nl}"
+                    );
+                    if c.write_all(head.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    // 分块慢写,统计**真正流出去的字节** —— 这才是用户的流量。
+                    // 代理一取消,连接断开,这里的写就失败,计数随即停住。
+                    let block = vec![0u8; 64 * 1024];
+                    let mut sent = 0usize;
+                    while sent < len {
+                        let n = block.len().min(len - sent);
+                        if c.write_all(&block[..n]).await.is_err() {
+                            return;
+                        }
+                        sent += n;
+                        f.fetch_add(n, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                });
+            }
+        });
+
+        // 缓存上限给大(GB 级),预取窗口就是被 MAX_READ_AHEAD 兜住的那个值。
+        let h = start(format!("http://127.0.0.1:{up_port}/f"), 3, 1024 * 1024 * 1024, None)
+            .await
+            .unwrap();
+
+        {
+            let mut cli = TcpStream::connect(("127.0.0.1", url_port(&h.url))).await.unwrap();
+            let nl = String::from_utf8(vec![13, 10]).unwrap();
+            cli.write_all(format!("GET /play HTTP/1.1{nl}Range: bytes=0-{nl}{nl}").as_bytes())
+                .await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let _ = cli.read(&mut buf).await;
+        } // drop = 播放器跳走
+
+        let at_disconnect = fetches.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let leaked = fetches.load(Ordering::SeqCst) - at_disconnect;
+
+        // 按**字节**算才是用户的流量。取消有竞态,允许各 worker 收尾少量数据,
+        // 但绝不能照着预取窗口继续拉满。
+        let window = read_ahead_bytes(3, 1024 * 1024 * 1024);
+        assert!(
+            leaked as u64 <= 2 * 1024 * 1024,
+            "断开后又流出 {}KB —— 预取窗口 {}MB,跳一次进度条就白烧这么多用户流量",
+            leaked / 1024,
+            window / 1048576
+        );
+    }
+
     fn url_port(u: &str) -> u16 {
         u.rsplit(':')
             .next()
@@ -942,3 +1491,8 @@ mod tests {
             .unwrap()
     }
 }
+
+
+
+
+

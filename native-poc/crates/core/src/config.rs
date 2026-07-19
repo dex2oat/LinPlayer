@@ -242,6 +242,15 @@ pub struct Prefs {
     /// 外部播放器可执行文件路径。非空 = 起播时交给它,不走内置 mpv。
     #[serde(default)]
     pub external_player: String,
+
+    /* 应用内更新(见 crate::update)。两个渠道对应 CI 的两种产物:
+       stable = publish.yml 提升出的正式 Release,prerelease = build.yml 推出的 -pre。 */
+    /// 更新渠道。默认稳定版 —— 不能让普通用户默认吃到每次推 main 的构建。
+    #[serde(default)]
+    pub update_channel: crate::update::UpdateChannel,
+    /// 启动时自动检查更新。关掉之后只剩设置页里的手动检查。
+    #[serde(default = "default_true")]
+    pub update_auto_check: bool,
 }
 fn default_hwdec() -> String {
     "auto-safe".to_string()
@@ -256,11 +265,15 @@ fn default_prefetch_threads() -> usize {
     3
 }
 fn default_prefetch_cache() -> u64 {
-    32 * 1024 * 1024
+    512 * 1024 * 1024
 }
-/// 读前缓冲的合法区间(字节)。设置页与命令层共用,别各写各的。
-pub const PREFETCH_CACHE_MIN: u64 = 16 * 1024 * 1024;
-pub const PREFETCH_CACHE_MAX: u64 = 32 * 1024 * 1024;
+/// 缓存上限的合法区间(字节)。设置页与命令层共用,别各写各的。
+///
+/// ★ 2026-07-19 从 16~32MB 放开到 64MB~4GB:分段以前全在**内存**里,峰值还要乘活跃
+/// 连接数,所以只敢给 32MB;现在改成落盘环形缓存(net/prefetch.rs 的 DiskCache),
+/// 内存只留传输中的那几段,这个值变成**磁盘占用上限**,GB 级才有意义。
+pub const PREFETCH_CACHE_MIN: u64 = 64 * 1024 * 1024;
+pub const PREFETCH_CACHE_MAX: u64 = 4 * 1024 * 1024 * 1024;
 fn default_writeback_range() -> String {
     "all".to_string()
 }
@@ -285,6 +298,8 @@ impl Default for Prefs {
             preview_thumbs: true,
             dolby_auto_sw: true,
             external_player: String::new(),
+            update_channel: crate::update::UpdateChannel::Stable,
+            update_auto_check: true,
         }
     }
 }
@@ -604,6 +619,10 @@ mod tests {
         assert!(p.preview_thumbs);
         assert!(p.dolby_auto_sw);
         assert_eq!(p.external_player, "");
+        // 更新相关(2026-07-19 加)。默认必须是「稳定版 + 自动检查」——
+        // 默认给预览版等于把每次推 main 的构建推给所有人。
+        assert_eq!(p.update_channel, crate::update::UpdateChannel::Stable);
+        assert!(p.update_auto_check);
     }
 
     /// 倍速区间必须包含默认值,否则老用户一进设置页就存不下(prefetch 的 1GB 就是这么炸的)。
@@ -614,14 +633,18 @@ mod tests {
     }
 
     #[test]
-    fn prefetch_cache_range_absorbs_legacy_1gb() {
+    fn prefetch_cache_range_absorbs_legacy_values() {
+        // 落盘改造后 1GB 本身就合法了(它当年就是默认值)。
         let legacy_1gb: u64 = 1024 * 1024 * 1024;
-        assert!(legacy_1gb > PREFETCH_CACHE_MAX, "前提:旧值确实超限");
-        assert_eq!(
-            legacy_1gb.clamp(PREFETCH_CACHE_MIN, PREFETCH_CACHE_MAX),
-            PREFETCH_CACHE_MAX,
-            "旧配置必须能钳成合法值,否则设置页整个存不进去"
+        assert!(
+            (PREFETCH_CACHE_MIN..=PREFETCH_CACHE_MAX).contains(&legacy_1gb),
+            "1GB 该是合法的磁盘缓存上限了"
         );
+        // 但更早的小值/离谱值仍必须能钳进区间,否则设置页整个存不进去。
+        for legacy in [1u64, 16 << 20, 32 << 20, 64u64 << 30] {
+            let c = legacy.clamp(PREFETCH_CACHE_MIN, PREFETCH_CACHE_MAX);
+            assert!((PREFETCH_CACHE_MIN..=PREFETCH_CACHE_MAX).contains(&c), "legacy={legacy}");
+        }
         // 新装默认值本身必须合法(否则首次进设置页就存不了)。
         let d = Prefs::default().prefetch_cache_bytes;
         assert!(

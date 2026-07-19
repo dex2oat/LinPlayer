@@ -1,458 +1,164 @@
-name: Build Flutter
+# PC 端(Rust + React + Tauri,native-poc/)构建 → Windows 免安装绿色包 → 预发布。
+#
+# 这个文件曾经叫 "Build Flutter",构建 Android 手机/TV 两个 APK。现在 PC 端已迁到
+# Rust 栈,苹果全线不做,Android 端待重构 —— 那两个 job 连同它们依赖的
+# build-libmpv-pgs.yml 一起删了。Android 的 jniLibs/*.so 是**提交在仓库里**的,
+# 删 workflow 不会弄丢已有二进制;等安卓端重构完再把构建接回来。
+#
+# 发布链路:本 workflow 出 v<ver>-pre 预发布(= App 内的「预览版」渠道),
+# publish.yml 手动把它提升成正式 Release(= 「稳定版」渠道)。两个渠道的定义
+# 就落在这两个文件上,别在别处再造一套。
+name: Build PC
 
 on:
   push:
-    branches: [ main, master, develop ]
-    # 纯文档/代理站等不影响 App 产物的改动不触发构建，省免费构建时长。
-    # 仅当推送里全部文件都命中下列路径时才跳过；掺杂任一程序文件仍会构建。
-    paths-ignore:
-      - '**.md'
-      - 'oauth-proxy/**'
-      - 'docs/**'
-      - 'LICENSE'
-      - '.gitignore'
+    branches: [ main, master ]
+    # 只有 PC 端的东西改了才值得烧一个 windows runner(计费 2 倍)。
+    # Flutter 侧(lib/、android/)现在不由本 workflow 构建,改它不该触发。
+    paths:
+      - 'native-poc/**'
+      - '.github/workflows/build.yml'
   pull_request:
     branches: [ main, master ]
-    paths-ignore:
-      - '**.md'
-      - 'oauth-proxy/**'
-      - 'docs/**'
-      - 'LICENSE'
-      - '.gitignore'
+    paths:
+      - 'native-poc/**'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g. 1.0.0)'
-        required: true
+        description: '版本号(如 1.0.0)。留空=取 tauri.conf.json 的 version + -build<run_number>'
+        required: false
         type: string
 
 permissions:
   contents: write
 
-env:
-  FLUTTER_VERSION: '3.44.2'
-  FLUTTER_CHANNEL: 'stable'
-
 jobs:
-  prepare:
-    name: Prepare build metadata
-    runs-on: ubuntu-latest
+  build-windows:
+    name: Build Windows portable
+    runs-on: windows-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        # 不需要 lfs:LFS 里放的是 Android 的 libmpv.so,PC 端一个字节都不用。
 
+      # 版本口径:tauri.conf.json 是 PC 端版本的唯一权威(pack 脚本拿它命名 zip,
+      # build.rs 拿它注入 Sentry release,vite 拿它做 sourcemap release)。
+      # 加 -build<run_number> 是为了让**每次预发布都比上一次大** —— App 内的更新
+      # 比较逻辑正是按 major.minor.patch.build 逐级比的,不加就永远检测不到新预览版。
       - name: Determine version
         id: version
-        run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            PUBSPEC_VER=$(grep '^version:' pubspec.yaml | head -1 | sed 's/version: *//' | cut -d'+' -f1)
-            echo "version=${PUBSPEC_VER}-build${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-          fi
-
-  analyze:
-    name: Analyze code
-    runs-on: ubuntu-latest
-    needs: prepare
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: ${{ env.FLUTTER_CHANNEL }}
-          cache: true
-
-      - name: Get dependencies
-        run: flutter pub get
-
-      - name: Analyze code
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
-
-  # ============================================================
-  # Android 构建
-  # ============================================================
-  build-android:
-    name: Build Android Mobile APK (arm64-v8a)
-    runs-on: ubuntu-latest
-    needs: [prepare, analyze]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Verify native libs are real ELF (not LFS pointers)
-        run: |
-          # 防御性校验：若 LFS 未拉取，libmpv.so 会是 "version https://git-lfs..." 文本（magic 0x76657273="vers"），
-          # 让构建在此处明确失败，而不是打出运行时崩溃的 APK。
-          fail=0
-          for so in android/app/src/main/jniLibs/*/libmpv.so; do
-            magic=$(head -c 4 "$so" | xxd -p)
-            if [ "$magic" != "7f454c46" ]; then
-              echo "::error::$so 不是 ELF 二进制（magic=$magic），LFS 对象未拉取。检查 actions/checkout 的 lfs: true。"
-              fail=1
-            else
-              echo "OK: $so ($(stat -c %s "$so") bytes, ELF)"
-            fi
-          done
-          [ "$fail" = 0 ]
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: ${{ env.FLUTTER_CHANNEL }}
-          cache: true
-
-      - name: Get dependencies
-        run: flutter pub get
-
-      - name: Fix plugin namespaces for AGP 8
-        run: |
-          # brightness_volume 1.0.3 doesn't have namespace (required by AGP 8.x)
-          PLUGIN_DIR="/home/runner/.pub-cache/hosted/pub.dev/brightness_volume-1.0.3/android"
-          if [ -f "$PLUGIN_DIR/build.gradle" ] && ! grep -q "namespace" "$PLUGIN_DIR/build.gradle"; then
-            if [ -f "$PLUGIN_DIR/src/main/AndroidManifest.xml" ]; then
-              PACKAGE=$(grep -o 'package="[^"]*"' "$PLUGIN_DIR/src/main/AndroidManifest.xml" | head -1 | cut -d'"' -f2)
-              if [ -n "$PACKAGE" ]; then
-                echo "Adding namespace '$PACKAGE' to brightness_volume"
-                sed -i "/^android {/a\\    namespace '$PACKAGE'" "$PLUGIN_DIR/build.gradle"
-                echo "Patched build.gradle:"
-                cat "$PLUGIN_DIR/build.gradle"
-              fi
-            fi
-          fi
-
-      - name: Fix plugin compileSdk for androidx
-        run: |
-          # Many Flutter plugins use low compileSdk, but androidx dependencies require 36+
-          for dir in /home/runner/.pub-cache/hosted/pub.dev/*/android; do
-            if [ -f "$dir/build.gradle" ]; then
-              sed -i -E "s/compileSdkVersion [0-9]+/compileSdkVersion 36/g" "$dir/build.gradle"
-              sed -i -E "s/compileSdk = [0-9]+/compileSdk = 36/g" "$dir/build.gradle"
-              if [ -f "$dir/build.gradle.kts" ]; then
-                sed -i -E "s/compileSdkVersion = [0-9]+/compileSdkVersion = 36/g" "$dir/build.gradle.kts"
-                sed -i -E "s/compileSdk = [0-9]+/compileSdk = 36/g" "$dir/build.gradle.kts"
-              fi
-            fi
-            if [ -f "$dir/build.gradle.kts" ]; then
-              sed -i -E "s/compileSdkVersion = [0-9]+/compileSdkVersion = 36/g" "$dir/build.gradle.kts"
-              sed -i -E "s/compileSdk = [0-9]+/compileSdk = 36/g" "$dir/build.gradle.kts"
-            fi
-            # Sentry 等老插件把 Kotlin languageVersion/apiVersion 钉在 1.6，
-            # 新版 Kotlin 编译器（Flutter 3.44+）已不支持 <1.8，统一抬到 1.8。
-            for gf in "$dir/build.gradle" "$dir/build.gradle.kts"; do
-              [ -f "$gf" ] && sed -i -E 's/(languageVersion|apiVersion)([[:space:]]*=[[:space:]]*)"1\.[0-7]"/\1\2"1.8"/g' "$gf"
-            done
-          done
-
-      - name: Decode release keystore
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: |
-          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
-            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
-            echo "已解码发布签名 keystore（用于覆盖更新签名）"
-          else
-            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，APK 将用 debug 签名，无法覆盖更新"
-          fi
-
-      - name: Build Android Mobile Release APK (arm64-v8a)
-        env:
-          DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
-          DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
-          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-          ORG_GRADLE_PROJECT_linplayerTargetAbis: arm64-v8a
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "platforms;android-36" 2>/dev/null || true
-
-          CLEAN_ID=$(printf '%s' "$DANDANPLAY_APP_ID" | tr -d '\r' | paste -sd ',' -)
-          CLEAN_SECRET=$(printf '%s' "$DANDANPLAY_APP_SECRET" | tr -d '\r' | paste -sd ',' -)
-          VERSION="${{ needs.prepare.outputs.version }}"
-
-          # TMDB 密钥用内置口令 AES 加密后注入（明文不进产物）。未配置则留空。
-          TMDB_ENC=""
-          if [ -n "$TMDB_API_KEY" ]; then
-            TMDB_ENC=$(dart run tool/tmdb_encrypt.dart "$TMDB_API_KEY")
-          fi
-
-          # --build-number 让 versionCode 随 CI run 递增，系统才认作「升级」。
-          flutter build apk --release --split-per-abi \
-            --flavor mobile \
-            --target-platform android-arm64 \
-            --build-number="${{ github.run_number }}" \
-            --dart-define=APP_VERSION="$VERSION" \
-            --dart-define=DANDANPLAY_APP_ID="$CLEAN_ID" \
-            --dart-define=DANDANPLAY_APP_SECRET="$CLEAN_SECRET" \
-            --dart-define=TMDB_API_KEY_ENC="$TMDB_ENC"
-
-          APK_DIR="build/app/outputs/flutter-apk"
-          ARM64_SOURCE=$(find "$APK_DIR" -maxdepth 1 -type f -name '*arm64-v8a*release.apk' | head -n 1)
-          ARM64_TARGET="$APK_DIR/LinPlayer-Android-Mobile-v$VERSION-arm64-v8a.apk"
-
-          if [ -z "$ARM64_SOURCE" ] || [ ! -f "$ARM64_SOURCE" ]; then
-            echo "Expected mobile arm64 APK not found in $APK_DIR"
-            ls -lah "$APK_DIR" || true
-            exit 1
-          fi
-
-          cp "$ARM64_SOURCE" "$ARM64_TARGET"
-          APK_ABIS=$(unzip -Z1 "$ARM64_TARGET" | grep '^lib/' | cut -d/ -f2 | sort -u)
-          echo "Android Mobile APK ABIs:"
-          printf '%s\n' "$APK_ABIS"
-          if ! printf '%s\n' "$APK_ABIS" | grep -qx 'arm64-v8a'; then
-            echo "arm64-v8a ABI missing from mobile APK"
-            exit 1
-          fi
-          UNEXPECTED_ABIS=$(printf '%s\n' "$APK_ABIS" | grep -v '^arm64-v8a$' || true)
-          if [ -n "$UNEXPECTED_ABIS" ]; then
-            echo "Unexpected ABI entries found in mobile APK:"
-            printf '%s\n' "$UNEXPECTED_ABIS"
-            exit 1
-          fi
-          ls -lh "$ARM64_TARGET"
-
-      - name: Upload debug symbols to Sentry
-        continue-on-error: true
-        env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: |
-          if [ -z "$SENTRY_AUTH_TOKEN" ]; then
-            echo "::notice::SENTRY_AUTH_TOKEN 未设置，跳过符号上传"
-            exit 0
-          fi
-          dart run sentry_dart_plugin
-
-      - name: Upload Android Mobile APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-android-mobile-arm64-v8a
-          path: build/app/outputs/flutter-apk/LinPlayer-Android-Mobile-v*.apk
-          retention-days: 30
-
-      - name: Upload build logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs-android
-          path: build/
-          retention-days: 3
-
-  # ============================================================
-  # Android TV 构建
-  # ============================================================
-  build-android-tv:
-    name: Build Android TV APK (armeabi-v7a)
-    runs-on: ubuntu-latest
-    needs: [prepare, analyze]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Verify native libs are real ELF (not LFS pointers)
-        run: |
-          # 防御性校验：若 LFS 未拉取，libmpv.so 会是 "version https://git-lfs..." 文本（magic 0x76657273="vers"），
-          # 让构建在此处明确失败，而不是打出运行时崩溃的 APK。
-          fail=0
-          for so in android/app/src/main/jniLibs/*/libmpv.so; do
-            magic=$(head -c 4 "$so" | xxd -p)
-            if [ "$magic" != "7f454c46" ]; then
-              echo "::error::$so 不是 ELF 二进制（magic=$magic），LFS 对象未拉取。检查 actions/checkout 的 lfs: true。"
-              fail=1
-            else
-              echo "OK: $so ($(stat -c %s "$so") bytes, ELF)"
-            fi
-          done
-          [ "$fail" = 0 ]
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: ${{ env.FLUTTER_CHANNEL }}
-          cache: true
-
-      - name: Get dependencies
-        run: flutter pub get
-
-      - name: Fix plugin namespaces for AGP 8
-        run: |
-          # brightness_volume 1.0.3 doesn't have namespace (required by AGP 8.x)
-          PLUGIN_DIR="/home/runner/.pub-cache/hosted/pub.dev/brightness_volume-1.0.3/android"
-          if [ -f "$PLUGIN_DIR/build.gradle" ] && ! grep -q "namespace" "$PLUGIN_DIR/build.gradle"; then
-            if [ -f "$PLUGIN_DIR/src/main/AndroidManifest.xml" ]; then
-              PACKAGE=$(grep -o 'package="[^"]*"' "$PLUGIN_DIR/src/main/AndroidManifest.xml" | head -1 | cut -d'"' -f2)
-              if [ -n "$PACKAGE" ]; then
-                echo "Adding namespace '$PACKAGE' to brightness_volume"
-                sed -i "/^android {/a\\    namespace '$PACKAGE'" "$PLUGIN_DIR/build.gradle"
-                echo "Patched build.gradle:"
-                cat "$PLUGIN_DIR/build.gradle"
-              fi
-            fi
-          fi
-
-      - name: Fix plugin compileSdk for androidx
-        run: |
-          # Many Flutter plugins use low compileSdk, but androidx dependencies require 36+
-          for dir in /home/runner/.pub-cache/hosted/pub.dev/*/android; do
-            if [ -f "$dir/build.gradle" ]; then
-              sed -i -E "s/compileSdkVersion [0-9]+/compileSdkVersion 36/g" "$dir/build.gradle"
-              sed -i -E "s/compileSdk = [0-9]+/compileSdk = 36/g" "$dir/build.gradle"
-              if [ -f "$dir/build.gradle.kts" ]; then
-                sed -i -E "s/compileSdkVersion = [0-9]+/compileSdkVersion = 36/g" "$dir/build.gradle.kts"
-                sed -i -E "s/compileSdk = [0-9]+/compileSdk = 36/g" "$dir/build.gradle.kts"
-              fi
-            fi
-            if [ -f "$dir/build.gradle.kts" ]; then
-              sed -i -E "s/compileSdkVersion = [0-9]+/compileSdkVersion = 36/g" "$dir/build.gradle.kts"
-              sed -i -E "s/compileSdk = [0-9]+/compileSdk = 36/g" "$dir/build.gradle.kts"
-            fi
-            # Sentry 等老插件把 Kotlin languageVersion/apiVersion 钉在 1.6，
-            # 新版 Kotlin 编译器（Flutter 3.44+）已不支持 <1.8，统一抬到 1.8。
-            for gf in "$dir/build.gradle" "$dir/build.gradle.kts"; do
-              [ -f "$gf" ] && sed -i -E 's/(languageVersion|apiVersion)([[:space:]]*=[[:space:]]*)"1\.[0-7]"/\1\2"1.8"/g' "$gf"
-            done
-          done
-
-      - name: Decode release keystore
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: |
-          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
-            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
-            echo "已解码发布签名 keystore（用于覆盖更新签名）"
-          else
-            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，APK 将用 debug 签名，无法覆盖更新"
-          fi
-
-      # mihomo 内核与 zashboard 面板不入库(见 scripts/fetch_mihomo_tv.ps1 与
-      # android/app/src/tv/jniLibs/armeabi-v7a/README.md),必须在打包前拉齐。
-      # ★ 这一步失败就得让整个 job 红:缺内核时 flutter build 照样成功、APK 照样能装,
-      #   只是 TV 端代理功能悄悄失灵 —— 不能用 `|| true` 之类放过。
-      #   脚本自身已校验内核体积与面板 index.html,拉了个空壳会 throw。
-      - name: Fetch TV proxy kernel (mihomo + zashboard)
         shell: pwsh
-        run: ./scripts/fetch_mihomo_tv.ps1
+        run: |
+          $v = "${{ inputs.version }}"
+          if (-not $v) {
+            $base = (Get-Content native-poc/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+            $v = "$base-build${{ github.run_number }}"
+          }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "version = $v"
 
-      - name: Build Android TV Release APK (armeabi-v7a)
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native-poc
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: native-poc/package-lock.json
+
+      # 完整版 libmpv。100MB+,不进仓库(native-poc/.gitignore:23),所以每次构建现拉。
+      # 这段逻辑原先住在 build-libmpv-pgs.yml 的 assemble-windows-libmpv job 里,
+      # 那个 workflow 删了,逻辑搬到这儿 —— 少一次跨 workflow 的产物传递,也少一个
+      # 「上游 workflow 半年没跑过、libmpv-latest 早就过期」的失败面。
+      #
+      # 为什么必须是 shinchiro 的完整构建:自带完整 ffmpeg,含 PGS/SUP 图形字幕解码器
+      # (hdmv_pgs_subtitle)。精简版 libmpv 能编译、能播放、蓝光字幕一片空白。
+      # ★ 这步任何一环失败都必须让 job 红:少了 DLL,exe 照样编得出来、照样打得成包,
+      #   用户双击才发现「找不到 libmpv-2.dll」。
+      - name: Fetch full libmpv (shinchiro mpv-dev)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $rel = gh api repos/shinchiro/mpv-winbuild-cmake/releases/latest | ConvertFrom-Json
+          $asset = $rel.assets | Where-Object { $_.name -match '^mpv-dev-x86_64-.*\.7z$' } | Select-Object -First 1
+          if (-not $asset) { throw "shinchiro 最新 release 里没有 mpv-dev-x86_64 资产" }
+          Write-Host "source: $($asset.name)"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mpv-dev.7z
+          7z x mpv-dev.7z -ompv-dev | Out-Null
+          $dll = Get-ChildItem mpv-dev -Recurse -Filter libmpv-2.dll | Select-Object -First 1
+          if (-not $dll) { throw "压缩包里没有 libmpv-2.dll" }
+          Copy-Item $dll.FullName native-poc/src-tauri/libmpv/libmpv-2.dll -Force
+          $size = (Get-Item native-poc/src-tauri/libmpv/libmpv-2.dll).Length
+          Write-Host "libmpv-2.dll size: $size"
+          if ($size -lt 60MB) { throw "libmpv-2.dll 只有 $size 字节,不是完整版" }
+
+      # 把本次构建的版本号写回 tauri.conf.json。不写的话 Sentry 上所有构建都挤在
+      # linplayer-pc@0.1.0 一个 release 下,符号/sourcemap 互相覆盖;App 内的
+      # 「当前版本」也永远显示 0.1.0,更新检查一律认为自己是最新的。
+      - name: Stamp version into tauri.conf.json
+        shell: pwsh
+        run: |
+          $p = "native-poc/src-tauri/tauri.conf.json"
+          $c = (Get-Content $p -Raw) -replace '("version"\s*:\s*")[^"]*(")', '${1}${{ steps.version.outputs.version }}${2}'
+          Set-Content $p -Value $c -NoNewline -Encoding utf8NoBOM
+          Select-String -Path $p -Pattern '"version"'
+
+      - name: Install frontend deps
+        working-directory: native-poc
+        run: npm ci
+
+      - name: Check telemetry redaction
+        working-directory: native-poc
+        run: npm run check:telemetry
+
+      - name: Rust tests
+        working-directory: native-poc
+        run: cargo test --workspace
+
+      # 一步完成:tauri build(前端 sourcemap 由 @sentry/vite-plugin 顺手上传)
+      # + Rust 符号上传 + 打 zip。刻意复用本地那条 `npm run pack` —— 「发行包里装哪些
+      # 文件」只在 pack-portable.ps1 一处定义,CI 和本地不会各说各话。
+      - name: Build + pack portable zip
+        working-directory: native-poc
         env:
           DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
           DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-          ORG_GRADLE_PROJECT_linplayerTargetAbis: armeabi-v7a
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "platforms;android-36" 2>/dev/null || true
-
-          CLEAN_ID=$(printf '%s' "$DANDANPLAY_APP_ID" | tr -d '\r' | paste -sd ',' -)
-          CLEAN_SECRET=$(printf '%s' "$DANDANPLAY_APP_SECRET" | tr -d '\r' | paste -sd ',' -)
-          VERSION="${{ needs.prepare.outputs.version }}"
-
-          # TMDB 密钥用内置口令 AES 加密后注入（明文不进产物）。未配置则留空。
-          TMDB_ENC=""
-          if [ -n "$TMDB_API_KEY" ]; then
-            TMDB_ENC=$(dart run tool/tmdb_encrypt.dart "$TMDB_API_KEY")
-          fi
-
-          # Android TV release only needs the 32-bit build.
-          # --build-number 让 versionCode 随 CI run 递增，系统才认作「升级」。
-          flutter build apk --release --split-per-abi \
-            --flavor tv \
-            --target-platform android-arm \
-            --build-number="${{ github.run_number }}" \
-            --dart-define=FLAVOR=tv \
-            --dart-define=APP_VERSION="$VERSION" \
-            --dart-define=DANDANPLAY_APP_ID="$CLEAN_ID" \
-            --dart-define=DANDANPLAY_APP_SECRET="$CLEAN_SECRET" \
-            --dart-define=TMDB_API_KEY_ENC="$TMDB_ENC"
-
-          TV_APK_DIR="build/app/outputs/flutter-apk"
-          TV_APK_SOURCE=$(find "$TV_APK_DIR" -maxdepth 1 -type f -name '*armeabi-v7a*release.apk' | head -n 1)
-          TV_APK_TARGET="$TV_APK_DIR/LinPlayer-Android-TV-v$VERSION-armeabi-v7a.apk"
-
-          if [ -z "$TV_APK_SOURCE" ] || [ ! -f "$TV_APK_SOURCE" ]; then
-            echo "Expected TV APK not found in $TV_APK_DIR"
-            ls -lah "$TV_APK_DIR" || true
-            exit 1
-          fi
-
-          cp "$TV_APK_SOURCE" "$TV_APK_TARGET"
-          APK_ABIS=$(unzip -Z1 "$TV_APK_TARGET" | grep '^lib/' | cut -d/ -f2 | sort -u)
-          echo "Android TV APK ABIs:"
-          printf '%s\n' "$APK_ABIS"
-          if ! printf '%s\n' "$APK_ABIS" | grep -qx 'armeabi-v7a'; then
-            echo "armeabi-v7a ABI missing from Android TV APK"
-            exit 1
-          fi
-          UNEXPECTED_ABIS=$(printf '%s\n' "$APK_ABIS" | grep -v '^armeabi-v7a$' || true)
-          if [ -n "$UNEXPECTED_ABIS" ]; then
-            echo "Unexpected ABI entries found in Android TV APK:"
-            printf '%s\n' "$UNEXPECTED_ABIS"
-            exit 1
-          fi
-          ls -lh "$TV_APK_TARGET"
-
-      - name: Upload debug symbols to Sentry
-        continue-on-error: true
-        env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: npm run pack
+
+      # 命名必须让 App 的更新器认得出来:它按小写子串 "windows" 挑资产。
+      - name: Rename zip to release convention
+        shell: pwsh
         run: |
-          if [ -z "$SENTRY_AUTH_TOKEN" ]; then
-            echo "::notice::SENTRY_AUTH_TOKEN 未设置，跳过符号上传"
-            exit 0
-          fi
-          dart run sentry_dart_plugin
+          $src = Get-ChildItem native-poc/dist-portable/*_portable_x64.zip | Select-Object -First 1
+          if (-not $src) { throw "pack 没有产出 zip" }
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item $src.FullName "release/LinPlayer-Windows-v${{ steps.version.outputs.version }}.zip"
+          Get-ChildItem release
 
-      - name: Upload Android TV APK
+      - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-android-tv-armeabi-v7a
-          path: build/app/outputs/flutter-apk/LinPlayer-Android-TV-v*.apk
-          retention-days: 30
+          name: release-windows
+          path: release/*.zip
+          retention-days: 7
 
-      - name: Upload build logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs-android-tv
-          path: build/
-          retention-days: 3
-
-  # ============================================================
-  # iOS Mobile 构建
-  # ============================================================
   create-prerelease:
     name: Create Pre-release
-    # PC(Win/Linux)已迁到 Rust+React+Tauri(native-poc/,自有构建);苹果全线不做。
-    # 本 workflow 只剩 Android 手机 + Android TV。
-    needs: [prepare, build-android, build-android-tv]
+    needs: build-windows
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
 
@@ -467,9 +173,9 @@ jobs:
       - name: List release artifacts
         run: ls -lah ./artifacts/
 
+      # App 的更新器下载完会拿这个文件校验 SHA256(找不到就跳过校验,所以它必须在)。
       - name: Generate SHA256 checksums
         run: |
-          # 为所有产物生成汇总校验文件，随发布上传，供 App 端校验安装包完整性。
           cd ./artifacts
           rm -f SHA256SUMS
           for f in *; do [ -f "$f" ] && sha256sum "$f"; done > SHA256SUMS
@@ -478,8 +184,8 @@ jobs:
       - name: Create Pre-release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ needs.prepare.outputs.version }}-pre
-          name: v${{ needs.prepare.outputs.version }} (Pre-release)
+          tag_name: v${{ needs.build-windows.outputs.version }}-pre
+          name: v${{ needs.build-windows.outputs.version }} (Pre-release)
           prerelease: true
           files: ./artifacts/*
           generate_release_notes: true

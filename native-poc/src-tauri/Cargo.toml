@@ -11,6 +11,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+serde_json = "1"                             # build.rs 从 tauri.conf.json 取 version(Sentry release 用)
 
 [dependencies]
 linplayer-core = { path = "../crates/core" }
@@ -35,3 +36,19 @@ windows-sys = { version = "0.59", features = [
   "Win32_Graphics_Gdi",
   "Win32_System_LibraryLoader",
 ] }
+# 崩溃上报 + 匿名活跃统计(见 src/telemetry.rs)。
+# rustls 而非默认的 native-tls:core 全链路已经是 rustls,混两套 TLS 会把 openssl 拖进来。
+# release-health 才有 auto_session_tracking(「有多少人在用」靠它)。
+sentry = { version = "0.48.5", default-features = false, features = [
+  "backtrace",
+  "contexts",
+  "panic",
+  "reqwest",
+  "rustls",
+  "release-health",
+] }
+
+[dev-dependencies]
+# test 特性给的是内存 transport(sentry::test::with_captured_events),用来验证
+# before_send 真的接在了 client 上 —— 光测那个纯函数证明不了它被调用。
+sentry = { version = "0.48.5", default-features = false, features = ["test"] }

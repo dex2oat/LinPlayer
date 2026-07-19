@@ -687,6 +687,44 @@ export const applyPrefs = () =>
 
 export const getPrefs = () => invoke<Prefs>("get_prefs");
 
+/* ---------------- 应用内更新(双渠道) ---------------- */
+
+export type UpdateChannel = "stable" | "prerelease";
+
+export type UpdateSettings = {
+  channel: UpdateChannel;
+  auto_check: boolean;
+  /** 当前版本,取自 tauri.conf.json(= 发行 zip 的版本号)。 */
+  current_version: string;
+  /** false = 安装目录不可写(如解压进了 Program Files),只能引导去网页手动下载。 */
+  can_self_update: boolean;
+};
+
+export type UpdateInfo = {
+  /** 原始 tag,如 `v1.2.0-build91-pre`。 */
+  tag: string;
+  /** 规约成 x.y.z,只用于显示。 */
+  version: string;
+  name: string;
+  notes: string;
+  html_url: string;
+  prerelease: boolean;
+  asset_name: string | null;
+  asset_url: string | null;
+  asset_size: number;
+};
+
+export const getUpdateSettings = () => invoke<UpdateSettings>("get_update_settings");
+export const setUpdateSettings = (channel: UpdateChannel, autoCheck: boolean) =>
+  invoke<void>("set_update_settings", { channel, autoCheck });
+
+/** `null` = 确实已是最新;**抛错** = 没查成(断网/GitHub 限流)。两者别混为一谈。 */
+export const checkUpdate = () => invoke<UpdateInfo | null>("check_update");
+
+/** 下载 + 校验 + 覆盖 + 重启。成功时**本进程会退出**,这个 Promise 不会正常 resolve。
+ *  进度监听 `update-download` 事件,载荷 `[已下载, 总大小]`。 */
+export const downloadAndApplyUpdate = () => invoke<void>("download_and_apply_update");
+
 /** ★ 只收选轨三项 —— 核层 set_prefs 也只认这三个参数(其余走 `..cfg.prefs.clone()` 保留)。
  *  以前这里标成 `p: Prefs`,逼调用方拼一个完整 Prefs 再扔掉多余字段:
  *  看着像「整体覆盖」,给人一种「不传的字段会被清掉」的错觉,新增 Prefs 字段时
@@ -1070,12 +1108,19 @@ export const getDanmakuConfig = () => invoke<DanmakuServer[]>("get_danmaku_confi
 export const setDanmakuConfig = (sources: DanmakuServer[]) =>
   invoke<void>("set_danmaku_config", { sources });
 
-/** 按标题搜番剧,多源并行分组返回(每组自带 error,别丢)。 */
+/** 按标题搜番剧,多源并行分组返回(每组自带 error,别丢)。
+ *  ★ 回来的 anime.episodes 恒为空 —— 集列表要按需走 danmakuEpisodes 取。 */
 export const danmakuSearch = (keyword: string) =>
   invoke<DanmakuSourceGroup[]>("danmaku_search", { keyword });
 
-export const danmakuLoad = (episodeId: string) =>
-  invoke<DanmakuComment[]>("danmaku_load", { episodeId });
+/** 取某源某条目的集列表(点开条目时才发)。 */
+export const danmakuEpisodes = (sourceId: string, animeId: string, animeTitle: string) =>
+  invoke<DanmakuEpisode[]>("danmaku_episodes", { sourceId, animeId, animeTitle });
+
+/** sourceId 必须带上:episodeId 在各源之间**不同号**,不指定源会从别的源的 id 空间里
+ *  瞎捞一份对不上的弹幕(旧版就漏了这个参数)。 */
+export const danmakuLoad = (episodeId: string, sourceId?: string) =>
+  invoke<DanmakuComment[]>("danmaku_load", { episodeId, sourceId: sourceId ?? null });
 
 /** 智能匹配候选(带评分)。 */
 export const danmakuMatch = (input: DanmakuMatchInput) =>

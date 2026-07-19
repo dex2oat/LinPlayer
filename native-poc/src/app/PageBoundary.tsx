@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from "react";
+import * as Sentry from "@sentry/react";
 
 /* 页面级错误边界。
 
@@ -26,6 +27,11 @@ export default class PageBoundary extends Component<Props, State> {
   componentDidCatch(err: Error, info: { componentStack?: string | null }) {
     // 控制台留全栈:DevTools 里能直接看到是哪个组件哪一行,不用再靠猜。
     console.error("[PageBoundary] 页面渲染崩溃:", err, info.componentStack);
+    /* 用户机器上没有 DevTools 可看 —— 这一页崩了,上面那行 console 就烂在他本地。
+       componentStack 是「哪个组件炸的」的唯一线索,JS 的 error.stack 里没有它。 */
+    Sentry.captureException(err, {
+      contexts: { react: { componentStack: info.componentStack ?? "" } },
+    });
   }
 
   componentDidUpdate(prev: Props) {

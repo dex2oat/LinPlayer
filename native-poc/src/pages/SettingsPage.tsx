@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import QRCode from "qrcode";
 import "./SettingsPage.css";
 import {
@@ -69,6 +70,13 @@ import {
   pluginDisable,
   pluginInstall,
   pluginUninstall,
+  getUpdateSettings,
+  setUpdateSettings,
+  checkUpdate,
+  downloadAndApplyUpdate,
+  type UpdateSettings,
+  type UpdateInfo,
+  type UpdateChannel,
 } from "../lib/api";
 import {
   IconSun,
@@ -1302,7 +1310,7 @@ function CfPane() {
 
 /* ============================================================
    网络 · 多线程加载(预取代理)
-   本地起代理超前拉 Range 喂播放器。核层对 threads(2~4)/cache_bytes(≥16MB)
+   本地起代理超前拉 Range 喂播放器。核层对 threads(2~4)/cache_bytes(64MB~4GB)
    是**拒绝**不是夹紧 —— 所以这里绝不能先把值 clamp 好再提交:那样用户点到上限
    会毫无反应,而错误信息(「预取线程数只支持 2~4」)正是唯一的反馈来源。
    Stepper 的 min/max 只做常规引导,越界一律让核层说话。
@@ -1398,15 +1406,16 @@ function PrefetchPane() {
           onChange={(threads) => commit({ threads })}
         />
       </Row>
-      <Row t="读前缓冲上限" d="每条连接的内存缓冲;最多 32MB(大缓冲由播放器自己扛),不低于 16MB">
-        {/* 上限 32MB:超了核层会拒。别把 max 放大成 512 —— 那样用户设 512 也只生效 32,
-            属于「设了没反应」的静默欺骗(本页的规矩是越界让核层报错,不偷偷夹紧)。 */}
+      <Row t="缓存上限" d="落盘的环形缓存,决定磁盘占用;拖回已看过的地方直接命中不重下。64MB~4GB">
+        {/* 区间跟核层 PREFETCH_CACHE_MIN/MAX 对齐:超了核层会拒。
+            别偷偷夹紧 —— 本页的规矩是越界让核层报错,不做「设了没反应」的静默欺骗。
+            2026-07-19 从 16~32MB 放开:分段改落盘后这不再是每连接的内存占用。 */}
         <Stepper
           value={s.cache_bytes / MB}
-          min={16}
-          max={32}
-          step={8}
-          fmt={(v) => `${v} MB`}
+          min={64}
+          max={4096}
+          step={64}
+          fmt={(v) => (v >= 1024 ? `${(v / 1024).toFixed(v % 1024 ? 1 : 0)} GB` : `${v} MB`)}
           onChange={(v) => commit({ cache_bytes: v * MB })}
         />
       </Row>
@@ -2174,6 +2183,152 @@ function StoragePane() {
   );
 }
 
+/* 更新 · 双渠道。稳定版 = publish.yml 提升出的正式 Release;
+   预览版 = build.yml 每次推 main 出的 -pre。两个渠道的定义落在 CI,不在这儿。 */
+function UpdateSection() {
+  const f = useFlash();
+  const [st, setSt] = useState<UpdateSettings | null>(null);
+  const [found, setFound] = useState<UpdateInfo | null | undefined>(undefined);
+  const [checking, setChecking] = useState(false);
+  const [progress, setProgress] = useState<[number, number] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    getUpdateSettings()
+      .then((s) => alive && setSt(s))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const un = listen<[number, number]>("update-download", (e) => setProgress(e.payload));
+    return () => {
+      un.then((f) => f());
+    };
+  }, []);
+
+  async function save(patch: Partial<UpdateSettings>) {
+    if (!st) return;
+    const next = { ...st, ...patch };
+    setSt(next); // 乐观更新
+    try {
+      await setUpdateSettings(next.channel, next.auto_check);
+      // 换了渠道,上一次的检查结果就作废了(稳定/预览看到的根本不是同一个发布)。
+      setFound(undefined);
+    } catch (e) {
+      setSt(st); // 回滚 —— 否则开关停在新值而磁盘是旧值
+      f.err(e);
+    }
+  }
+
+  async function doCheck() {
+    if (checking) return;
+    setChecking(true);
+    try {
+      const r = await checkUpdate();
+      setFound(r);
+      if (!r) f.ok("已是最新版本");
+    } catch (e) {
+      // 查不动 ≠ 已是最新。这里必须报错,不能显示「已是最新」。
+      setFound(undefined);
+      f.err(e);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function doApply() {
+    setProgress([0, found?.asset_size ?? 0]);
+    try {
+      await downloadAndApplyUpdate();
+    } catch (e) {
+      setProgress(null);
+      f.err(e);
+    }
+  }
+
+  // 核层有自己的默认值,前端别硬编码一份 —— 两份默认值早晚对不上。
+  if (!st) return null;
+
+  const pct =
+    progress && progress[1] > 0 ? Math.floor((progress[0] / progress[1]) * 100) : null;
+
+  return (
+    <>
+      <h4 style={{ marginTop: 22 }}>更新</h4>
+      <p className="hint">
+        稳定版只收正式发布;预览版会收到每次主干构建,尝鲜但可能不稳定。
+      </p>
+
+      <Row t="更新通道" d="改完下次检查即按新渠道走">
+        <Seg<UpdateChannel>
+          value={st.channel}
+          opts={[
+            { id: "stable", label: "稳定版" },
+            { id: "prerelease", label: "预览版" },
+          ]}
+          onChange={(channel) => save({ channel })}
+        />
+      </Row>
+
+      <Row t="启动时自动检查" d="关掉之后只剩下面的手动检查">
+        <Sw on={st.auto_check} onChange={(auto_check) => save({ auto_check })} />
+      </Row>
+
+      {!st.can_self_update && (
+        <p className="hint" style={{ color: "var(--warn, #d88)" }}>
+          安装目录不可写(装进了 Program Files 之类的地方?),无法就地更新 ——
+          检查到新版本后请手动下载覆盖。
+        </p>
+      )}
+
+      {found && (
+        <div className="st-card">
+          <div className="st-kv">
+            <span className="k">发现新版本</span>
+            <span className="v">
+              {found.tag}
+              {found.prerelease ? "(预览版)" : ""}
+            </span>
+          </div>
+          {found.notes && (
+            <pre className="hint" style={{ whiteSpace: "pre-wrap", maxHeight: 180, overflow: "auto" }}>
+              {found.notes}
+            </pre>
+          )}
+          {!found.asset_name && (
+            <p className="hint">这个版本没有适用于当前平台的安装包,请到发布页手动下载。</p>
+          )}
+        </div>
+      )}
+
+      <div className="st-actions">
+        <button className="btn" disabled={checking || !!progress} onClick={doCheck}>
+          {checking ? "检查中…" : "检查更新"}
+        </button>
+        {found?.asset_name && st.can_self_update && (
+          <button className="btn primary" disabled={!!progress} onClick={doApply}>
+            {progress ? (pct === null ? "下载中…" : `下载中 ${pct}%`) : "下载并安装"}
+          </button>
+        )}
+        {found && (
+          <button className="btn" onClick={() => openUrl(found.html_url)}>
+            打开发布页
+          </button>
+        )}
+        {f.node}
+      </div>
+      {progress && (
+        <p className="hint">
+          下载完成后会自动覆盖并重启,请不要手动关闭程序。
+        </p>
+      )}
+    </>
+  );
+}
+
 function AboutPane() {
   const f = useFlash();
   const [payload, setPayload] = useState("");
@@ -2233,16 +2388,16 @@ function AboutPane() {
       </div>
       <div className="st-kv">
         <span className="k">版本</span>
-        <span className="v">0.1.0</span>
+        {/* 构建期注入,来源是 tauri.conf.json —— 和发行 zip 的版本号是同一个数。
+            以前这里硬编码 "0.1.0",版本一升就开始撒谎。 */}
+        <span className="v">{__APP_VERSION__}</span>
       </div>
       <div className="st-kv">
         <span className="k">技术栈</span>
         <span className="v">Rust 核 + Tauri + React</span>
       </div>
-      <div className="st-kv">
-        <span className="k">更新通道</span>
-        <span className="v muted">开发预览,暂无更新通道</span>
-      </div>
+
+      <UpdateSection />
 
       <h4 style={{ marginTop: 22 }}>配置备份 · 迁移</h4>
       <p className="hint">

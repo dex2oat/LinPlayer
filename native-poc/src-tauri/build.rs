@@ -34,5 +34,17 @@ fn main() {
         }
     }
 
+    /* Sentry 的 release 名要和 pack-portable.ps1 打出的 zip 版本**是同一个数**,
+       否则上传的符号/sourcemap 挂在别的 release 上,线上堆栈还是乱码。那个脚本读的是
+       tauri.conf.json 的 version,所以这里也读它 —— CARGO_PKG_VERSION 读的是 Cargo.toml,
+       两者没有任何机制保证同步(现在都是 0.1.0 纯属巧合)。 */
+    let conf_path = Path::new(manifest).join("tauri.conf.json");
+    let conf: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&conf_path).expect("read tauri.conf.json"))
+            .expect("parse tauri.conf.json");
+    let version = conf["version"].as_str().expect("tauri.conf.json 缺 version");
+    println!("cargo:rustc-env=LP_VERSION={version}");
+    println!("cargo:rerun-if-changed=tauri.conf.json");
+
     tauri_build::build();
 }

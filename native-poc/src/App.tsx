@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   type AccountInfo,
+  type DanmakuAnime,
   type DanmakuEpisode,
   type DanmakuMatchCandidate,
   type DanmakuMatchInput,
@@ -18,6 +19,7 @@ import {
   applyPrefs,
   currentSession,
   danmakuAutoLoad,
+  danmakuEpisodes,
   danmakuLoad,
   danmakuMatch,
   danmakuMinAutoScore,
@@ -272,6 +274,10 @@ export default function App() {
       return next;
     });
   const [dmResults, setDmResults] = useState<DanmakuSourceGroup[] | null>(null);
+  /** 用户点开的那部番(第二层)。episodes=null 表示集表还在路上。 */
+  const [dmPick, setDmPick] = useState<
+    { group: DanmakuSourceGroup; anime: DanmakuAnime; episodes: DanmakuEpisode[] | null } | null
+  >(null);
   const [dmKw, setDmKw] = useState("");
   const timeSync = useRef<TimeSync>({ base: 0, stamp: performance.now(), paused: false });
 
@@ -373,7 +379,7 @@ export default function App() {
       const cands = await danmakuMatch(input);
       const top = cands.reduce<DanmakuMatchCandidate | null>((a, b) => (!a || b.score > a.score ? b : a), null);
       if (top && top.score >= (await danmakuMinAutoScore())) {
-        setDmComments(await danmakuLoad(top.episode_id));
+        setDmComments(await danmakuLoad(top.episode_id, top.source_id));
         say(`弹幕已自动匹配 · ${top.source_name} · ${top.anime_title}`);
         return;
       }
@@ -1105,13 +1111,23 @@ export default function App() {
   async function doDmSearch() {
     const q = dmKw.trim();
     if (!q) return;
+    setDmPick(null); // 换关键词 = 退回条目层,否则还停在上一次点开的番的集表里
     try { setDmResults(await danmakuSearch(q)); } catch (e) { fail("弹幕搜索", e); }
   }
-  async function loadDmEpisode(ep: DanmakuEpisode) {
+  /** 第二段:点条目 → 取该条目的集列表。集表不预取,搜索结果里本来就没有。 */
+  async function openDmAnime(g: DanmakuSourceGroup, a: DanmakuAnime) {
+    setDmPick({ group: g, anime: a, episodes: null });
     try {
-      setDmComments(await danmakuLoad(ep.episode_id));
+      const eps = await danmakuEpisodes(g.source_id, a.anime_id, a.anime_title);
+      setDmPick({ group: g, anime: a, episodes: eps });
+    } catch (e) { setDmPick(null); fail("取集列表", e); }
+  }
+  async function loadDmEpisode(sourceId: string, ep: DanmakuEpisode) {
+    try {
+      setDmComments(await danmakuLoad(ep.episode_id, sourceId));
       patchDm({ on: true }); // 手动挑了一集 = 明确要看,这一处强开(并落盘)
       setDmResults(null);
+      setDmPick(null);
       say(`弹幕已加载 · ${ep.episode_title || ep.episode_number || ""}`);
     } catch (e) { fail("加载弹幕", e); }
   }
@@ -1540,32 +1556,57 @@ export default function App() {
                       <div className="grp-lab">弹幕源 · 先搜索匹配</div>
                       <input className="dmq" placeholder="搜索片名 / 手动匹配…" value={dmKw} onChange={(e) => setDmKw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doDmSearch()} />
                       <button className="p-li" onClick={doDmSearch}><span className="rad" /> 搜索</button>
-                      {/* 一源一组:g.animes → 每部番的 g.animes[].episodes 才是可点的集。
-                          g.error 必须露出来 —— 单源挂了和单源没结果长得一样,吞了就没人知道该去修哪个源。 */}
-                      {dmResults?.map((g) => (
-                        <div key={g.source_id}>
-                          <div className="grp-lab">{g.source_name}</div>
-                          {g.error && <div className="p-note">该源失败:{g.error}</div>}
-                          {!g.error && g.animes.length === 0 && <div className="p-note">该源没有结果</div>}
-                          {g.animes.map((a) => (
-                            <div key={`${g.source_id}:${a.anime_id}`}>
-                              <div className="grp-lab">{a.anime_title}{a.year ? ` · ${a.year}` : ""}</div>
-                              {a.episodes.map((ep) => (
-                                <button key={ep.episode_id} className="p-li" onClick={() => loadDmEpisode(ep)}>
+                      {/* 三段式:条目 → 集 → 弹幕。一口气把所有集平铺出来(旧版)= 三个源
+                          各二十几集,七十多行按钮糊在这一列里,用户根本挑不动。
+                          dmPick 非空就整列换成该番的集表(带返回),不再显示条目层。 */}
+                      {dmPick ? (
+                        <>
+                          {/* 不挂 .rad —— 那是单选圆点,返回是个动作不是选项(截图里看着像可选项) */}
+                          <button className="p-li" onClick={() => setDmPick(null)}>
+                            <span className="rt">←</span> 返回条目列表
+                          </button>
+                          <div className="grp-lab">
+                            {dmPick.anime.anime_title}
+                            {dmPick.anime.year ? ` · ${dmPick.anime.year}` : ""} · {dmPick.group.source_name}
+                          </div>
+                          {dmPick.episodes === null && <div className="p-note">正在取集列表…</div>}
+                          {dmPick.episodes?.length === 0 && <div className="p-note">该条目没有可用的集</div>}
+                          {dmPick.episodes?.map((ep) => (
+                            <button key={ep.episode_id} className="p-li" onClick={() => loadDmEpisode(dmPick.group.source_id, ep)}>
+                              <span className="col">
+                                <span className="t1">{ep.episode_title || ep.episode_number || "?"}</span>
+                              </span>
+                            </button>
+                          ))}
+                        </>
+                      ) : (
+                        <>
+                          {/* g.error 必须露出来 —— 单源挂了和单源没结果长得一样,吞了就没人知道该去修哪个源。 */}
+                          {dmResults?.map((g) => (
+                            <div key={g.source_id}>
+                              <div className="grp-lab">{g.source_name}</div>
+                              {g.error && <div className="p-note">该源失败:{g.error}</div>}
+                              {!g.error && g.animes.length === 0 && <div className="p-note">该源没有结果</div>}
+                              {g.animes.map((a) => (
+                                <button key={`${g.source_id}:${a.anime_id}`} className="p-li" onClick={() => openDmAnime(g, a)}>
                                   <span className="thumb sq">
                                     {a.image_url && <img src={a.image_url} alt="" loading="lazy" />}
                                   </span>
                                   <span className="col">
-                                    <span className="t1">{ep.episode_title || ep.episode_number || "?"}</span>
+                                    <span className="t1">{a.anime_title}</span>
+                                    <span className="t2">
+                                      {[a.type_description, a.year, a.episode_count ? `${a.episode_count} 集` : null]
+                                        .filter(Boolean).join(" · ")}
+                                    </span>
                                   </span>
-                                  <span className="rt">{g.source_name}</span>
+                                  <span className="rt">›</span>
                                 </button>
                               ))}
                             </div>
                           ))}
-                        </div>
-                      ))}
-                      {dmResults && dmResults.length === 0 && <div className="p-note">没有可用的弹幕源(去设置页添加)。</div>}
+                          {dmResults && dmResults.length === 0 && <div className="p-note">没有可用的弹幕源(去设置页添加)。</div>}
+                        </>
+                      )}
                     </div>
                     <div className="col">
                       <div className="grp-lab">显示设置</div>

@@ -1,12 +1,55 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { sentryVitePlugin } from "@sentry/vite-plugin";
+import { readFileSync } from "node:fs";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+// @ts-expect-error process is a nodejs global
+const sentryToken = process.env.SENTRY_AUTH_TOKEN;
+
+/* 版本的唯一权威是 tauri.conf.json —— pack-portable.ps1 拿它给 zip 命名,
+   src-tauri/build.rs 拿它注入 LP_VERSION 给 Rust 侧的 Sentry release。
+   这里读同一个字段,是为了让前端的 release 名和 Rust 的**逐字一致**:
+   sourcemap 按 release 挂,对不上就等于没传。 */
+const version = JSON.parse(readFileSync("./src-tauri/tauri.conf.json", "utf-8")).version;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [react()],
+  plugins: [
+    react(),
+    /* sourcemap 上传。没有 token 就整个不挂 —— 本地 `npm run build` / 别人 clone 下来
+       构建都不该因为少个密钥而红。CI 和 npm run pack 会带上它。
+       ★ 上传完删本地 .map:sourcemap 等于把整份前端源码塞进发行 zip,不能进用户手里。 */
+    sentryToken &&
+      sentryVitePlugin({
+        org: "linplayer",
+        /* ★ 必须是 DSN 所指的那个项目。名字叫 "flutter" 是历史包袱(移动端先建的),
+           但 DSN 末段的项目 id 4511717262032896 就是它 —— 事件落在这个项目里,
+           sourcemap 却传到别的项目 = 传了等于没传,而且**两边都不会报错**。
+           哪天真给 PC 单开一个项目,要同时换三处:这里、pack-portable.ps1、
+           以及 src/telemetry.ts 和 src-tauri/src/telemetry.rs 里的 DSN。 */
+        project: "flutter",
+        authToken: sentryToken,
+        release: { name: `linplayer-pc@${version}` },
+        sourcemaps: { filesToDeleteAfterUpload: ["./dist/**/*.map"] },
+        telemetry: false, // 不给 Sentry 上报我们自己的构建行为
+        /* ★ 没有这行,上传失败(token 过期/网络不通)时插件只打一行红字,
+           `vite build` 照样 exit 0 —— CI 全绿,而线上堆栈永远是 index-a1b2c3.js:1:48291,
+           等真崩了才发现半年没传过 sourcemap。实测过:默认行为确实 exit=0。
+           给了 token 就是明确要求上传,传不上去就该红。 */
+        errorHandler: (err) => {
+          throw err;
+        },
+      }),
+  ],
+
+  define: { __APP_VERSION__: JSON.stringify(version) },
+
+  /* 只在**要上传**时才生成 sourcemap。没 token 还生成的话,那些 .map 会被 tauri 一起
+     打进 exe 的内嵌资源(frontendDist 整个塞进二进制)= 把整份前端源码发给用户。
+     删除动作挂在插件的 filesToDeleteAfterUpload 上,而插件在没 token 时压根不存在。 */
+  build: { sourcemap: Boolean(sentryToken) },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

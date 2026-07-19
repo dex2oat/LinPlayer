@@ -320,7 +320,13 @@ async fn get_json(
     resp.json().await.map_err(|e| format!("弹幕解析失败: {e}"))
 }
 
-/// 搜番:GET /search/anime?keyword= → animes[]。
+/// 搜番:GET /search/anime?keyword=&v2=true → 只回条目,**不带集列表**。
+///
+/// 比 `/search/episodes` 快得多(后者要把每部番的整份集表也捞出来),配合
+/// [`bangumi_episodes`] 做「先挑番 → 再挑集」两段式。`v2=true` 是官方新搜索引擎
+/// (swagger v2 标注「使用新搜索引擎」);自建源不认这个参数会直接忽略,无害。
+///
+/// 返回字段名新旧引擎都叫 animes/bangumiList,两个都收。
 pub async fn search_anime(
     http: &reqwest::Client,
     cfg: &DanmakuSourceConfig,
@@ -328,11 +334,37 @@ pub async fn search_anime(
 ) -> Result<Vec<DanmakuAnime>, String> {
     let (headers, mut query) = cfg.auth_parts("/search/anime");
     query.push(("keyword".into(), keyword.to_string()));
+    query.push(("v2".into(), "true".into()));
     let v = get_json(http, &cfg.endpoint_url("/search/anime"), &headers, &query).await?;
-    Ok(v["animes"]
-        .as_array()
+    Ok(parse_anime_list(&v))
+}
+
+/// 老引擎回 `animes`,新引擎(v2=true)回 `bangumiList` —— 两个都收,谁在用谁。
+fn parse_anime_list(v: &Value) -> Vec<DanmakuAnime> {
+    let list = if v["animes"].is_array() { &v["animes"] } else { &v["bangumiList"] };
+    list.as_array()
         .map(|a| a.iter().map(parse_anime).collect())
-        .unwrap_or_default())
+        .unwrap_or_default()
+}
+
+/// 取某部番的集列表:GET /bangumi/{animeId} → bangumi.episodes[]。
+///
+/// 只在用户点了某个条目后才发,所以搜索那一步不用背整份集表。
+/// 自建源不一定实现这个端点 —— 空/失败时由调用方退回 `/search/episodes` 按标题捞。
+pub async fn bangumi_episodes(
+    http: &reqwest::Client,
+    cfg: &DanmakuSourceConfig,
+    anime_id: &str,
+) -> Result<Vec<DanmakuEpisode>, String> {
+    let endpoint = format!("/bangumi/{anime_id}");
+    let (headers, query) = cfg.auth_parts(&endpoint);
+    let v = get_json(http, &cfg.endpoint_url(&endpoint), &headers, &query).await?;
+    Ok(parse_bangumi_episodes(&v))
+}
+
+/// 集表包在 `bangumi` 下面一层。
+fn parse_bangumi_episodes(v: &Value) -> Vec<DanmakuEpisode> {
+    parse_anime(&v["bangumi"]).episodes
 }
 
 /// 搜集:GET /search/episodes?anime=&episode= → animes[](带 episodes)。
@@ -457,8 +489,11 @@ impl DanmakuSourceGroup {
     }
 }
 
-/// 并行向所有传入源做集数搜索,分源返回(顺序与 `cfgs` 一致,便于 UI 稳定列表)。
-/// 对齐 Dart DanmakuService.searchAllGrouped。
+/// 并行向所有传入源搜**条目**,分源返回(顺序与 `cfgs` 一致,便于 UI 稳定列表)。
+///
+/// ★ 走 `/search/anime`(新引擎)而非 `/search/episodes`:回来的 animes[] 里
+/// `episodes` 是空的,集表要等用户点了条目再单独取([`episodes_for_anime`])。
+/// 这既是「快」的来源,也是 UI 要的三段式(条目 → 集 → 弹幕)。
 /// ponytail: 不做 Dart 的 searchAllStreamed(边搜边显示)—— Tauri 侧 IPC 一次性返回即可,
 /// 真要流式再上 Channel。
 pub async fn search_all_grouped(
@@ -470,7 +505,7 @@ pub async fn search_all_grouped(
     parallel_by_source(http, cfgs, |http, cfg| {
         let keyword = keyword.clone();
         async move {
-            match search_episodes(&http, &cfg, Some(&keyword), None).await {
+            match search_anime(&http, &cfg, &keyword).await {
                 Ok(animes) => DanmakuSourceGroup {
                     source_id: cfg.id,
                     source_name: cfg.name,
@@ -489,6 +524,34 @@ pub async fn search_all_grouped(
     .await
     .into_iter()
     .collect()
+}
+
+/// 取某源某条目的集列表。先试 `/bangumi/{id}`(官方最快);拿不到再退
+/// `/search/episodes?anime={title}` 按标题捞并挑出同 id 的那部。
+///
+/// 退路不是可选的:自建源(huangxd / misaka)不保证实现 `/bangumi/{id}`,
+/// 没退路的话它们的条目点进去永远是空集表。
+pub async fn episodes_for_anime(
+    http: &reqwest::Client,
+    cfg: &DanmakuSourceConfig,
+    anime_id: &str,
+    anime_title: &str,
+) -> Result<Vec<DanmakuEpisode>, String> {
+    if let Ok(eps) = bangumi_episodes(http, cfg, anime_id).await {
+        if !eps.is_empty() {
+            return Ok(eps);
+        }
+    }
+    if anime_title.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let animes = search_episodes(http, cfg, Some(anime_title), None).await?;
+    Ok(animes
+        .iter()
+        .find(|a| a.anime_id == anime_id)
+        .or_else(|| animes.first())
+        .map(|a| a.episodes.clone())
+        .unwrap_or_default())
 }
 
 /// 并行向所有传入源做文件识别,分源返回候选。对齐 Dart DanmakuService.matchAllGrouped。
@@ -1243,6 +1306,42 @@ mod tests {
         // 省略默认 token 的写法(danmu_api 允许)也照样原样用
         let (u, a, _) = derive_auth("http://h:9321");
         assert_eq!((u.as_str(), a), ("http://h:9321", DanmakuAuthType::None));
+    }
+
+    /* 两段式搜索的解析口径。真接口要签名(裸 curl 一律 403 Missing Authentication
+       Headers,2026-07-19 实测),所以这里钉的是 swagger v2 文档的载荷形状:
+         - 新引擎 /search/anime?v2=true 回 `bangumiList`(老引擎回 `animes`)
+         - 条目层**没有** episodes,集表要另取 —— 这正是「先出条目再出集」的前提
+         - /bangumi/{id} 把集表包在 `bangumi.episodes` 里 */
+    #[test]
+    fn parses_both_v2_bangumi_list_and_legacy_animes() {
+        let v2 = serde_json::json!({"bangumiList":[
+            {"animeId":18496,"animeTitle":"鬼灭之刃","imageUrl":"http://i/1.jpg","year":2019,"episodeCount":26}
+        ]});
+        let got = parse_anime_list(&v2);
+        assert_eq!(got.len(), 1, "新引擎的 bangumiList 必须认");
+        assert_eq!(got[0].anime_id, "18496", "animeId 是数字,要转成字符串");
+        assert_eq!(got[0].episode_count, Some(26));
+        assert!(got[0].episodes.is_empty(), "条目层不该带集表(带了就说明还在走慢接口)");
+
+        let legacy = serde_json::json!({"animes":[{"animeId":"7","animeTitle":"老引擎"}]});
+        assert_eq!(parse_anime_list(&legacy)[0].anime_title, "老引擎");
+    }
+
+    /* /bangumi/{id} 的集表藏在 `bangumi` 下面一层;直接 parse_anime(&v) 会静默拿到空集表
+       (不报错,只是用户点进去永远「没有可用的集」)。 */
+    #[test]
+    fn parses_episodes_from_bangumi_detail() {
+        let v = serde_json::json!({"bangumi":{
+            "animeId":18496,"animeTitle":"鬼灭之刃",
+            "episodes":[
+                {"episodeId":184960001,"episodeTitle":"第1话 残酷","episodeNumber":"1"},
+                {"episodeId":184960002,"episodeTitle":"第2话 培育者","episodeNumber":"2"}
+            ]}});
+        let eps = parse_bangumi_episodes(&v);
+        assert_eq!(eps.len(), 2);
+        assert_eq!(eps[0].episode_id, "184960001");
+        assert_eq!(eps[1].episode_number.as_deref(), Some("2"));
     }
 
     /* query 带 token 的写法必须拆出来:原样留在 api_url 里,base_url() 会在问号后面

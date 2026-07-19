@@ -6,10 +6,14 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "check:telemetry": "node src/telemetry.check.ts",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "pack": "powershell -ExecutionPolicy Bypass -File scripts/pack-portable.ps1",
+    "pack:fast": "powershell -ExecutionPolicy Bypass -File scripts/pack-portable.ps1 -NoZip"
   },
   "dependencies": {
+    "@sentry/react": "^10.66.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "@types/qrcode": "^1.5.6",
@@ -18,6 +22,7 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@sentry/vite-plugin": "^5.4.0",
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",

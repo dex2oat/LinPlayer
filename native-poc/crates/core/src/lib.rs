@@ -19,6 +19,7 @@ pub mod server_batch;
 pub mod source;
 pub mod sync;
 pub mod translation;
+pub mod update;
 pub mod watch_history;
 pub mod watch_history_sync;
 

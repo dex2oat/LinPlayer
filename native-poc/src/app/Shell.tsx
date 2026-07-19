@@ -5,6 +5,8 @@ import {
   type LoginResult,
   type SourceEntry,
   setActiveServer,
+  getUpdateSettings,
+  checkUpdate,
 } from "../lib/api";
 import SearchOverlay from "../components/SearchOverlay";
 import { useTheme } from "../theme/theme";
@@ -71,6 +73,28 @@ export default function Shell({
   const openDetail = (it: Item) => setDetailStack([it]);
   const pushDetail = (it: Item) => setDetailStack((s) => [...s, it]);
   const backDetail = () => setDetailStack((s) => s.slice(0, -1));
+
+  /* 启动时自动检查更新(受设置页的「启动时自动检查」开关控制)。
+     ★ 静默失败是**故意**的:自动检查失败(断网/GitHub 限流 60 次每小时)不该
+     在用户一进门就弹个红字 —— 手动点「检查更新」时才如实报错。
+     只提示一次,用户点「稍后」就不再烦他,下次启动再说。 */
+  const [newVersion, setNewVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const s = await getUpdateSettings();
+        if (!alive || !s.auto_check) return;
+        const found = await checkUpdate();
+        if (alive && found) setNewVersion(found.tag);
+      } catch {
+        /* 见上:自动检查失败不打扰用户 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   /* 通用规则 legend:「下拉刷新 → 工具栏刷新按钮 · F5」;标注 12:「Alt+← = 返回」。
      挂在 Shell 不挂 App:reloadKey / detailStack 都是 Shell 的状态。
@@ -196,6 +220,24 @@ export default function Shell({
         />
         <div className="content">
           <div className="immersive" />
+          {newVersion && (
+            <div className="update-banner">
+              <span>发现新版本 {newVersion}</span>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setNewVersion(null);
+                  nav("settings");
+                }}
+              >
+                去更新
+              </button>
+              <button type="button" className="btn ghost" onClick={() => setNewVersion(null)}>
+                稍后
+              </button>
+            </div>
+          )}
           {/* 错误边界包在 .page 里面:炸的只是这一页,侧栏照常在,还能切走。
               不包的话任何一页渲染抛错都会卸载整棵树 —— 而窗口是透明的,
               看起来就是「整个 app 黑屏、打都打不开」(2026-07-16 追剧日历真炸过)。 */}

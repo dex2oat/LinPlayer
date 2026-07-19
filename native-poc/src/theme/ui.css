@@ -527,6 +527,17 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
 .toast.error { border-color: var(--danger); color: var(--danger); }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, -8px); } }
 
+/* 启动时发现新版本的横幅。不用 .toast:那个会自己消失,而这条要等用户表态
+   (去更新 / 稍后)。留在文档流里,把下面的内容顶下去,不遮挡任何东西。 */
+.update-banner {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 0 12px; padding: 10px 14px;
+  background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px;
+  font-size: 13px; color: var(--ink);
+}
+.update-banner > span { flex: 1; }
+.update-banner .btn.ghost { background: transparent; }
+
 /* 卡片入场保留位移。卡片里不放 position:fixed 的浮层,所以上面 .page 那条
    「transform 关键帧 = fixed 包含块」的坑在这里不咬人。 */
 .enter { animation: enter var(--dur-slow) var(--ease) both; }

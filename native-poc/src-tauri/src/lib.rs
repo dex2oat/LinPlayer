@@ -2,6 +2,8 @@ mod imgcache;
 mod mpv;
 mod plugins_host;
 mod shaders;
+mod telemetry;
+mod updater;
 
 /* 双显卡笔记本切独显。NVIDIA Optimus / AMD Enduro 在**加载进程时**读主 exe 导出表里的
    这两个符号,非 0 = 「这个程序要用独显」。配套的 /EXPORT 在 build.rs(Rust exe 默认
@@ -85,6 +87,9 @@ struct AppState {
     // 插件 ctx.ui 请求的待回表:id -> oneshot,前端 plugin_ui_respond 回填。
     ui_pending: Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>,
     ui_seq: AtomicU64,
+    // check_update 查到的待装版本。存在核层是为了让 download_and_apply 直接拿,
+    // 不必让前端把资产清单原样传回来(那是白白多一次序列化,还容易被篡改)。
+    pending_update: Mutex<Option<linplayer_core::update::UpdateInfo>>,
 }
 
 fn plugins_mgr(state: &AppState) -> Result<Arc<PluginManager>, String> {
@@ -2488,6 +2493,101 @@ fn set_prefs(
     Ok(())
 }
 
+// ---------- 应用内更新 ----------
+
+#[derive(serde::Serialize)]
+struct UpdateSettings {
+    channel: linplayer_core::update::UpdateChannel,
+    auto_check: bool,
+    /// 当前版本(tauri.conf.json 的 version,由 build.rs 注入)。**比较用它**,
+    /// 不是 http::APP_VERSION —— 后者读 Cargo.toml,和发行包版本没有同步机制。
+    current_version: String,
+    /// 能不能就地自更新。绿色包被解压到 Program Files 这类只写不了的地方时为 false,
+    /// 这时只能引导用户去网页下载。**先问再做** —— 覆盖到一半才发现没权限,
+    /// 用户手上就是个装不上也回不去的半吊子。
+    can_self_update: bool,
+}
+
+#[tauri::command]
+fn get_update_settings(state: State<'_, AppState>) -> UpdateSettings {
+    let cfg = state.config.lock().unwrap();
+    UpdateSettings {
+        channel: cfg.prefs.update_channel,
+        auto_check: cfg.prefs.update_auto_check,
+        current_version: env!("LP_VERSION").to_string(),
+        can_self_update: !matches!(
+            linplayer_core::paths::root_kind(),
+            linplayer_core::paths::RootKind::SystemFallback
+        ),
+    }
+}
+
+#[tauri::command]
+fn set_update_settings(
+    state: State<'_, AppState>,
+    channel: linplayer_core::update::UpdateChannel,
+    auto_check: bool,
+) -> Result<(), String> {
+    let mut cfg = state.config.lock().unwrap();
+    // 逐字段改,别整体覆盖 Prefs —— 见 set_prefs 上的说明。
+    cfg.prefs.update_channel = channel;
+    cfg.prefs.update_auto_check = auto_check;
+    cfg.save();
+    Ok(())
+}
+
+/// 查更新。`Ok(None)` = 确实已是最新;`Err` = 没查成(断网/限流)。
+/// 两者必须分开:把「查不动」显示成「已是最新」是在骗用户。
+#[tauri::command]
+async fn check_update(
+    state: State<'_, AppState>,
+) -> Result<Option<linplayer_core::update::UpdateInfo>, String> {
+    let channel = state.config.lock().unwrap().prefs.update_channel;
+    let found = linplayer_core::update::check(channel, env!("LP_VERSION")).await?;
+    // 存一份:download_and_apply 直接用它,免得让前端把 assets 清单原样传回来。
+    *state.pending_update.lock().unwrap() = found.clone();
+    Ok(found)
+}
+
+/// 下载 + 校验 + 覆盖 + 重启。进度走 `update-download` 事件 `(已下载, 总大小)`。
+/// 成功后**本进程会退出** —— 覆盖动作由复制到 temp 的 applier 副本完成。
+#[tauri::command]
+async fn download_and_apply_update(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let info = state
+        .pending_update
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("没有待安装的更新,请先检查更新")?;
+
+    // 先拦一道:没写权限就别开始下 200MB(用户等半天才发现装不上)。
+    if matches!(
+        linplayer_core::paths::root_kind(),
+        linplayer_core::paths::RootKind::SystemFallback
+    ) {
+        return Err("安装目录不可写(装在 Program Files?),请手动下载覆盖".into());
+    }
+
+    let dir = linplayer_core::paths::temp_dir();
+    let zip = {
+        let app = app.clone();
+        linplayer_core::update::download(&info, &dir, move |done, total| {
+            let _ = app.emit("update-download", (done, total));
+        })
+        .await?
+    };
+
+    updater::spawn_applier(&zip)?;
+    // applier 起来后会等我们放开 exe/dll 的锁。这里必须真退出,不能只关窗口。
+    app.exit(0);
+    Ok(())
+}
+
 // ---------- 弹幕 ----------
 fn danmaku_cfg(s: &DanmakuServer) -> DanmakuSourceConfig {
     /* 鉴权**不再让用户选**,由地址推导(见 danmaku::derive_auth 上的查证依据)。
@@ -2615,7 +2715,9 @@ fn set_danmaku_config(
     Ok(())
 }
 
-/// 按标题搜弹幕番剧(带剧集列表供挑集)。多源并行,分组返回供用户挑源。
+/// 按标题搜弹幕**条目**(不带集列表)。多源并行,分组返回供用户挑源。
+/// 集列表在用户点了条目之后走 [`danmaku_episodes`] 单独取 —— 一次搜索出几百集
+/// 用户「眼都看花了」,而且 /search/episodes 也慢得多。
 #[tauri::command]
 async fn danmaku_search(
     state: State<'_, AppState>,
@@ -2623,6 +2725,22 @@ async fn danmaku_search(
 ) -> Result<Vec<danmaku::DanmakuSourceGroup>, String> {
     let sources = require_danmaku_sources(&state)?;
     Ok(danmaku::search_all_grouped(&state.http, &sources, &keyword).await)
+}
+
+/// 取某源某条目的集列表(用户点开某部番时才发)。
+#[tauri::command]
+async fn danmaku_episodes(
+    state: State<'_, AppState>,
+    source_id: String,
+    anime_id: String,
+    anime_title: String,
+) -> Result<Vec<danmaku::DanmakuEpisode>, String> {
+    let sources = require_danmaku_sources(&state)?;
+    let cfg = sources
+        .iter()
+        .find(|c| c.id == source_id)
+        .ok_or_else(|| format!("弹幕源不存在: {source_id}"))?;
+    danmaku::episodes_for_anime(&state.http, cfg, &anime_id, &anime_title).await
 }
 
 /// 智能匹配:按标题/集号/文件名多源并行匹配,返回候选(带评分)供自动或手动挑。
@@ -3586,8 +3704,8 @@ fn get_prefetch_settings(state: State<'_, AppState>) -> PrefetchSettings {
     PrefetchSettings {
         servers: p.prefetch_servers.clone(),
         threads: p.prefetch_threads,
-        // 钳回合法区间再给前端:旧配置存的是 1GB,原样透出去会让设置页一保存就被拒
-        // (校验 16~32MB),连开关服务器都点不动。见 Prefs::prefetch_cache_bytes 上的说明。
+        // 钳回合法区间再给前端:老配置可能存着 16/32MB 这类小值或离谱值,
+        // 原样透出去会让设置页一保存就被拒,连开关服务器都点不动。
         cache_bytes: p.prefetch_cache_bytes.clamp(
             linplayer_core::config::PREFETCH_CACHE_MIN,
             linplayer_core::config::PREFETCH_CACHE_MAX,
@@ -3604,12 +3722,13 @@ fn set_prefetch_settings(
     if !(2..=4).contains(&settings.threads) {
         return Err("预取线程数只支持 2~4".into());
     }
-    // 上下限都得拒:上限静默夹紧的话,用户设 512MB 实际只生效 32MB,毫无反馈。
-    // 32MB 的由来见 net/prefetch.rs 的 MAX_READ_AHEAD(缓冲是**每连接**的,会乘活跃连接数)。
+    // 上下限都得拒:上限静默夹紧的话,用户设 8GB 实际只生效 4GB,毫无反馈。
+    // 区间由来见 net/prefetch.rs 的 DiskCache —— 它现在是**磁盘**占用上限(环形复用),
+    // 不再是每连接内存缓冲,所以敢给到 GB 级。
     if !(linplayer_core::config::PREFETCH_CACHE_MIN..=linplayer_core::config::PREFETCH_CACHE_MAX)
         .contains(&settings.cache_bytes)
     {
-        return Err("读前缓冲上限只支持 16~32MB(它是每条连接的内存缓冲,大缓冲交给播放器)".into());
+        return Err("缓存上限只支持 64MB~4GB(落盘环形缓存,决定磁盘占用)".into());
     }
     let mut cfg = state.config.lock().unwrap();
     // 只留真实存在的账号:服务器删了它的 id 还赖在表里,下次加同地址的服会「自己就开着」。
@@ -4165,9 +4284,24 @@ pub fn run() {
        set_var 在多线程下是 UB,这里是 main 的第一步,还没有别的线程。
        (旧数据迁移不在这儿调 —— 它挂在 paths::root() 首次调用上自己会跑,
         曾经是这里的一句显式调用,排在 AppConfig::load() 后面就会静默丢账号,见 paths::root() 注释。) */
+    /* ★ 必须是**最最前面**一行。本次启动如果是「以 applier 身份跑」(下面那句
+       redirect_process_dirs 会按 current_exe 推数据根,而 applier 跑在
+       userdata/temp/ 下,推出来是错的),就干完覆盖活直接返回,别启动 App。 */
+    if updater::run_applier_if_requested() {
+        return;
+    }
+    // 上一次更新留下的 applier 副本(它自己删不掉运行中的自己)。
+    updater::cleanup_stale_applier();
+
     redirect_process_dirs();
 
-    // 每次启动重注册 linplayer:// —— 绿色包用户挪了文件夹,老路径就是死的。
+    /* Sentry 紧跟其后:它会起自己的传输线程,所以**必须**排在 redirect_process_dirs() 之后
+       (上面那条 set_var 要求当时还没有别的线程),但又要排在其余一切之前 —— 从这行往下
+       任何一处 panic 才有人接得住。guard 绑在 run() 的栈上活到进程结束;
+       写成 `let _ = ...` 会当场 drop 掉 client,之后崩溃全部静默丢弃。 */
+    let _sentry = telemetry::init();
+
+    // 每次启动重注册 linplayer://—— 绿色包用户挪了文件夹,老路径就是死的。
     // 它会在 HKCU 留一个键(删文件夹带不走),这是有意保留的:没有它深链就没法自动拉起本程序。
     register_deep_link_scheme();
     let config = AppConfig::load();
@@ -4236,6 +4370,7 @@ pub fn run() {
             plugins: OnceLock::new(),
             ui_pending: Mutex::new(HashMap::new()),
             ui_seq: AtomicU64::new(0),
+            pending_update: Mutex::new(None),
         })
         .setup(|app| {
             /* 主窗口在这儿建而不是在 tauri.conf.json 里声明 —— 唯一的原因是 data_directory:
@@ -4403,6 +4538,10 @@ pub fn run() {
             apply_prefs,
             get_prefs,
             set_prefs,
+            get_update_settings,
+            set_update_settings,
+            check_update,
+            download_and_apply_update,
             source_login,
             source_list_dir,
             source_play,
@@ -4464,6 +4603,7 @@ pub fn run() {
             get_official_danmaku,
             set_danmaku_config,
             danmaku_search,
+            danmaku_episodes,
             danmaku_load,
             danmaku_match,
             danmaku_min_auto_score,
