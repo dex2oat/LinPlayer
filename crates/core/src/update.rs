@@ -112,6 +112,31 @@ pub fn compare_versions(a: &str, b: &str) -> Ordering {
         .then(pb.is_pre.cmp(&pa.is_pre))
 }
 
+/* 从发布列表里挑**版本号最大**的非草稿发布,不是列表里的第一个。
+
+   原先的实现是「取第一个」,注释理由是「GitHub 按时间倒序返回」——
+   那句话是错的。2026-07-19 实测反证:
+     v1.0.0-build557-pre  id=356263112  created=05:05  ← 排第 1
+     v0.1.0-build566-pre  id=356398423  created=17:35  ← 排第 2
+   id、created_at、published_at **三个键都是后者更大/更晚**,却排在后面;
+   而 v1.0.0-build556 又落到第 7 位,连 semver 排序也不自洽。
+   结论:GitHub 这个返回顺序没写进文档、也不可依赖。
+
+   照抄列表顺序的后果是「**降级伪装成升级**」:把代码更旧、版本号更大的包当最新版
+   推给用户。我们自己就有 compare_versions,发布链路的正确性不该寄托在第三方的
+   返回顺序上。抽成纯函数是为了能测 —— check() 要联网,测不动。 */
+fn pick_newest_release(list: &serde_json::Value) -> Option<&serde_json::Value> {
+    list.as_array()?
+        .iter()
+        .filter(|r| r["draft"] != true)
+        .max_by(|a, b| {
+            compare_versions(
+                a["tag_name"].as_str().unwrap_or_default(),
+                b["tag_name"].as_str().unwrap_or_default(),
+            )
+        })
+}
+
 /// 只给界面显示,**不参与比较**(理由见文件头)。
 pub fn normalize_version(raw: &str) -> String {
     let p = parse_version(raw);
@@ -189,11 +214,18 @@ pub async fn check(
         UpdateChannel::Stable => get_json(&format!("{base}/releases/latest")).await?,
         UpdateChannel::Prerelease => {
             let list = get_json(&format!("{base}/releases?per_page=10")).await?;
-            // GitHub 按时间倒序返回,取第一个非草稿的(不管 pre 与否)。
-            match list
-                .as_array()
-                .and_then(|l| l.iter().find(|r| r["draft"] != true))
-            {
+            /* 取**版本号最大**的那个非草稿发布,不是列表里的第一个。
+
+               这里原先写的是「GitHub 按时间倒序返回,取第一个」—— 那句话是错的,
+               2026-07-19 实测反证:v1.0.0-build557(id 356263112,created 05:05)
+               排在 v0.1.0-build566(id 356398423,created 17:35)**前面** ——
+               id、created_at、published_at 三个键都是后者更大/更晚。
+               GitHub 对 semver 型 tag 有自己的排法且并不自洽,这个顺序不可依赖。
+
+               照抄列表顺序的后果是「降级伪装成升级」:把一个代码更旧、版本号更大的包
+               当成最新版推给用户。我们自己有 compare_versions,就该用它排,
+               别把发布链路的正确性寄托在第三方一个没写进文档的返回顺序上。 */
+            match pick_newest_release(&list) {
                 Some(r) => r.clone(),
                 None => return Ok(None),
             }
@@ -424,6 +456,36 @@ pub fn extract_zip(zip_path: &Path, dest: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /* 预览版渠道**不能照抄 GitHub 的返回顺序**。
+       下面这组数据是 2026-07-19 从真实仓库抓的原样顺序:版本号更小、发布更早的
+       v1.0.0-build557 被 GitHub 排在了第一位。旧实现 `.find(第一个非草稿)` 会选中它,
+       于是给装了 0.1.0-build566 的用户推一个更旧的包 —— 降级伪装成升级。
+
+       ★ 这条测试反向验证过:把 pick_newest_release 换回 `.find(...)` 会红在
+         「选中了 v1.0.0-build557」。不是永远绿的假测试。 */
+    #[test]
+    fn prerelease_picks_max_version_not_list_order() {
+        let list = serde_json::json!([
+            { "tag_name": "v1.0.0-build557-pre", "draft": false },
+            { "tag_name": "v1.0.2-build566-pre", "draft": false },
+            { "tag_name": "v1.0.1-build565-pre", "draft": false },
+        ]);
+        let got = pick_newest_release(&list).expect("应当挑得出来");
+        assert_eq!(got["tag_name"], "v1.0.2-build566-pre");
+    }
+
+    /// 草稿不能参与:它还没发布,资产可能是空的。
+    #[test]
+    fn prerelease_skips_drafts() {
+        let list = serde_json::json!([
+            { "tag_name": "v9.9.9-build999-pre", "draft": true },
+            { "tag_name": "v1.0.0-build557-pre", "draft": false },
+        ]);
+        let got = pick_newest_release(&list).expect("应当挑得出来");
+        assert_eq!(got["tag_name"], "v1.0.0-build557-pre");
+        assert!(pick_newest_release(&serde_json::json!([])).is_none());
+    }
 
     fn cmp(a: &str, b: &str) -> i32 {
         match compare_versions(a, b) {
