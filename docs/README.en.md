@@ -7,7 +7,9 @@
   <a href="https://github.com/zzzwannasleep/LinPlayer/releases"><img src="https://img.shields.io/github/downloads/zzzwannasleep/LinPlayer/total?label=downloads&color=green&logo=github" alt="Downloads"></a>
   <a href="https://linplayer.sentry.io"><img src="https://img.shields.io/endpoint?url=https://linplayeroaproxy.pages.dev/sentry/users" alt="Active Users"></a>
   <a href="https://github.com/zzzwannasleep/LinPlayer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/zzzwannasleep/LinPlayer" alt="License"></a>
-  <img src="https://img.shields.io/badge/Flutter-3.24+-02569B?logo=flutter" alt="Flutter">
+  <img src="https://img.shields.io/badge/Rust-1.80+-000000?logo=rust" alt="Rust">
+  <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white" alt="React">
+  <img src="https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white" alt="Tauri">
   <a href="https://github.com/zzzwannasleep/LinPlayer/actions"><img src="https://img.shields.io/github/actions/workflow/status/zzzwannasleep/LinPlayer/build.yml?branch=main&label=build&logo=github" alt="Build"></a>
   <a href="https://t.me/MikudesuChannels"><img src="https://img.shields.io/badge/Telegram-MikudesuChannels-26A5E4?logo=telegram&logoColor=white" alt="Telegram"></a>
 </p>
@@ -18,26 +20,41 @@
   <a href="README.ja.md">日本語</a>
 </p>
 
-**LinPlayer** is a cross-platform third-party Emby client covering **mobile (Android / iOS)**, **desktop (Windows / Linux / macOS)** and **TV (Android TV / tvOS)**, evolving on Flutter as its single long-term codebase.
+**LinPlayer** is a third-party Emby client targeting **Windows / Linux / Android / Android TV**.
 
-> Each platform uses its own native UI language (Material / fluent_ui / macos_ui / adaptive TV), while sharing the same core logic.
+> ### 🚧 Under reconstruction (2026-07)
+>
+> The project has migrated from Flutter to a **Rust core + React/TypeScript UI + Tauri shell**.
+>
+> - **Desktop (Windows / Linux)** — working, shipping normally.
+> - **Android / Android TV** — UI being rebuilt; no new builds for now.
+> - **Apple platforms (iOS / macOS / tvOS)** — no longer supported, removed from the repo.
+>
+> The complete Flutter-era code is preserved at tag [`flutter-final`](https://github.com/zzzwannasleep/LinPlayer/tree/flutter-final).
+
+Business logic (data sources, networking, playback control, sync, downloads) lives in a **single Rust crate shared by every platform**; each platform only writes its own UI. So a 🔨 below does not mean "not built yet" — it means **the core is ready and waiting for UI wiring**.
 
 ## Features
 
-- **Dual player cores**
-  - **ExoPlayer** (Android native): lightweight and stable, with text subtitles (SRT/ASS/WEBVTT/TTML)
-  - **MPV** (media_kit / libmpv): full-format support, HDR / Dolby Vision, native PGS/SUP graphic subtitles, Anime4K upscaling
-- **Danmaku**: multiple backends including DanDanPlay, smart episode matching, parallel sources, outline / display-area rendering — on all three platforms
-- **Rankings**: DanDanPlay anime chart + TMDB movie/TV chart (toggleable)
-- **Multi-source browsing**: beyond Emby, network-disk / aggregation sources (OpenList, Quark Cookie/QR, Ani-rss, etc.)
-- **Subtitles**: auto-load Emby subtitle streams, track switching, delay adjustment, font/size/position settings; full libass effects on MPV
-- **Downloads**: custom multi-threaded (ranged) download engine, unified across platforms
-- **Proxy**: per-platform custom proxy + Cloudflare best-IP local reverse proxy; Android TV bundles the mihomo core + zashboard panel
-- **Plugin system**: QuickJS script engine, each plugin in its own isolate with crash/timeout isolation
-- **Casting**: DLNA
-- **Remote control**: control the TV client from a phone via QR (built-in HTTP server + web control page)
-- **In-app updates**: dual channel (stable / pre) overwrite updates
-- **Playback reporting**: complete Emby progress sync, with cross-server resume
+| Feature | Notes | Desktop | Android / TV |
+|:--|:--|:--:|:--:|
+| **MPV player core** | All formats; HDR / Dolby Vision (auto gpu-next + software decode); PGS/SUP graphic subtitles; Anime4K upscaling and quality presets | ✅ | 🔨 |
+| **Danmaku** | DanDanPlay and other backends, smart episode matching, parallel sources, adjustable outline and display area | ✅ | 🔨 |
+| **Subtitles** | Auto-load Emby subtitle streams; track switching, delay, font/size/position; full libass effects | ✅ | 🔨 |
+| **Multi-source browsing** | Beyond Emby: OpenList, Quark (cookie / QR), Ani-rss, Feiniu | ✅ | 🔨 |
+| **Playback sync** | Emby progress reporting, cross-server resume | ✅ | 🔨 |
+| **Trakt / Bangumi** | Scrobbling and anime watch-progress sync | ✅ | 🔨 |
+| **Airing calendar** | Trakt / Bangumi release schedules | ✅ | 🔨 |
+| **Rankings** | DanDanPlay anime chart + TMDB movie/TV chart (toggleable) | ✅ | 🔨 |
+| **Downloads** | Custom multi-threaded ranged download engine | ✅ | 🔨 |
+| **Multi-threaded loading** | Local prefetch proxy, concurrent ranged reads feeding the player ahead of playback | ✅ | 🔨 |
+| **Proxy** | Custom proxy + Cloudflare best-IP local reverse proxy | ✅ | 🔨 |
+| **Plugin system** | QuickJS engine, per-plugin isolation — crashes and timeouts never reach the host | ✅ | 🔨 |
+| **Bulk server import** | Paste multi-line configs and import them in one pass | ✅ | 🔨 |
+| **Config migration** | Transfer server configs between devices by QR (credentials included, fully offline) | ✅ | 🔨 |
+| **In-app updates** | Dual channel (stable / pre) overwrite updates | ✅ | 🔨 |
+
+<sub>✅ wired and usable · 🔨 core ready, UI being rebuilt</sub>
 
 ## Screenshots
 
@@ -76,6 +93,11 @@
 
 ### Mobile
 
+<details>
+<summary><b>Flutter-era screenshots</b> — the new Android UI is being rebuilt; these will be replaced</summary>
+
+<br>
+
 > Content shown courtesy of [**BAVA**](https://shop.mebimmer.de).
 
 <table>
@@ -94,9 +116,11 @@
   </tr>
 </table>
 
+</details>
+
 ## Development & Tech
 
-Player-core comparison, local development & builds, and the tech stack — see the **[development docs →](DEVELOPMENT.md)**.
+Repository layout, local development & builds, and the tech stack — see the **[development docs →](DEVELOPMENT.md)**.
 
 ## Disclaimer
 
@@ -112,7 +136,7 @@ Player-core comparison, local development & builds, and the tech stack — see t
 - To continuously improve stability, LinPlayer integrates [Sentry](https://sentry.io) for **crash/error reporting** and **anonymous active-usage statistics** (used only to understand crashes and rough usage scale).
 - We **never collect any information that can identify you personally**: no accounts, passwords, cookies, tokens, server addresses, library contents, watch history, or IP addresses. **No screen recording, no behavior tracking.**
 - Reported data contains only **anonymous crash stack traces, app version, and platform/OS type** and similar technical info, with devices distinguished by a random anonymous identifier (counting heads, not identities).
-- We **never sell, share, or use this data for advertising or any commercial purpose**. The configuration is publicly auditable: [`lib/core/services/telemetry.dart`](../lib/core/services/telemetry.dart).
+- We **never sell, share, or use this data for advertising or any commercial purpose**. The configuration is publicly auditable: [`ui/desktop/telemetry.ts`](../ui/desktop/telemetry.ts) and [`apps/desktop/src/telemetry.rs`](../apps/desktop/src/telemetry.rs).
 
 ## License
 
@@ -124,20 +148,18 @@ LinPlayer stands on the shoulders of these open-source projects, media services 
 
 ### Player Cores
 
-- [media-kit](https://github.com/media-kit/media-kit) — cross-platform media player (libmpv wrapper)
 - [mpv](https://github.com/mpv-player/mpv) / [libmpv](https://github.com/mpv-player/mpv) — full-format playback core
-- [ExoPlayer / androidx media](https://github.com/androidx/media) — Android native player
-- [MPVKit](https://github.com/mpvkit/MPVKit) — libmpv integration for tvOS
 - [shinchiro mpv-winbuild](https://github.com/shinchiro/mpv-winbuild-cmake) — full-featured libmpv prebuilds for Windows
-- [Anime4K](https://github.com/bloc97/Anime4K) — real-time upscaling GLSL shaders
+- [Anime4K](https://github.com/bloc97/Anime4K) — real-time anime upscaling GLSL shaders
+- [mpv_PlayKit](https://github.com/hooke007/mpv_PlayKit) — quality-preset shader ports and documentation
+- [AMD FidelityFX (FSR / CAS)](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) — upscaling and sharpening shaders
+- [NVIDIA Image Scaling](https://github.com/NVIDIAGameWorks/NVIDIAImageScaling) — NVScaler / NVSharpen shaders
 
 ### UI & Framework
 
-- [Flutter](https://flutter.dev) / [Riverpod](https://riverpod.dev) / [go_router](https://pub.dev/packages/go_router)
-- [TDesign Flutter](https://github.com/Tencent/tdesign-flutter) — Tencent TDesign component library (vendored & patched)
-- [fluent_ui](https://github.com/bdlukaa/fluent_ui) — Windows Fluent style
-- [macos_ui](https://github.com/GroovinChip/macos_ui) — macOS native style
-- [flutter_animate](https://pub.dev/packages/flutter_animate) — unified motion across platforms
+- [Rust](https://www.rust-lang.org/) / [Tokio](https://tokio.rs) / [reqwest](https://github.com/seanmonstar/reqwest) — the business core shared by every platform
+- [Tauri 2](https://tauri.app) — desktop shell (windowing / IPC / packaging)
+- [React 19](https://react.dev) / [TypeScript](https://www.typescriptlang.org) / [Vite](https://vite.dev) — per-platform UI
 
 ### Services & Data Sources
 
@@ -148,6 +170,7 @@ LinPlayer stands on the shoulders of these open-source projects, media services 
 - [anibt](https://anibt.net) — thanks to the operator for providing a domestic Bangumi reverse proxy (API and image acceleration) that makes tracking sync work out of the box; also a new-generation BT/magnet search site — rich resources, clean experience, recommended
 - [Trakt](https://trakt.tv/) — movie/TV watch history sync (Scrobble)
 - [OpenList](https://github.com/OpenListTeam/OpenList) — network-disk aggregation source
+- [Ani-rss](https://github.com/wushuo894/ani-rss) — anime RSS subscription and auto-download
 
 ### Emby Servers
 
@@ -158,14 +181,12 @@ Thanks to the following Emby servers for providing UI demos and long-term suppor
 
 ### Network & Proxy
 
-- [mihomo (Clash.Meta)](https://github.com/MetaCubeX/mihomo) — proxy core bundled on Android TV
-- [zashboard](https://github.com/Zephyruso/zashboard) — mihomo control panel
-- [socks5_proxy](https://pub.dev/packages/socks5_proxy) — SOCKS proxy support
+- [rustls](https://github.com/rustls/rustls) — TLS implementation (self-signed certificates allowed per host allowlist)
+- [Cloudflare](https://www.cloudflare.com/) — the edge network our best-IP local reverse proxy rides on
 
 ### Scripting & Tools
 
-- [flutter_qjs](https://github.com/ekibun/flutter_qjs) / [QuickJS](https://bellard.org/quickjs/) — plugin script engine (vendored & patched)
-- [dio](https://github.com/cfug/dio) / [extended_image](https://github.com/fluttercandies/extended_image) / [archive](https://pub.dev/packages/archive) and other pub.dev packages
+- [QuickJS](https://bellard.org/quickjs/) — plugin script engine
 
 > Content from TMDB and DanDanPlay remains the copyright of its respective owners; this project only aggregates and displays it, and does not store or distribute copyrighted media.
 

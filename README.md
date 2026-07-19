@@ -20,28 +20,41 @@
   <a href="docs/README.ja.md">日本語</a>
 </p>
 
-**LinPlayer** 是一个跨平台的 Emby 第三方客户端，覆盖 **移动端（Android）**、**桌面端（Windows / Linux）** 与 **电视端（Android TV）**。
+**LinPlayer** 是一个 Emby 第三方客户端，目标平台 **Windows / Linux / Android / Android TV**。
 
-> **2026-07 重构中**:已从 Flutter 全面迁到 **Rust 核心 + React/TypeScript UI + Tauri 壳**;苹果全线（iOS / macOS / tvOS）不再支持。桌面端已可用,安卓/TV 端 UI 重建中。Flutter 时代的代码见 tag `flutter-final`。
+> ### 🚧 重构中（2026-07）
+>
+> 项目已从 Flutter 整体迁移到 **Rust 核心 + React/TypeScript UI + Tauri 壳**。
+>
+> - **桌面端（Windows / Linux）** —— 可用，正常发布。
+> - **安卓 / Android TV** —— UI 重建中，暂无新版安装包。
+> - **苹果全线（iOS / macOS / tvOS）** —— 不再支持，已从仓库移除。
+>
+> Flutter 时代的完整代码保留在 tag [`flutter-final`](https://github.com/zzzwannasleep/LinPlayer/tree/flutter-final)。
 
-> 业务核心（数据源 / 网络 / 配置 / 播放控制）是一份 Rust crate，各端共用;每端有自己的 UI 目录，按各自的交互语言实现。
+业务能力（数据源 / 网络 / 播放控制 / 同步 / 下载）集中在一份**各端共用的 Rust crate** 里；每端只写自己的 UI，按各自的交互语言实现。所以下表中标 🔨 的项目并不是"还没做"，而是**核心已就绪、等 UI 接线**。
 
 ## 功能特性
 
-- **双播放器内核**
-  - **ExoPlayer**（Android 原生）：轻量稳定，支持文本字幕（SRT/ASS/WEBVTT/TTML）
-  - **MPV**（libmpv）：全格式支持，HDR / Dolby Vision，原生支持 PGS/SUP 图形字幕、Anime4K 超分辨率
-- **弹幕**：接入弹弹play 等多后端，智能集数匹配、并行分源、描边/显示区域渲染，三端可用
-- **排行榜**：弹弹play 动漫榜 + TMDB 影视榜（可开关）
-- **多源浏览**：Emby 之外支持网盘/聚合源（OpenList、夸克 Cookie/扫码、Ani-rss 等）
-- **字幕**：自动加载 Emby 字幕流，轨道切换、延迟调整、字体/大小/位置设置；MPV 走 libass 完整特效
-- **下载**：自建多线程（Range 分段）下载引擎，三端统一
-- **代理**：三端自定义代理 + CF 优选 IP 本地反代；Android TV 内置 mihomo 内核 + zashboard 面板
-- **插件系统**：QuickJS 脚本引擎，每个插件独立 isolate，崩溃/超时隔离
-- **投屏**：DLNA 投屏
-- **遥控**：手机扫码遥控电视端（内置 HTTP 服务 + Web 控制页）
-- **应用内更新**：双渠道（stable / pre）覆盖更新
-- **播放上报**：完整的 Emby 播放进度同步，支持跨服务器续播
+| 功能 | 说明 | 桌面 | 安卓 / TV |
+|:--|:--|:--:|:--:|
+| **MPV 播放内核** | 全格式；HDR / Dolby Vision（自动切 gpu-next + 软解）；PGS/SUP 图形字幕；Anime4K 超分与画质档位 | ✅ | 🔨 |
+| **弹幕** | 弹弹play 等多后端，智能集数匹配、并行分源、描边与显示区域可调 | ✅ | 🔨 |
+| **字幕** | 自动加载 Emby 字幕流；轨道切换、延迟、字体/大小/位置；libass 完整特效 | ✅ | 🔨 |
+| **多源浏览** | Emby 之外接入 OpenList、夸克（Cookie / 扫码）、Ani-rss、飞牛影视 | ✅ | 🔨 |
+| **播放记录同步** | Emby 进度上报，跨服务器续播 | ✅ | 🔨 |
+| **Trakt / Bangumi** | 观看记录 Scrobble 与追番进度同步 | ✅ | 🔨 |
+| **追剧日历** | Trakt / Bangumi 放送表 | ✅ | 🔨 |
+| **排行榜** | 弹弹play 动漫榜 + TMDB 影视榜（可关） | ✅ | 🔨 |
+| **下载** | 自建多线程 Range 分段下载引擎 | ✅ | 🔨 |
+| **多线程加载** | 本地预取代理，并发 Range 超前拉流喂播放器 | ✅ | 🔨 |
+| **代理** | 自定义代理 + CF 优选 IP 本地反代 | ✅ | 🔨 |
+| **插件系统** | QuickJS 脚本引擎，逐插件隔离，崩溃/超时不影响宿主 | ✅ | 🔨 |
+| **批量添加服务器** | 粘贴多行配置一次性解析导入 | ✅ | 🔨 |
+| **配置迁移** | 扫码在设备间直传服务器配置（含凭据，离线不过云） | ✅ | 🔨 |
+| **应用内更新** | 双渠道（stable / pre）覆盖更新 | ✅ | 🔨 |
+
+<sub>✅ 已接线可用 · 🔨 核心已就绪，UI 重建中</sub>
 
 ## 界面预览
 
@@ -80,6 +93,11 @@
 
 ### 移动端
 
+<details>
+<summary><b>Flutter 版历史截图</b> —— 新安卓端 UI 重建中，重建完成后更换</summary>
+
+<br>
+
 > 截图内容来自 [**BAVA 服**](https://shop.mebimmer.de)。
 
 <table>
@@ -98,9 +116,11 @@
   </tr>
 </table>
 
+</details>
+
 ## 开发与技术
 
-播放器内核对比、本地开发与构建、技术栈详见 **[开发文档 →](docs/DEVELOPMENT.md)**。
+仓库结构、本地开发与构建、技术栈详见 **[开发文档 →](docs/DEVELOPMENT.md)**。
 
 ## 免责声明
 
@@ -128,11 +148,12 @@
 
 ### 播放内核
 
-- [media-kit](https://github.com/media-kit/media-kit) — 跨平台媒体播放器（libmpv 封装）
 - [mpv](https://github.com/mpv-player/mpv) / [libmpv](https://github.com/mpv-player/mpv) — 全格式播放核心
-- [ExoPlayer / androidx media](https://github.com/androidx/media) — Android 原生播放器
-- [shinchiro mpv-winbuild](https://github.com/shinchiro/mpv-winbuild-cmake) — Windows 完整版 libmpv 预编译
-- [Anime4K](https://github.com/bloc97/Anime4K) — 实时超分辨率 GLSL 着色器
+- [shinchiro mpv-winbuild](https://github.com/shinchiro/mpv-winbuild-cmake) — Windows 完整版 libmpv 预编译（含 PGS/SUP 解码器）
+- [Anime4K](https://github.com/bloc97/Anime4K) — 动漫实时超分辨率 GLSL 着色器
+- [mpv_PlayKit](https://github.com/hooke007/mpv_PlayKit) — 画质档位 shader 移植与文档
+- [AMD FidelityFX (FSR / CAS)](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) — 放大与锐化着色器
+- [NVIDIA Image Scaling](https://github.com/NVIDIAGameWorks/NVIDIAImageScaling) — NVScaler / NVSharpen 着色器
 
 ### UI 与框架
 
@@ -149,6 +170,7 @@
 - [anibt](https://anibt.net) — 感谢站长为 LinPlayer 提供国内 Bangumi 反代（接口与图片加速），让追番同步开箱即用；亦是新生代 BT 磁力搜索站，资源丰沛、体验清爽，诚意推荐
 - [Trakt](https://trakt.tv/) — 影视观看记录同步（Scrobble）
 - [OpenList](https://github.com/OpenListTeam/OpenList) — 网盘聚合源
+- [Ani-rss](https://github.com/wushuo894/ani-rss) — 番剧 RSS 订阅与自动下载
 
 ### Emby 服
 
@@ -159,9 +181,8 @@
 
 ### 网络与代理
 
-- [mihomo (Clash.Meta)](https://github.com/MetaCubeX/mihomo) — Android TV 内置代理内核
-- [zashboard](https://github.com/Zephyruso/zashboard) — mihomo 控制面板
-- [socks5_proxy](https://pub.dev/packages/socks5_proxy) — SOCKS 代理支持
+- [rustls](https://github.com/rustls/rustls) — TLS 实现（按 host 白名单放行自签名证书）
+- [Cloudflare](https://www.cloudflare.com/) — 优选 IP 本地反代所依托的边缘网络
 
 ### 脚本与工具
 
