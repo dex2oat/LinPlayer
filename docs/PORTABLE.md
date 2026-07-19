@@ -31,10 +31,12 @@ LinPlayer/
 
 1. **干净**:不写 `%APPDATA%` / `%LOCALAPPDATA%`(Windows)、不写 `~/.config` 与
    `~/.local/share`(Linux)、不进系统钥匙串。删掉解压文件夹 = 彻底清除。
-   > 尤其按住了**浏览器内核自己**建的 profile:Windows 上显式给 WebView2 指定
-   > `data_directory`;Linux 上 WebKitGTK 没有这个参数,改为在启动最早期把
-   > `XDG_DATA_HOME` / `XDG_CACHE_HOME` 重定向进包内(见 `redirect_process_dirs()`)。
-   > 不按住的话,光这一项实测就有 126MB 落在系统目录里。
+   > 尤其按住了**浏览器内核自己**建的 profile:建窗时显式传 `data_directory`,
+   > **两端都有效** —— Windows 给 WebView2(不给就自己在 `%LOCALAPPDATA%` 建,实测 126MB),
+   > Linux 由 wry 转成 WebKitGTK `WebsiteDataManager` 的 `base_data`/`base_cache_directory`。
+   >
+   > 唯一有意落在包外的是 Linux 的 `~/.local/share/applications/linplayer.desktop` ——
+   > 深链协议注册,桌面环境必须扫得到(和 Windows 那个 HKCU 注册表键同理)。
 2. **隔离**:每份解压目录只读写**自己的 `userdata/`**。解压两份分别跑 GitHub 包和
    本地包,配置互不串改 —— 可以放心对照测试整个安装流程。
 3. **可覆盖更新**:更新包(zip)只含程序文件,**不含 `userdata/`**。
@@ -46,6 +48,23 @@ LinPlayer/
 开箱即用,libmpv 已内置在包里。
 
 ### Linux(x86_64)
+
+Linux 上的「便携」只覆盖**数据**,不覆盖**运行库**。二进制对系统库是硬依赖
+(`readelf -d` 实测 15 条 `DT_NEEDED`),这一点必须说在前面 —— 缺了哪个,报的是
+`libxxx.so.N: cannot open shared object file`,跟播放器设置一点关系没有。
+
+- **必需的桌面运行库**(Tauri 在 Linux 上就是 GTK3 + WebKitGTK,不是自带内核):
+
+  | 发行版 | 安装 |
+  |:--|:--|
+  | Debian / Ubuntu | `sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0 libsoup-3.0-0` |
+  | Fedora | `sudo dnf install webkit2gtk4.1 gtk3 libsoup3` |
+  | Arch | `sudo pacman -S webkit2gtk-4.1 gtk3 libsoup3` |
+
+  > ⚠️ 必须是 **webkit2gtk 4.1**(配 libsoup3),不是 4.0。这条决定了**系统下限**:
+  > Ubuntu ≥ 22.04 / Debian ≥ 12 / Fedora ≥ 36。更老的发行版只有 4.0,本包起不来。
+  > 桌面环境装齐的机器上这些一般都在,但**最小化安装 / 服务器 / 精简 WM 的机器上不一定**。
+
 - **需要系统 libmpv**(包里不自带):
   | 发行版 | 安装 |
   |:--|:--|

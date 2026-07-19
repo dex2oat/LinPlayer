@@ -895,9 +895,9 @@ fn register_deep_link_scheme() {
 /// 放一个带 `MimeType=x-scheme-handler/linplayer` 的 .desktop,再把它设成该 scheme 的默认处理器。
 /// 同样**每次启动都重写** —— 绿色包用户挪了文件夹,Exec= 里的老路径就是死的,而且不报错。
 ///
-/// ★ 这里**故意不用 `dirs::data_local_dir()`**:redirect_process_dirs() 刚把
-///   `XDG_DATA_HOME` 劫持进包内的 userdata/,而 dirs 正是读这个变量的 —— 用它会把
-///   .desktop 写进包里,桌面环境永远扫不到,深链静默失效。必须显式回到真实 home。
+/// 显式走真实 home 而不是 `dirs::data_local_dir()`:这个文件**必须**让桌面环境扫得到,
+/// 是少数几个「该落在包外」的东西之一(和注册表键同理,删文件夹带不走)。写死路径比
+/// 依赖某个会被环境变量左右的抽象更稳 —— 早期劫持 XDG 时就险些把它写进包里。
 #[cfg(target_os = "linux")]
 fn register_deep_link_scheme() {
     let Ok(exe) = std::env::current_exe() else { return };
@@ -4333,17 +4333,11 @@ fn redirect_process_dirs() {
         std::env::set_var(k, &t);
     }
 
-    /* Linux:WebKitGTK 没有 WebView2 那个 data_directory 参数(那是 Windows 专属方法),
-       它的 profile/缓存位置认 **XDG 环境变量**。不按住的话,前端 localStorage、IndexedDB、
-       HTTP 缓存会落到 ~/.local/share 和 ~/.cache —— 直接破掉 paths.rs 开头那条
-       「解压即用、删文件夹即卸载,一个字节都不许落在包外」的铁律。
-       只改 XDG_{DATA,CACHE}_HOME(用户私有的那半),**不动 XDG_DATA_DIRS** ——
-       系统级图标主题/GTK 资源还在那儿找,动了界面会缺图标。 */
-    #[cfg(target_os = "linux")]
-    {
-        std::env::set_var("XDG_DATA_HOME", linplayer_core::paths::webview_dir());
-        std::env::set_var("XDG_CACHE_HOME", linplayer_core::paths::cache_dir("webkit"));
-    }
+    /* 这里**故意不劫持 XDG_{DATA,CACHE}_HOME**。曾经这么干过,理由是「WebKitGTK 没有
+       data_directory」—— 那是个错误前提:该方法两端都有效(见建窗处的注释)。
+       劫持 XDG 的代价是真的:它让整个进程的 dirs::* 跟着说谎,深链要写的 .desktop
+       差点因此落进包内、桌面环境永远扫不到。Windows 那边也没有去动 %APPDATA%,
+       两端保持同一个口径:只按住自家数据根,不改系统的用户目录语义。 */
 }
 
 /// Linux:强制走 X11(必要时经 XWayland)。**必须在 GTK 初始化之前**。
@@ -4471,15 +4465,15 @@ pub fn run() {
             .inner_size(1180.0, 720.0)
             .min_inner_size(900.0, 560.0)
             .transparent(true)
-            .decorations(false);
-            /* ★ data_directory 是 Tauri v2 里 **`#[cfg(windows)]` 门控的方法** ——
-               在 Linux 上这个方法根本不存在,写在链上就是 `no method named data_directory`
-               的硬编译错误。所以只能这样分开挂。
-               Linux 那半的等价手段在 run() 里:WebKitGTK 的 profile 位置认 XDG 环境变量,
-               redirect_process_dirs() 已经把 XDG_* 全指进包内的 userdata/,
-               「一个字节都不落包外」这条承诺两端都保住了。 */
-            #[cfg(windows)]
-            let win_builder = win_builder.data_directory(linplayer_core::paths::webview_dir());
+            .decorations(false)
+            /* data_directory 两端都有效,**不要给它加平台门**。
+               Windows → WebView2 的 profile(不给就自己在 %LOCALAPPDATA% 建,实测 126MB)。
+               Linux   → wry 用它构造 WebsiteDataManager 的 base_data/base_cache_directory
+                        (wry-0.55 webkitgtk/web_context.rs;tauri-runtime-wry 拿它当 WebContext key)。
+               曾经误以为这是 `#[cfg(windows)]` 方法而在 Linux 上绕道劫持 XDG_* —— 那不但多余,
+               还会让整个进程的 dirs::* 跟着说谎(深链的 .desktop 差点因此写进包里)。
+               核对过 tauri-2.11.5 的 webview_window.rs:1022,方法上没有任何 cfg。 */
+            .data_directory(linplayer_core::paths::webview_dir());
             let window = win_builder.build()?;
             let parent = match hwnd_of(&window) {
                 Ok(p) => {

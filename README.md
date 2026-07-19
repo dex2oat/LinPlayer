@@ -27,7 +27,7 @@
 > 项目已从 Flutter 整体迁移到 **Rust 核心 + React/TypeScript UI + Tauri 壳**。
 >
 > - **桌面端（Windows / Linux）** —— 可用，正常发布。两端都是免安装绿色包，数据全在主程序同级的 `userdata/`。
->   - Linux 侧需自备系统 libmpv（`libmpv2` / `mpv-libs` / `mpv`），并运行在 X11 上（Wayland 会话自动经 XWayland）。详见 [便携说明](docs/PORTABLE.md)。
+>   - Linux 侧的「便携」只覆盖数据、不覆盖运行库：需要 **webkit2gtk 4.1 + GTK3 + libsoup3**（决定系统下限：Ubuntu ≥ 22.04 / Debian ≥ 12）和系统 **libmpv**，并运行在 X11 上（Wayland 会话自动经 XWayland）。详见 [便携说明](docs/PORTABLE.md)。
 > - **安卓 / Android TV** —— UI 重建中，暂无新版安装包。
 > - **苹果全线（iOS / macOS / tvOS）** —— 不再支持，已从仓库移除。
 >

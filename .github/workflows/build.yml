@@ -336,6 +336,15 @@ jobs:
           set -euo pipefail
           BIN=target/release/app
           test -f "$BIN" || { echo "缺少产物 $BIN"; exit 1; }
+
+          # ★ strip 必须排在上面那步 Sentry 符号上传**之后**:调试信息已经传走了,
+          #   符号化靠 build-id 匹配,和本地这份二进制里还留不留调试段无关。
+          #   不 strip 的代价是实的 —— 根 Cargo.toml 的 debug="line-tables-only" 那句注释
+          #   「exe 体积不变」只对 MSVC 成立(它的调试信息全在独立的 .pdb 里),
+          #   ELF 是把调试段**塞进二进制本身**的。实测未 strip 191MB。
+          echo "strip 前: $(du -h "$BIN" | cut -f1)"
+          strip --strip-debug "$BIN"
+          echo "strip 后: $(du -h "$BIN" | cut -f1)"
           # 回读 rpath,确认 build.rs 那条 $ORIGIN 真的写进 ELF 了(写不进去不会报错,
           # 只是用户自带 libmpv 的那条路静默失效)。
           readelf -d "$BIN" | grep -E 'RUNPATH|RPATH' || echo "::warning::ELF 里没有 RUNPATH"
@@ -350,27 +359,52 @@ jobs:
           # 正向断言:dlopen 的候选名确实编进了二进制。
           grep -q 'libmpv\.so\.2' "$BIN" || { echo "二进制里找不到 dlopen 候选名"; exit 1; }
 
+          # 把硬依赖清单打进日志。这不是装饰:发行包的「系统下限」完全由这张表决定
+          # (libwebkit2gtk-4.1 那条就把下限钉在 Ubuntu 22.04 / Debian 12)。
+          # 谁哪天引入了新的 DT_NEEDED,这里一眼可见,不用等用户报「装了却起不来」。
+          echo "--- DT_NEEDED(运行时硬依赖,决定系统下限) ---"
+          readelf -d "$BIN" | sed -n 's/.*NEEDED.*\[\(.*\)\]/  \1/p'
+          # webkit 是 Tauri 在 Linux 的地基,没有它说明构建方式变了,必须当场知道。
+          readelf -d "$BIN" | grep -q 'libwebkit2gtk-4\.1' || {
+            echo "::warning::没有链接 libwebkit2gtk-4.1,发行说明里的系统下限可能已过时"; }
+
           STAGE=pack/LinPlayer
           mkdir -p "$STAGE"
           cp "$BIN" "$STAGE/LinPlayer"
           chmod +x "$STAGE/LinPlayer"
           cat > "$STAGE/README.txt" <<'EOF'
-          LinPlayer(Linux 免安装版)
+          LinPlayer(Linux 免安装版 x86_64)
 
-          运行:./LinPlayer
+          运行:./LinPlayer      (若提示没有权限:chmod +x LinPlayer)
 
-          依赖:本包不自带 libmpv,请先用发行版包管理器安装
-            Debian/Ubuntu : sudo apt install libmpv2      (旧版本叫 libmpv1)
-            Fedora        : sudo dnf install mpv-libs
-            Arch          : sudo pacman -S mpv
+          ── 系统依赖 ────────────────────────────────────────────────
+          「免安装」指的是**数据**全在本目录,不是自带全部运行库。
+          本程序对系统库是硬依赖,缺哪个就报 "libxxx.so.N: cannot open shared
+          object file",跟播放器设置无关。
 
-          想自带某个版本的 libmpv,把 libmpv.so.2 放进本目录即可(已配置 $ORIGIN rpath,
-          同级目录优先于系统库)。
+          1) 桌面运行库(Tauri 在 Linux 上就是 GTK3 + WebKitGTK):
+             Debian/Ubuntu : sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0 libsoup-3.0-0
+             Fedora        : sudo dnf install webkit2gtk4.1 gtk3 libsoup3
+             Arch          : sudo pacman -S webkit2gtk-4.1 gtk3 libsoup3
 
-          显示服务器:本程序需要 X11。Wayland 会话下会自动经 XWayland 运行
-          (视频窗口需要由程序自己定位,Wayland 协议不提供该能力)。
+             ⚠ 必须是 webkit2gtk 4.1(配 libsoup3),不是 4.0。
+               这决定了系统下限:Ubuntu >= 22.04 / Debian >= 12 / Fedora >= 36。
 
-          数据全部保存在本目录的 userdata/ 下,删除整个文件夹即完成卸载。
+          2) libmpv(本包不自带):
+             Debian/Ubuntu : sudo apt install libmpv2      (旧版本叫 libmpv1)
+             Fedora        : sudo dnf install mpv-libs
+             Arch          : sudo pacman -S mpv
+
+             运行时 dlopen,libmpv.so.2 / .so.1 都认。想自带某个版本,把
+             libmpv.so.2 放进本目录即可(已配 $ORIGIN rpath,同级优先于系统库)。
+
+          ── 显示服务器 ──────────────────────────────────────────────
+          需要 X11 且需要合成器(现代桌面环境默认都开)。
+          Wayland 会话下自动经 XWayland 运行 —— 视频窗口须由程序自己定位,
+          而 Wayland 协议不提供该能力。
+
+          ── 数据 ────────────────────────────────────────────────────
+          全部保存在本目录的 userdata/ 下,删除整个文件夹即完成卸载。
           EOF
 
           mkdir -p release
