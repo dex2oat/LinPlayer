@@ -58,32 +58,40 @@ permissions:
   contents: write
 
 jobs:
+  # 版本号单独算一次,Windows 和 Linux 两个 job 都引用它。
+  # ★ 不让两端各算一遍:那样 run_number 虽同,但只要哪天算法改了一半就会打出两个
+  #   版本号不一致的包,而更新器是按版本号比大小的 —— 这种漂移不会报错,只会让
+  #   某一端永远检测不到新版本。唯一权威只能有一个。
+  version:
+    name: Determine version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      # 版本口径:tauri.conf.json 是 PC 端版本的唯一权威(打包脚本拿它命名 zip,
+      # build.rs 拿它注入 Sentry release,vite 拿它做 sourcemap release)。
+      # 加 -build<run_number> 是为了让**每次预发布都比上一次大** —— App 内的更新
+      # 比较逻辑正是按 major.minor.patch.build 逐级比的,不加就永远检测不到新预览版。
+      - id: v
+        run: |
+          V="${{ inputs.version }}"
+          if [ -z "$V" ]; then
+            BASE=$(node -p "require('./apps/desktop/tauri.conf.json').version")
+            V="$BASE-build${{ github.run_number }}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "version = $V"
+
   build-windows:
     name: Build Windows portable
+    needs: version
     runs-on: windows-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         # 不需要 lfs:LFS 里放的是 Android 的 libmpv.so,PC 端一个字节都不用。
-
-      # 版本口径:tauri.conf.json 是 PC 端版本的唯一权威(pack 脚本拿它命名 zip,
-      # build.rs 拿它注入 Sentry release,vite 拿它做 sourcemap release)。
-      # 加 -build<run_number> 是为了让**每次预发布都比上一次大** —— App 内的更新
-      # 比较逻辑正是按 major.minor.patch.build 逐级比的,不加就永远检测不到新预览版。
-      - name: Determine version
-        id: version
-        shell: pwsh
-        run: |
-          $v = "${{ inputs.version }}"
-          if (-not $v) {
-            $base = (Get-Content apps/desktop/tauri.conf.json -Raw | ConvertFrom-Json).version
-            $v = "$base-build${{ github.run_number }}"
-          }
-          "version=$v" >> $env:GITHUB_OUTPUT
-          Write-Host "version = $v"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -139,7 +147,7 @@ jobs:
         shell: pwsh
         run: |
           $p = "apps/desktop/tauri.conf.json"
-          $c = (Get-Content $p -Raw) -replace '("version"\s*:\s*")[^"]*(")', '${1}${{ steps.version.outputs.version }}${2}'
+          $c = (Get-Content $p -Raw) -replace '("version"\s*:\s*")[^"]*(")', '${1}${{ needs.version.outputs.version }}${2}'
           Set-Content $p -Value $c -NoNewline -Encoding utf8NoBOM
           Select-String -Path $p -Pattern '"version"'
 
@@ -216,7 +224,7 @@ jobs:
 
           # 命名必须让 App 的更新器认得出来:它按小写子串 "windows" 挑资产。
           New-Item -ItemType Directory -Force -Path release | Out-Null
-          $zip = "release/LinPlayer-Windows-v${{ steps.version.outputs.version }}.zip"
+          $zip = "release/LinPlayer-Windows-v${{ needs.version.outputs.version }}.zip"
           Compress-Archive -Path (Get-ChildItem -LiteralPath $stage).FullName -DestinationPath $zip -CompressionLevel Optimal
           "zip: $zip  $([math]::Round((Get-Item $zip).Length / 1MB, 1)) MB"
 
@@ -227,9 +235,132 @@ jobs:
           path: release/*.zip
           retention-days: 7
 
+  build-linux:
+    name: Build Linux portable
+    needs: version
+    # ★ 钉 22.04,不用 ubuntu-latest。glibc 是**向后兼容、不向前兼容**的:在 24.04
+    #   (glibc 2.39)上链出来的二进制,拿到 Debian 12 / Ubuntu 22.04 上就是
+    #   `GLIBC_2.38 not found`,起都起不来。用老的构建 = 覆盖面更广。
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Tauri v2 在 Linux 上是 GTK3 + WebKitGTK 4.1(不是 4.0,别装错包名)。
+      # libmpv-dev 提供链接期要的 libmpv.so 符号链接 —— build.rs 发的
+      # `cargo:rustc-link-lib=dylib=mpv` 靠它,缺了就是 `cannot find -lmpv`。
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            libmpv-dev \
+            libxrandr-dev
+          # 回读确认链接期真能找到 libmpv,别等到 link 阶段才发现装的是运行时包。
+          test -e /usr/lib/x86_64-linux-gnu/libmpv.so || \
+            { echo "libmpv-dev 没提供 libmpv.so"; exit 1; }
+          pkg-config --modversion mpv || true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Stamp version into tauri.conf.json
+        run: |
+          node -e '
+            const fs = require("fs"), p = "apps/desktop/tauri.conf.json";
+            const c = JSON.parse(fs.readFileSync(p, "utf8"));
+            c.version = "${{ needs.version.outputs.version }}";
+            fs.writeFileSync(p, JSON.stringify(c, null, 2));
+          '
+          grep '"version"' apps/desktop/tauri.conf.json
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      - name: Build
+        env:
+          DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
+          DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: npx tauri build
+
+      # 打包成 **zip**(不是 Linux 更习惯的 tar.gz):应用内更新器解包走的是
+      # core/update.rs 的 extract_zip,喂它 tar.gz 会当场失败。格式必须和更新链路一致。
+      # 资产名必须含小写子串 "linux" —— update.rs 的 asset_keywords() 就按这个挑。
+      #
+      # 不打包 libmpv.so:构建机那份会连带一串特定版本的 ffmpeg/libass 依赖,而
+      # build.rs 写的 `$ORIGIN` rpath 会让**自带的那份永远优先于系统的**。在别的发行版上
+      # 那就从「用系统上好好的库」变成「用一个依赖对不上的库」,反而更坏。
+      # 用户想自带,把 libmpv.so.2 丢进解压目录即可 —— rpath 已经给他留好了这条路。
+      - name: Pack portable zip
+        run: |
+          set -euo pipefail
+          BIN=target/release/app
+          test -f "$BIN" || { echo "缺少产物 $BIN"; exit 1; }
+          # 回读 rpath,确认 build.rs 那条 $ORIGIN 真的写进 ELF 了(写不进去不会报错,
+          # 只是用户自带 libmpv 的那条路静默失效)。
+          readelf -d "$BIN" | grep -E 'RUNPATH|RPATH' || echo "::warning::ELF 里没有 RUNPATH"
+          # 依赖自检:libmpv 必须是动态依赖,否则说明根本没链上。
+          ldd "$BIN" | grep -q libmpv || { echo "二进制没有链接 libmpv"; exit 1; }
+
+          STAGE=pack/LinPlayer
+          mkdir -p "$STAGE"
+          cp "$BIN" "$STAGE/LinPlayer"
+          chmod +x "$STAGE/LinPlayer"
+          cat > "$STAGE/README.txt" <<'EOF'
+          LinPlayer(Linux 免安装版)
+
+          运行:./LinPlayer
+
+          依赖:本包不自带 libmpv,请先用发行版包管理器安装
+            Debian/Ubuntu : sudo apt install libmpv2      (旧版本叫 libmpv1)
+            Fedora        : sudo dnf install mpv-libs
+            Arch          : sudo pacman -S mpv
+
+          想自带某个版本的 libmpv,把 libmpv.so.2 放进本目录即可(已配置 $ORIGIN rpath,
+          同级目录优先于系统库)。
+
+          显示服务器:本程序需要 X11。Wayland 会话下会自动经 XWayland 运行
+          (视频窗口需要由程序自己定位,Wayland 协议不提供该能力)。
+
+          数据全部保存在本目录的 userdata/ 下,删除整个文件夹即完成卸载。
+          EOF
+
+          mkdir -p release
+          ZIP="$PWD/release/LinPlayer-Linux-v${{ needs.version.outputs.version }}.zip"
+          (cd pack && zip -r -9 "$ZIP" LinPlayer)
+          ls -lh "$ZIP"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: release/*.zip
+          retention-days: 7
+
   create-prerelease:
     name: Create Pre-release
-    needs: build-windows
+    needs: [version, build-windows, build-linux]
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
 
@@ -255,8 +386,8 @@ jobs:
       - name: Create Pre-release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ needs.build-windows.outputs.version }}-pre
-          name: v${{ needs.build-windows.outputs.version }} (Pre-release)
+          tag_name: v${{ needs.version.outputs.version }}-pre
+          name: v${{ needs.version.outputs.version }} (Pre-release)
           prerelease: true
           files: ./artifacts/*
           generate_release_notes: true

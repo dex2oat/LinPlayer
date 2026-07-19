@@ -30,12 +30,6 @@ async-trait = "0.1"
 # 别依赖「别的依赖恰好开了这个特性」—— 那种编过是巧合,哪天依赖树一变就红。
 tokio = { version = "1", features = ["sync", "rt"] }
 raw-window-handle = "0.6"
-windows-sys = { version = "0.59", features = [
-  "Win32_Foundation",
-  "Win32_UI_WindowsAndMessaging",
-  "Win32_Graphics_Gdi",
-  "Win32_System_LibraryLoader",
-] }
 # 崩溃上报 + 匿名活跃统计(见 src/telemetry.rs)。
 # rustls 而非默认的 native-tls:core 全链路已经是 rustls,混两套 TLS 会把 openssl 拖进来。
 # release-health 才有 auto_session_tracking(「有多少人在用」靠它)。
@@ -47,6 +41,25 @@ sentry = { version = "0.48.5", default-features = false, features = [
   "rustls",
   "release-health",
 ] }
+
+# ---------- 平台专有 ----------
+# 这两块**必须**按 target 分:windows-sys 原先挂在 [dependencies] 里无条件依赖,
+# 在 Linux 上第一步就编不过(它的 Win32_* feature 根本没有对应实现)。
+#
+# mpv 的合成方案(见 src/mpv.rs 顶部)两端同构:都是「独立顶层无边框窗口垫在透明主窗口
+# 正下方并保持对齐」,只是一边用 Win32、一边用 X11。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# x11-dl 而不是 x11:前者**运行时 dlopen** libX11,构建机不需要 X11 开发头,
+# 而且在没有 X11 的会话里是「打不开 display」的软失败,不是链接期硬失败。
+x11-dl = "2"
 
 [dev-dependencies]
 # test 特性给的是内存 transport(sentry::test::with_captured_events),用来验证

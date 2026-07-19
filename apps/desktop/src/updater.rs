@@ -84,8 +84,16 @@ fn apply(root: &Path, install: &Path, say: &dyn Fn(&str)) -> Result<(), String> 
         if let Some(p) = dst.parent() {
             std::fs::create_dir_all(p).map_err(|e| format!("建目录失败: {e}"))?;
         }
+        /* Unix:先 unlink 再写。往**正在运行**的可执行文件里写会得到 ETXTBSY(os error 26),
+           而 unlink 只是断开目录项、老 inode 让还开着它的进程继续用完 —— 这正是 Linux
+           上「替换运行中的程序」的标准做法,也是这边不需要 Windows 那套等锁的原因。
+           不存在就当没这回事。 */
+        #[cfg(unix)]
+        let _ = std::fs::remove_file(&dst);
         std::fs::copy(&src, &dst).map_err(|e| format!("覆盖 {} 失败: {e}", rel.display()))?;
     }
+    // zip 丢了权限位,主程序必须显式补回可执行位(见 ensure_executable 的说明)。
+    ensure_executable(&install.join(APP_EXE));
     Ok(())
 }
 
@@ -139,8 +147,29 @@ pub fn install_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "定位安装目录失败".into())
 }
 
-/// 发行包里主程序的文件名(pack-portable.ps1 打出来就叫这个)。
+/// 发行包里主程序的文件名(打包脚本/CI 打出来就叫这个)。
+/// Linux 的 ELF 没有扩展名 —— 写死 `.exe` 的话 spawn_applier 会一路走到
+/// 「更新包里没有 LinPlayer.exe,不敢安装」,应用内更新在 Linux 上 100% 失败。
+#[cfg(windows)]
 const APP_EXE: &str = "LinPlayer.exe";
+#[cfg(not(windows))]
+const APP_EXE: &str = "LinPlayer";
+
+/* Unix:把可执行位补回来。
+   ★ 必须有:发行包是 zip,而 `zip` crate 解包**不还原 Unix 权限位**,解出来的主程序
+     是 0644。覆盖上去之后用户点了「更新」,下次启动就是 Permission denied ——
+     更新看着成功了,App 再也起不来。这是 Linux 端最容易漏、后果最严重的一处。 */
+#[cfg(unix)]
+fn ensure_executable(p: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(md) = std::fs::metadata(p) {
+        let mut perm = md.permissions();
+        perm.set_mode(perm.mode() | 0o755);
+        let _ = std::fs::set_permissions(p, perm);
+    }
+}
+#[cfg(not(unix))]
+fn ensure_executable(_p: &Path) {}
 
 fn staging_dir() -> PathBuf {
     linplayer_core::paths::temp_dir().join("update-staging")
@@ -183,6 +212,8 @@ pub fn spawn_applier(zip: &Path) -> Result<(), String> {
     if !applier.exists() {
         return Err(format!("更新包里没有 {APP_EXE},不敢安装"));
     }
+    // 刚从 zip 解出来,Unix 上没有可执行位 —— 不补的话下一行 spawn 直接 Permission denied。
+    ensure_executable(&applier);
     std::process::Command::new(&applier)
         .arg(FLAG)
         .arg(&root)

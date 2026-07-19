@@ -1,11 +1,27 @@
 use std::path::Path;
 
 fn main() {
-    // 链接 libmpv(libmpv/mpv.lib)
     let manifest = env!("CARGO_MANIFEST_DIR");
     let libdir = Path::new(manifest).join("libmpv");
-    println!("cargo:rustc-link-search=native={}", libdir.display());
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+
+    /* 链接 libmpv。两端拿库的方式不一样:
+       - Windows:仓库里自带导入库 libmpv/mpv.lib,运行时找同目录的 libmpv-2.dll。
+       - Linux:链系统的 libmpv.so(构建机装 libmpv-dev)。**不把 .lib 那条 link-search
+         也发出去** —— 那个目录里全是 Windows 产物,加进搜索路径只会让链接器在里面
+         白翻一遍,真出问题时还多一条误导性的线索。 */
+    if target_os == "windows" {
+        println!("cargo:rustc-link-search=native={}", libdir.display());
+    }
     println!("cargo:rustc-link-lib=dylib=mpv");
+
+    /* Linux:把 $ORIGIN 写进 rpath,让**可执行文件同级目录**优先于系统库。
+       这是绿色包分发在 Linux 上的等价物:包里放一份 libmpv.so.2 就能自带一个已知可用的
+       版本,而不必要求用户去装、也不必污染系统目录。同级没有就照常回落系统库。
+       ⚠️ 这里不能走 shell,所以 $ORIGIN 是原样传给链接器的字面量,不是变量展开。 */
+    if target_os == "linux" {
+        println!("cargo:rustc-link-arg-bins=-Wl,-rpath,$ORIGIN");
+    }
 
     /* ★ 双显卡笔记本:把本进程钉到**独显**上。
        实测(2026-07-15,用户真机 Intel UHD + RTX 5060 Laptop):mpv 日志里

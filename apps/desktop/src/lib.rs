@@ -119,11 +119,23 @@ fn sync_video(window: &tauri::WebviewWindow, parent: isize, state: &AppState) {
     }
 }
 
+/// 主窗口的原生句柄。mpv 的视频窗口要靠它做对齐和层叠的参照物(见 mpv::sync_overlay)。
+///
+/// Linux 只认 Xlib:整套合成方案要求「自己摆放顶层窗口」,而 **Wayland 协议上就不允许
+/// 应用定位自己的顶层窗口** —— 所以 run() 里强制 `GDK_BACKEND=x11` 走 XWayland,
+/// 正常情况下这里拿到的就是 Xlib 句柄。真落到 Wayland 分支只能如实报错,
+/// 让它走和「拿不到句柄」一样的降级路径(App 能起,视频层不工作),而不是假装成功。
 fn hwnd_of(window: &tauri::WebviewWindow) -> Result<isize, String> {
     let handle = window.window_handle().map_err(|e| e.to_string())?;
     match handle.as_raw() {
         RawWindowHandle::Win32(h) => Ok(h.hwnd.get()),
-        _ => Err("非 Win32 窗口".into()),
+        #[cfg(target_os = "linux")]
+        RawWindowHandle::Xlib(h) => Ok(h.window as isize),
+        #[cfg(target_os = "linux")]
+        RawWindowHandle::Wayland(_) => {
+            Err("当前是 Wayland 原生会话(GDK_BACKEND=x11 没生效?),视频窗口无法定位".into())
+        }
+        _ => Err("不支持的窗口句柄类型".into()),
     }
 }
 
@@ -877,7 +889,47 @@ fn register_deep_link_scheme() {
     }
 }
 
-#[cfg(not(windows))]
+/// 注册 `linplayer://` 协议(Linux)。
+///
+/// 对应 Windows 那半的注册表写法,这边是 freedesktop 的规矩:往用户的 applications 目录
+/// 放一个带 `MimeType=x-scheme-handler/linplayer` 的 .desktop,再把它设成该 scheme 的默认处理器。
+/// 同样**每次启动都重写** —— 绿色包用户挪了文件夹,Exec= 里的老路径就是死的,而且不报错。
+///
+/// ★ 这里**故意不用 `dirs::data_local_dir()`**:redirect_process_dirs() 刚把
+///   `XDG_DATA_HOME` 劫持进包内的 userdata/,而 dirs 正是读这个变量的 —— 用它会把
+///   .desktop 写进包里,桌面环境永远扫不到,深链静默失效。必须显式回到真实 home。
+#[cfg(target_os = "linux")]
+fn register_deep_link_scheme() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    let Some(home) = dirs::home_dir() else { return };
+    let apps = home.join(".local").join("share").join("applications");
+    if std::fs::create_dir_all(&apps).is_err() {
+        return;
+    }
+    // Exec 的 %u 是 freedesktop 规定的「传一个 URL 进来」占位符,深链靠它拿到 linplayer://…
+    let content = format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=LinPlayer\n\
+         Exec=\"{}\" %u\n\
+         NoDisplay=false\n\
+         Terminal=false\n\
+         Categories=AudioVideo;Player;\n\
+         MimeType=x-scheme-handler/linplayer;\n",
+        exe.display()
+    );
+    let f = apps.join("linplayer.desktop");
+    if std::fs::write(&f, content).is_err() {
+        return;
+    }
+    // 两个工具在精简发行版上都可能没有;失败就算了,不该因为注册不上协议就影响启动。
+    let _ = std::process::Command::new("update-desktop-database").arg(&apps).status();
+    let _ = std::process::Command::new("xdg-mime")
+        .args(["default", "linplayer.desktop", "x-scheme-handler/linplayer"])
+        .status();
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn register_deep_link_scheme() {}
 
 /// 启动参数里的 `linplayer://...`(系统通过协议拉起我们时会作为 argv 传进来)。
@@ -4272,9 +4324,38 @@ fn plugin_ui_respond(state: State<'_, AppState>, id: u64, value: Option<serde_js
 ///
 /// ⚠️ 只能在 main 最前面调:`set_var` 在有别的线程跑时是 UB。
 fn redirect_process_dirs() {
+    /* ★ 这一句必须排在最前面:temp_dir() 会触发 paths::root() 的首次解析(以及挂在它上面的
+       旧数据迁移),而迁移读的正是 dirs::{config,cache,data}_dir() —— 也就是下面要改的
+       那批 XDG 变量。顺序反了,迁移就会去一个我们刚刚伪造出来的空目录里找旧数据,
+       结果是「升级后账号全没了」且不报错。 */
     let t = linplayer_core::paths::temp_dir();
     for k in ["TEMP", "TMP", "TMPDIR"] {
         std::env::set_var(k, &t);
+    }
+
+    /* Linux:WebKitGTK 没有 WebView2 那个 data_directory 参数(那是 Windows 专属方法),
+       它的 profile/缓存位置认 **XDG 环境变量**。不按住的话,前端 localStorage、IndexedDB、
+       HTTP 缓存会落到 ~/.local/share 和 ~/.cache —— 直接破掉 paths.rs 开头那条
+       「解压即用、删文件夹即卸载,一个字节都不许落在包外」的铁律。
+       只改 XDG_{DATA,CACHE}_HOME(用户私有的那半),**不动 XDG_DATA_DIRS** ——
+       系统级图标主题/GTK 资源还在那儿找,动了界面会缺图标。 */
+    #[cfg(target_os = "linux")]
+    {
+        std::env::set_var("XDG_DATA_HOME", linplayer_core::paths::webview_dir());
+        std::env::set_var("XDG_CACHE_HOME", linplayer_core::paths::cache_dir("webkit"));
+    }
+}
+
+/// Linux:强制走 X11(必要时经 XWayland)。**必须在 GTK 初始化之前**。
+///
+/// 不是偷懒,是协议层的硬约束:mpv 的合成方案要求我们自己摆放一个顶层视频窗口并把它
+/// 压到主窗口下面,而 **Wayland 根本不提供「应用定位自己的顶层窗口」这种能力**,
+/// mpv 的 `wid` 在 Wayland 上也不受支持。所以 Linux 端明确钉在 X11 语义上。
+/// 已经显式指定过 GDK_BACKEND 的用户不覆盖 —— 那是他自己的选择,替他做主只会更难查。
+#[cfg(target_os = "linux")]
+fn force_x11_backend() {
+    if std::env::var_os("GDK_BACKEND").is_none() {
+        std::env::set_var("GDK_BACKEND", "x11");
     }
 }
 
@@ -4294,6 +4375,9 @@ pub fn run() {
     updater::cleanup_stale_applier();
 
     redirect_process_dirs();
+    // 同样要赶在任何线程/GTK 初始化之前(set_var 在多线程下是 UB)。
+    #[cfg(target_os = "linux")]
+    force_x11_backend();
 
     /* Sentry 紧跟其后:它会起自己的传输线程,所以**必须**排在 redirect_process_dirs() 之后
        (上面那条 set_var 要求当时还没有别的线程),但又要排在其余一切之前 —— 从这行往下
@@ -4378,7 +4462,7 @@ pub fn run() {
                (实测 126MB,还装着前端 localStorage),而我们是压缩包分发,数据必须全在包里。
                config 里的 dataDirectory 只吃相对路径且强制拼在 %LOCALAPPDATA% 下,够不到 exe 同级。
                尺寸/透明/无边框这些原本在 conf 里的属性一并搬来了,改窗口属性请改这里。 */
-            let window = tauri::WebviewWindowBuilder::new(
+            let win_builder = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
                 tauri::WebviewUrl::default(),
@@ -4387,9 +4471,16 @@ pub fn run() {
             .inner_size(1180.0, 720.0)
             .min_inner_size(900.0, 560.0)
             .transparent(true)
-            .decorations(false)
-            .data_directory(linplayer_core::paths::webview_dir())
-            .build()?;
+            .decorations(false);
+            /* ★ data_directory 是 Tauri v2 里 **`#[cfg(windows)]` 门控的方法** ——
+               在 Linux 上这个方法根本不存在,写在链上就是 `no method named data_directory`
+               的硬编译错误。所以只能这样分开挂。
+               Linux 那半的等价手段在 run() 里:WebKitGTK 的 profile 位置认 XDG 环境变量,
+               redirect_process_dirs() 已经把 XDG_* 全指进包内的 userdata/,
+               「一个字节都不落包外」这条承诺两端都保住了。 */
+            #[cfg(windows)]
+            let win_builder = win_builder.data_directory(linplayer_core::paths::webview_dir());
+            let window = win_builder.build()?;
             let parent = match hwnd_of(&window) {
                 Ok(p) => {
                     poclog(&format!("hwnd OK parent={p}"));

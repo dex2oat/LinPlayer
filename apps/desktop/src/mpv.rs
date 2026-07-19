@@ -7,7 +7,7 @@ use linplayer_core::media::Track;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 // ---------- libmpv FFI ----------
@@ -69,68 +69,228 @@ fn shader_cache_dir() -> std::path::PathBuf {
     linplayer_core::paths::cache_dir("shader-cache")
 }
 
-// ---------- Win32 顶层视频窗口 ----------
-use windows_sys::Win32::Foundation::HWND;
-use windows_sys::Win32::Graphics::Gdi::HBRUSH;
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, RegisterClassW, SetWindowPos, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-    WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
-};
-use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+// ---------- 平台相关:视频顶层窗口 ----------
+/* 两端同构,只有系统 API 不同:
+     建一个**独立顶层**、无边框、不进任务栏、不抢焦点的窗口给 mpv 当渲染面(wid),
+     再把它对齐到主窗口客户区、压在主窗口**正下方**。
+   为什么不能用子窗口:Windows 上子窗口进不了逐像素透明的分层窗口;X11 上兄弟窗口之间
+   根本不做 alpha 混合(合成器只合成顶层窗口)。两边都只有「顶层垫顶层」这一条路。 */
 
-static REGISTER: Once = Once::new();
-const CLASS_NAME: &[u16] = &[b'l' as u16, b'p' as u16, b'v' as u16, b'i' as u16, b'd' as u16, 0];
+#[cfg(windows)]
+mod overlay {
+    use std::sync::Once;
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::Graphics::Gdi::HBRUSH;
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, RegisterClassW, SetWindowPos, SWP_NOACTIVATE,
+        SWP_SHOWWINDOW, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+    };
 
-unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    DefWindowProcW(hwnd, msg, wp, lp)
+    static REGISTER: Once = Once::new();
+    const CLASS_NAME: &[u16] =
+        &[b'l' as u16, b'p' as u16, b'v' as u16, b'i' as u16, b'd' as u16, 0];
+
+    unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+        DefWindowProcW(hwnd, msg, wp, lp)
+    }
+
+    fn ensure_class() {
+        REGISTER.call_once(|| unsafe {
+            let hinst = GetModuleHandleW(std::ptr::null());
+            let wc = WNDCLASSW {
+                style: 0,
+                lpfnWndProc: Some(wndproc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: hinst,
+                hIcon: std::ptr::null_mut(),
+                hCursor: std::ptr::null_mut(),
+                hbrBackground: std::ptr::null_mut() as HBRUSH,
+                lpszMenuName: std::ptr::null(),
+                lpszClassName: CLASS_NAME.as_ptr(),
+            };
+            RegisterClassW(&wc);
+        });
+    }
+
+    pub fn create() -> isize {
+        ensure_class();
+        unsafe {
+            let hinst = GetModuleHandleW(std::ptr::null());
+            let hwnd = CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                CLASS_NAME.as_ptr(),
+                std::ptr::null(),
+                WS_POPUP | WS_VISIBLE,
+                100,
+                100,
+                800,
+                600,
+                std::ptr::null_mut(), // 顶层,无父窗口
+                std::ptr::null_mut(),
+                hinst,
+                std::ptr::null(),
+            );
+            hwnd as isize
+        }
+    }
+
+    pub fn sync(video: isize, tauri: isize, x: i32, y: i32, w: i32, h: i32) {
+        unsafe {
+            // hWndInsertAfter = tauri => video 排在 tauri 之下(紧贴其后)
+            SetWindowPos(video as HWND, tauri as HWND, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+    }
 }
 
-fn ensure_class() {
-    REGISTER.call_once(|| unsafe {
-        let hinst = GetModuleHandleW(std::ptr::null());
-        let wc = WNDCLASSW {
-            style: 0,
-            lpfnWndProc: Some(wndproc),
-            cbClsExtra: 0,
-            cbWndExtra: 0,
-            hInstance: hinst,
-            hIcon: std::ptr::null_mut(),
-            hCursor: std::ptr::null_mut(),
-            hbrBackground: std::ptr::null_mut() as HBRUSH,
-            lpszMenuName: std::ptr::null(),
-            lpszClassName: CLASS_NAME.as_ptr(),
-        };
-        RegisterClassW(&wc);
-    });
+#[cfg(target_os = "linux")]
+mod overlay {
+    use std::ffi::{c_int, c_uint};
+    use std::sync::OnceLock;
+    use x11_dl::xlib;
+
+    struct X {
+        lib: xlib::Xlib,
+        dpy: *mut xlib::Display,
+    }
+    // 只在窗口几何/层叠这条路上用,调用点都在主线程(sync_video 走 run_on_main_thread)。
+    unsafe impl Send for X {}
+    unsafe impl Sync for X {}
+
+    /* ★ Xlib 默认错误处理器**直接 abort 整个进程**。我们干的正是最容易撞
+       BadWindow/BadMatch 的活:窗口可能刚被 WM 重新 reparent、或已经销毁,
+       而这些错误是异步回来的。不换掉它,一次竞态就是一次「播放中无故崩溃」。 */
+    unsafe extern "C" fn ignore_x_error(
+        _d: *mut xlib::Display,
+        _e: *mut xlib::XErrorEvent,
+    ) -> c_int {
+        0
+    }
+
+    fn x11() -> Option<&'static X> {
+        static X11: OnceLock<Option<X>> = OnceLock::new();
+        X11.get_or_init(|| unsafe {
+            let lib = xlib::Xlib::open().ok()?;
+            (lib.XSetErrorHandler)(Some(ignore_x_error));
+            // 自己开一条连接,不蹭 GTK 那条:GTK 的连接由它自己的主循环独占,
+            // 从别处往里塞请求是竞态。mpv 拿到 wid 后也会自己开连接,这是 --wid 的常规用法。
+            let dpy = (lib.XOpenDisplay)(std::ptr::null());
+            if dpy.is_null() {
+                return None;
+            }
+            Some(X { lib, dpy })
+        })
+        .as_ref()
+    }
+
+    unsafe fn root_of(x: &X) -> xlib::Window {
+        let screen = (x.lib.XDefaultScreen)(x.dpy);
+        (x.lib.XRootWindow)(x.dpy, screen)
+    }
+
+    pub fn create() -> isize {
+        let Some(x) = x11() else { return 0 };
+        unsafe {
+            let screen = (x.lib.XDefaultScreen)(x.dpy);
+            let root = (x.lib.XRootWindow)(x.dpy, screen);
+            let mut attrs: xlib::XSetWindowAttributes = std::mem::zeroed();
+            /* override_redirect = WM 完全不管这个窗口:不加装饰、不进任务栏、不抢焦点。
+               正是 Win32 那半 WS_POPUP | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE 的语义。
+               附带好处:它不会被 reparent,始终是 root 的直接子窗口 —— 下面的兄弟层叠依赖这点。 */
+            attrs.override_redirect = xlib::True;
+            attrs.background_pixel = (x.lib.XBlackPixel)(x.dpy, screen);
+            let w = (x.lib.XCreateWindow)(
+                x.dpy,
+                root,
+                100,
+                100,
+                800,
+                600,
+                0,
+                0,                          // depth = CopyFromParent
+                xlib::InputOutput as c_uint,
+                std::ptr::null_mut(),       // visual = CopyFromParent
+                xlib::CWOverrideRedirect | xlib::CWBackPixel,
+                &mut attrs,
+            );
+            if w == 0 {
+                return 0;
+            }
+            (x.lib.XMapWindow)(x.dpy, w);
+            (x.lib.XFlush)(x.dpy);
+            w as isize
+        }
+    }
+
+    /* 顺着 parent 链上溯到 root 的那个**直接子窗口**。
+       ★ 不能直接拿 Tauri 的 client window 当层叠兄弟:重定向式 WM(绝大多数)会把它
+         reparent 进一个装饰框里,于是它和我们这个 root 直属的 override-redirect 窗口
+         **不是兄弟**,XConfigureWindow 会 BadMatch —— 而错误被上面的处理器吞掉,
+         表现是「静默不排序」:视频窗口盖在 UI 上面,或者干脆看不见。 */
+    unsafe fn toplevel_frame(x: &X, mut w: xlib::Window) -> Option<xlib::Window> {
+        let root = root_of(x);
+        // 上限只是防御:parent 链实际很短(1~2 层),坏掉时别转成死循环。
+        for _ in 0..16 {
+            let (mut r, mut parent): (xlib::Window, xlib::Window) = (0, 0);
+            let mut kids: *mut xlib::Window = std::ptr::null_mut();
+            let mut n: c_uint = 0;
+            if (x.lib.XQueryTree)(x.dpy, w, &mut r, &mut parent, &mut kids, &mut n) == 0 {
+                return None;
+            }
+            if !kids.is_null() {
+                (x.lib.XFree)(kids as *mut _);
+            }
+            if parent == root || parent == 0 {
+                return Some(w);
+            }
+            w = parent;
+        }
+        None
+    }
+
+    pub fn sync(video: isize, tauri: isize, x_: i32, y_: i32, w: i32, h: i32) {
+        let Some(x) = x11() else { return };
+        if video == 0 {
+            return;
+        }
+        unsafe {
+            let video = video as xlib::Window;
+            // 宽高为 0 在 X11 上是 BadValue(Win32 只是忽略),这里先夹住。
+            (x.lib.XMoveResizeWindow)(x.dpy, video, x_, y_, w.max(1) as c_uint, h.max(1) as c_uint);
+            let sibling = toplevel_frame(x, tauri as xlib::Window).unwrap_or(tauri as xlib::Window);
+            let mut ch: xlib::XWindowChanges = std::mem::zeroed();
+            ch.sibling = sibling;
+            ch.stack_mode = xlib::Below; // = SetWindowPos 的 hWndInsertAfter=tauri
+            (x.lib.XConfigureWindow)(
+                x.dpy,
+                video,
+                (xlib::CWSibling | xlib::CWStackMode) as c_uint,
+                &mut ch,
+            );
+            (x.lib.XFlush)(x.dpy);
+        }
+    }
+}
+
+// 其它平台(目前不做):给出可编译的空实现,免得 mpv.rs 变成 Win/Linux 专属文件。
+#[cfg(not(any(windows, target_os = "linux")))]
+mod overlay {
+    pub fn create() -> isize {
+        0
+    }
+    pub fn sync(_v: isize, _t: isize, _x: i32, _y: i32, _w: i32, _h: i32) {}
 }
 
 /// 建一个独立顶层无边框窗口(不进任务栏/不抢焦点),给 mpv 当渲染面。
 fn create_overlay() -> isize {
-    ensure_class();
-    unsafe {
-        let hinst = GetModuleHandleW(std::ptr::null());
-        let hwnd = CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-            CLASS_NAME.as_ptr(),
-            std::ptr::null(),
-            WS_POPUP | WS_VISIBLE,
-            100, 100, 800, 600,
-            std::ptr::null_mut(), // 顶层,无父窗口
-            std::ptr::null_mut(),
-            hinst,
-            std::ptr::null(),
-        );
-        hwnd as isize
-    }
+    overlay::create()
 }
 
 /// 把视频窗口对齐到 Tauri 窗口客户区(屏幕坐标 x,y,w,h),并置于 Tauri 窗口正下方。
 pub fn sync_overlay(video: isize, tauri: isize, x: i32, y: i32, w: i32, h: i32) {
-    unsafe {
-        // hWndInsertAfter = tauri => video 排在 tauri 之下(紧贴其后)
-        SetWindowPos(video as HWND, tauri as HWND, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-    }
+    overlay::sync(video, tauri, x, y, w, h)
 }
 
 // ---------- 播放器 ----------
@@ -158,7 +318,15 @@ impl Player {
             };
             set("wid", &video.to_string());
             set("vo", "gpu-next");
-            set("gpu-context", "d3d11");
+            /* gpu-context 只在 Windows 上写死 d3d11 —— 那边要它才走得通独显钉定那条链
+               (见 [[hybrid-gpu-must-pin-dgpu]])。
+               Linux 上**故意不设**:让 mpv 自己在 x11egl / x11vk / wayland 之间挑。
+               写死任何一个,都会在缺对应驱动/会话类型的机器上「起不来且不报错」——
+               而本项目最不缺的就是这种静默失效。 */
+            if cfg!(windows) {
+                set("gpu-context", "d3d11");
+            }
+            // auto-safe 两端通吃:Win 挑 d3d11va,Linux 挑 vaapi/nvdec,挑不到就软解。
             set("hwdec", "auto-safe");
             set("keep-open", "yes");
             set("force-window", "yes");
