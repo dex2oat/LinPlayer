@@ -57,7 +57,10 @@
 .lib-skel { animation-duration: 1.3s; }
 
 /* ---------- 顶栏锚定下拉(排序/筛选,复用全局 .dd/.li) ---------- */
-.lib-ddwrap { position: relative; display: inline-flex; }
+/* z-index 要压过背板(见 .lib-ddscrim):两者现在同在 .cbar 这个层叠上下文里。
+   整条按钮组一起抬,不然「排序」下拉开着时旁边的升降序/视图切换要点两下(第一下被背板吃掉)。 */
+.cbar .push, .lib-ddwrap { position: relative; z-index: 2; }
+.lib-ddwrap { display: inline-flex; }
 /* 分面(尤其年份)能有上百项 → 浮层自己滚,别把顶栏撑穿屏幕。 */
 .lib-dd { top: calc(100% + 6px); right: 0; left: auto; max-height: 60vh; overflow-y: auto; }
 .lib-dd .lib-dd-note {
@@ -94,8 +97,12 @@
   justify-content: center;
   padding: 8px 18px 4px;
 }
-/* 关下拉的透明背板,置于 .dd(z 30) 之下 */
-.lib-ddscrim { position: fixed; inset: 0; z-index: 29; }
+/* 关下拉的透明背板。**必须渲染在 .cbar 内部**(见 LibraryPage/FavoritesPage 的 JSX):
+   .cbar 自己有 z-index:2 = 一个层叠上下文,里面的 .dd 写 z-index:30 也只等于外面的 2。
+   背板一旦是 .cbar 的兄弟节点,z:29 就盖住整条顶栏 —— 下拉项和右边的按钮全点不动
+   (2026-07-19 实测:elementFromPoint 打到的全是 scrim)。同在一个上下文里比较才有意义:
+   背板 1 < .lib-ddwrap 2,点下拉能选中,点顶栏别处则关闭。 */
+.lib-ddscrim { position: fixed; inset: 0; z-index: 1; }
 
 /* ---------- 列表视图(网格/列表切换的另一半) ---------- */
 /* 列表模式同样封顶,否则每行名称拉满 2560px。收藏页复用这套类(见 FavoritesPage)。 */

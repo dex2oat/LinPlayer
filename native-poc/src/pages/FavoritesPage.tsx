@@ -12,24 +12,43 @@ type Props = {
   onOpenItem: (it: Item) => void;
 };
 
-/* 本地排序档位(不需要后端)。"收藏时间" = listFavorites 服务端返回顺序 ——
-   Item 上没有收藏时间戳字段,所以只认服务端顺序,不伪造时间(和媒体库 "加入时间" 一个口径)。 */
-const SORTS = [
-  { id: "fav", label: "收藏时间" },
-  { id: "name-asc", label: "名称 A→Z" },
-  { id: "name-desc", label: "名称 Z→A" },
-] as const;
-type SortId = (typeof SORTS)[number]["id"];
+// 排序逻辑单独放一个模块 —— 纯逻辑,node 可以直跑真模块做自检(见 favorites-sort.test.mjs)。
+import { SORTS, type SortId, sortItems } from "./favorites-sort";
+
+/* 视图偏好持久化。纯前端渲染参数 → localStorage,不进核层 Prefs(和主题/弹幕那几项一个口径)。
+   一个 key 存三项,省得开三个。存坏了就当没存过。 */
+const VIEW_KEY = "lp.fav.view";
+type View = { sort: SortId; asc: boolean; layout: "grid" | "list" };
+function loadView(): View {
+  const def: View = { sort: "name", asc: true, layout: "grid" };
+  try {
+    const v = { ...def, ...JSON.parse(localStorage.getItem(VIEW_KEY) ?? "{}") } as View;
+    // 档位表以后可能改名,认不出的档回默认,别拿脏值去打服务端。
+    return SORTS.some((s) => s.id === v.sort) ? v : def;
+  } catch {
+    return def;
+  }
+}
 
 /** 收藏页(草稿 PAGE 10):和媒体库同款密集海报网格。
     卡片只有一个操作:单击 = 进详情 —— 用户 2026-07-15 定,覆盖草稿标注 36(悬停 ♥/▶ 和右键菜单都不做),别照草稿"复原"回来。 */
 export default function FavoritesPage({ session, onOpenItem }: Props) {
   const [items, setItems] = useState<Item[] | null>(null);
   const [err, setErr] = useState("");
-  const [sort, setSort] = useState<SortId>("fav");
+  // 初值写成函数,否则每次渲染都读一遍 localStorage。
+  const [view, setView] = useState<View>(loadView);
+  const { sort, asc, layout } = view;
   const [openDD, setOpenDD] = useState(false);
-  const [layout, setLayout] = useState<"grid" | "list">("grid");
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(VIEW_KEY, JSON.stringify(view));
+    } catch {
+      /* 存不下不该影响浏览 */
+    }
+  }, [view]);
+
+  // 只在换服务器时重新拉 —— 排序是本地的,切档不该再打一次网络。
   useEffect(() => {
     let alive = true;
     setItems(null);
@@ -42,18 +61,14 @@ export default function FavoritesPage({ session, onOpenItem }: Props) {
     };
   }, [session.server]);
 
-  const shown = useMemo(() => {
-    if (!items) return [];
-    if (sort === "name-asc") return [...items].sort((a, b) => a.name.localeCompare(b.name, "zh"));
-    if (sort === "name-desc") return [...items].sort((a, b) => b.name.localeCompare(a.name, "zh"));
-    return items; // "fav" = 服务端返回顺序
-  }, [items, sort]);
-
+  const shown = useMemo(() => (items ? sortItems(items, sort, asc) : []), [items, sort, asc]);
   const sortLabel = SORTS.find((s) => s.id === sort)!.label;
 
   return (
     <>
       <div className="cbar">
+        {/* 背板必须在 cbar 里面 —— 放外面会盖住整条顶栏,见 .lib-ddscrim 注释。 */}
+        {openDD && <div className="lib-ddscrim" onClick={() => setOpenDD(false)} />}
         <span className="crumb">
           <b>收藏</b>
           {items && <span className="count">· {items.length}</span>}
@@ -71,7 +86,8 @@ export default function FavoritesPage({ session, onOpenItem }: Props) {
                     key={s.id}
                     className={`li${sort === s.id ? " on" : ""}`}
                     onClick={() => {
-                      setSort(s.id);
+                      // 名称默认升序,更新时间/评分默认降序(新的/高分的在前)。
+                      setView((v) => ({ ...v, sort: s.id, asc: s.id === "name" }));
                       setOpenDD(false);
                     }}
                   >
@@ -83,18 +99,21 @@ export default function FavoritesPage({ session, onOpenItem }: Props) {
             )}
           </span>
 
+          {/* 升/降序(和排序字段分开,免得档位表翻倍) */}
+          <button className="pill" title="切换升降序" onClick={() => setView((v) => ({ ...v, asc: !v.asc }))}>
+            {asc ? "升序" : "降序"}
+          </button>
+
           {/* 网格/列表切换(和媒体库同款) */}
           <button
             className="ibtn"
             title={layout === "grid" ? "切换列表" : "切换网格"}
-            onClick={() => setLayout((l) => (l === "grid" ? "list" : "grid"))}
+            onClick={() => setView((v) => ({ ...v, layout: v.layout === "grid" ? "list" : "grid" }))}
           >
             {layout === "grid" ? <IconRows /> : <IconGrid />}
           </button>
         </span>
       </div>
-
-      {openDD && <div className="lib-ddscrim" onClick={() => setOpenDD(false)} />}
 
       <div className="scroll">
         {err && <div className="empty">加载失败：{err}</div>}

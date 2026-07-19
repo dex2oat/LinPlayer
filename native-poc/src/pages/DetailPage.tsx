@@ -84,6 +84,9 @@ function toItem(d: ItemDetail): Item {
     presentation_unique_key: null,
     path: null,
     series_id: d.series_id,
+    // 详情接口不带这两项(只有列表接口的 Fields 才要);收藏页排序不经过这里。
+    date_updated: null,
+    sort_name: null,
   };
 }
 

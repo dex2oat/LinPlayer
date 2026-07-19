@@ -344,6 +344,8 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
   return (
     <>
       <div className="cbar">
+        {/* 背板必须在 cbar 里面 —— 放外面会盖住整条顶栏(排序/筛选都点不动),见 .lib-ddscrim 注释。 */}
+        {openDD && <div className="lib-ddscrim" onClick={() => setOpenDD(null)} />}
         <span className="crumb">
           <button className="crumb-btn" onClick={onBack}>
             媒体库
@@ -437,8 +439,6 @@ export default function LibraryPage({ session, view, onPickView, onBack, onOpenI
           </button>
         </span>
       </div>
-
-      {openDD && <div className="lib-ddscrim" onClick={() => setOpenDD(null)} />}
 
       <div className="scroll">
         {/* 已选筛选胶囊行(标注 10) */}

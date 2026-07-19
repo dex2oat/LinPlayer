@@ -113,6 +113,15 @@ struct RawItem {
     /// 剧集所属剧的 Id(跨服匹配要拿它去查剧的 TMDB id)。
     #[serde(rename = "SeriesId")]
     series_id: Option<String>,
+    /// 以下两项要 Fields=DateCreated,SortName —— 收藏页本地排序用。
+    /// DateLastMediaAdded 只有部分服务端给(实测 uhdnow fork 恒为 null),取不到就回落 DateCreated。
+    #[serde(rename = "DateCreated")]
+    date_created: Option<String>,
+    #[serde(rename = "DateLastMediaAdded")]
+    date_last_media_added: Option<String>,
+    /// Emby 自己的排序名(中文条目常带拼音/去冠词处理),按名称排优先用它。
+    #[serde(rename = "SortName")]
+    sort_name: Option<String>,
 }
 #[derive(Deserialize)]
 struct UserData {
@@ -153,6 +162,11 @@ pub struct Item {
     pub presentation_unique_key: Option<String>,
     pub path: Option<String>,
     pub series_id: Option<String>,
+    /// 「更新时间」排序用。DateLastMediaAdded 优先(剧集新集入库才动),没有就 DateCreated。
+    /// ISO8601 字符串,同一台服务器格式一致 → 前端直接字符串比较即可,不必解析成时间。
+    pub date_updated: Option<String>,
+    /// Emby 的 SortName(按名称排序用,比 Name 更符合服务端口径)。
+    pub sort_name: Option<String>,
 }
 
 impl From<RawItem> for Item {
@@ -196,6 +210,8 @@ impl From<RawItem> for Item {
             presentation_unique_key: r.presentation_unique_key.filter(|s| !s.is_empty()),
             path: r.path.filter(|s| !s.is_empty()),
             series_id: r.series_id.filter(|s| !s.is_empty()),
+            date_updated: r.date_last_media_added.or(r.date_created).filter(|s| !s.is_empty()),
+            sort_name: r.sort_name.filter(|s| !s.is_empty()),
         }
     }
 }
@@ -753,9 +769,15 @@ async fn fetch_all_paged(
 
 /// 收藏列表(IsFavorite 过滤,跨库递归)。
 /// 原来写 `Limit=300` —— 服务端夹到 200,收藏超过 200 条就静默丢,用户看不到也无从察觉。改翻页。
+/// ★ 排序**不走服务端**。2026-07-19 在用户的真实服务器(v1.uhdnow.com,UHD fork)上实测:
+///   `SortBy=SortName&SortOrder=Ascending` 与 `SortBy=CommunityRating&SortOrder=Descending`
+///   返回**完全相同**的顺序(恒为 DateCreated 降序)—— 这台 fork 在 `Filters=IsFavorite`
+///   查询上直接无视 SortBy/SortOrder。原版 Emby(mebimmer)是认的,**别拿原版的结论替 fork 签字**。
+///   所以这里只负责把 Fields 要全,排序交给前端本地做(收藏封顶 2000 条,本地排毫无压力)。
+///   要改回服务端排序,先用日志里的 `[TRACE favorites url]` 手法在**目标服务器**上验证。
 pub async fn favorites(http: &reqwest::Client, s: &Session) -> Result<Vec<Item>, String> {
     let base = format!(
-        "{}/Users/{}/Items?Filters=IsFavorite&Recursive=true&IncludeItemTypes=Movie,Series,Episode&SortBy=SortName&SortOrder=Ascending&Fields=PrimaryImageAspectRatio",
+        "{}/Users/{}/Items?Filters=IsFavorite&Recursive=true&IncludeItemTypes=Movie,Series,Episode&Fields=PrimaryImageAspectRatio,CommunityRating,DateCreated,DateLastMediaAdded,SortName",
         s.server, s.user_id
     );
     fetch_all_paged(http, s, &base, 2000).await

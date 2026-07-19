@@ -88,6 +88,10 @@ export type Item = {
   presentation_unique_key: string | null;
   path: string | null;
   series_id: string | null;
+  /** 「更新时间」排序用(DateLastMediaAdded ?? DateCreated)。ISO 字符串,同服格式一致可直接比大小。 */
+  date_updated: string | null;
+  /** Emby 的 SortName,按名称排序优先用它。 */
+  sort_name: string | null;
 };
 
 export type Person = {
@@ -719,6 +723,7 @@ export const sourceWatchdog = (pos: number) =>
   invoke<boolean>("source_watchdog", { pos }).catch(() => false);
 
 // ---------- 收藏 ----------
+/** 收藏列表。**排序在前端本地做** —— 服务端 SortBy 在 UHD fork 上是死的(见 emby.rs favorites 注释)。 */
 export const listFavorites = () => invoke<Item[]>("list_favorites");
 export const setFavorite = (itemId: string, fav: boolean) =>
   invoke<void>("set_favorite", { itemId, fav });
