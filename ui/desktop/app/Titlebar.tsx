@@ -33,10 +33,8 @@ export default function Titlebar() {
     <div className="titlebar">
       <div className="tb-brand" data-tauri-drag-region>
         <span className="tb-logo" aria-hidden>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="var(--accent)" />
-            <path d="M9.5 8.2v7.6l6.3-3.8-6.3-3.8z" fill="var(--accent-ink)" />
-          </svg>
+          {/* 真 App 图标(同 exe 内嵌的那张),别再画通用播放键。 */}
+          <img src="/app_icon.png" width={16} height={16} alt="" />
         </span>
         <span className="tb-name">LinPlayer</span>
       </div>
