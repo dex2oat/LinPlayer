@@ -7,7 +7,9 @@
   <a href="https://github.com/zzzwannasleep/LinPlayer/releases"><img src="https://img.shields.io/github/downloads/zzzwannasleep/LinPlayer/total?label=downloads&color=green&logo=github" alt="Downloads"></a>
   <a href="https://linplayer.sentry.io"><img src="https://img.shields.io/endpoint?url=https://linplayeroaproxy.pages.dev/sentry/users" alt="Active Users"></a>
   <a href="https://github.com/zzzwannasleep/LinPlayer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/zzzwannasleep/LinPlayer" alt="License"></a>
-  <img src="https://img.shields.io/badge/Flutter-3.24+-02569B?logo=flutter" alt="Flutter">
+  <img src="https://img.shields.io/badge/Rust-1.80+-000000?logo=rust" alt="Rust">
+  <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white" alt="React">
+  <img src="https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white" alt="Tauri">
   <a href="https://github.com/zzzwannasleep/LinPlayer/actions"><img src="https://img.shields.io/github/actions/workflow/status/zzzwannasleep/LinPlayer/build.yml?branch=main&label=build&logo=github" alt="Build"></a>
   <a href="https://t.me/MikudesuChannels"><img src="https://img.shields.io/badge/Telegram-MikudesuChannels-26A5E4?logo=telegram&logoColor=white" alt="Telegram"></a>
 </p>
@@ -18,15 +20,17 @@
   <a href="docs/README.ja.md">日本語</a>
 </p>
 
-**LinPlayer** 是一个跨平台的 Emby 第三方客户端，覆盖 **移动端（Android / iOS）**、**桌面端（Windows / Linux / macOS）** 与 **电视端（Android TV / tvOS）**，以 Flutter 作为唯一长期代码线演进。
+**LinPlayer** 是一个跨平台的 Emby 第三方客户端，覆盖 **移动端（Android）**、**桌面端（Windows / Linux）** 与 **电视端（Android TV）**。
 
-> 每个平台使用各自的原生 UI 语言（Material / fluent_ui / macos_ui / TV 自适应），但共享同一套核心逻辑。
+> **2026-07 重构中**:已从 Flutter 全面迁到 **Rust 核心 + React/TypeScript UI + Tauri 壳**;苹果全线（iOS / macOS / tvOS）不再支持。桌面端已可用,安卓/TV 端 UI 重建中。Flutter 时代的代码见 tag `flutter-final`。
+
+> 业务核心（数据源 / 网络 / 配置 / 播放控制）是一份 Rust crate，各端共用;每端有自己的 UI 目录，按各自的交互语言实现。
 
 ## 功能特性
 
 - **双播放器内核**
   - **ExoPlayer**（Android 原生）：轻量稳定，支持文本字幕（SRT/ASS/WEBVTT/TTML）
-  - **MPV**（media_kit / libmpv）：全格式支持，HDR / Dolby Vision，原生支持 PGS/SUP 图形字幕、Anime4K 超分辨率
+  - **MPV**（libmpv）：全格式支持，HDR / Dolby Vision，原生支持 PGS/SUP 图形字幕、Anime4K 超分辨率
 - **弹幕**：接入弹弹play 等多后端，智能集数匹配、并行分源、描边/显示区域渲染，三端可用
 - **排行榜**：弹弹play 动漫榜 + TMDB 影视榜（可开关）
 - **多源浏览**：Emby 之外支持网盘/聚合源（OpenList、夸克 Cookie/扫码、Ani-rss 等）
@@ -112,7 +116,7 @@
 - 为持续改进稳定性,LinPlayer 集成了 [Sentry](https://sentry.io) 用于**崩溃/错误上报**与**匿名活跃统计**(仅用于了解崩溃情况和大致使用规模)。
 - 我们**绝不采集任何可识别你个人身份的信息**:不采集你的账号、密码、Cookie、Token、服务器地址、媒体库内容、观看记录或 IP;**不录屏、不追踪你的行为轨迹**。
 - 上报数据仅包含**匿名崩溃堆栈、应用版本、平台/系统类型**等技术信息,通过随机匿名标识区分设备(只数人头、不认身份)。
-- 我们**绝不出售、共享或将这些数据用于广告及任何商业用途**。相关配置公开可查:[`lib/core/services/telemetry.dart`](lib/core/services/telemetry.dart)。
+- 我们**绝不出售、共享或将这些数据用于广告及任何商业用途**。相关配置公开可查:[`ui/desktop/telemetry.ts`](ui/desktop/telemetry.ts) 与 [`apps/desktop/src/telemetry.rs`](apps/desktop/src/telemetry.rs)。
 
 ## 许可证
 
@@ -127,17 +131,14 @@
 - [media-kit](https://github.com/media-kit/media-kit) — 跨平台媒体播放器（libmpv 封装）
 - [mpv](https://github.com/mpv-player/mpv) / [libmpv](https://github.com/mpv-player/mpv) — 全格式播放核心
 - [ExoPlayer / androidx media](https://github.com/androidx/media) — Android 原生播放器
-- [MPVKit](https://github.com/mpvkit/MPVKit) — tvOS 端 libmpv 集成
 - [shinchiro mpv-winbuild](https://github.com/shinchiro/mpv-winbuild-cmake) — Windows 完整版 libmpv 预编译
 - [Anime4K](https://github.com/bloc97/Anime4K) — 实时超分辨率 GLSL 着色器
 
 ### UI 与框架
 
-- [Flutter](https://flutter.dev) / [Riverpod](https://riverpod.dev) / [go_router](https://pub.dev/packages/go_router)
-- [TDesign Flutter](https://github.com/Tencent/tdesign-flutter) — 腾讯 TDesign 组件库（仓库内 vendored 打补丁）
-- [fluent_ui](https://github.com/bdlukaa/fluent_ui) — Windows Fluent 风格
-- [macos_ui](https://github.com/GroovinChip/macos_ui) — macOS 原生风格
-- [flutter_animate](https://pub.dev/packages/flutter_animate) — 三端统一动效
+- [Rust](https://www.rust-lang.org/) / [Tokio](https://tokio.rs) / [reqwest](https://github.com/seanmonstar/reqwest) — 各端共用的业务核心
+- [Tauri 2](https://tauri.app) — 桌面壳（窗口 / IPC / 打包）
+- [React 19](https://react.dev) / [TypeScript](https://www.typescriptlang.org) / [Vite](https://vite.dev) — 各端 UI
 
 ### 服务与数据源
 
@@ -164,8 +165,7 @@
 
 ### 脚本与工具
 
-- [flutter_qjs](https://github.com/ekibun/flutter_qjs) / [QuickJS](https://bellard.org/quickjs/) — 插件脚本引擎（仓库内 vendored 打补丁）
-- [dio](https://github.com/cfug/dio) / [extended_image](https://github.com/fluttercandies/extended_image) / [archive](https://pub.dev/packages/archive) 等 pub.dev 生态包
+- [QuickJS](https://bellard.org/quickjs/) — 插件脚本引擎
 
 > 数据来源 TMDB 与弹弹play 的内容版权归各自所有；本项目仅作聚合展示，不存储或分发受版权保护的媒体。
 

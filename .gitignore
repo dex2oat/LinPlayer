@@ -1,193 +1,96 @@
-# Miscellaneous
-ScreenShot_*.png
-/tool/dandan_send_test.dart
-.tmp/
-*.class
-*.log
-*.pyc
-*.swp
-.DS_Store
-.atom/
-.build/
-.buildlog/
-.history
-.svn/
-.swiftpm/
-migrate_working_dir/
+# =============================================================================
+# LinPlayer —— Rust(核心) + React/TS(各端 UI) + Tauri(桌面壳)
+# 2026-07-19 重构:Flutter/Dart/苹果全线已删,原 native-poc/ 提到仓库根。
+# Flutter 时代的忽略规则一并清空 —— 留着只会掩护下一次误提。
+# 需要旧规则时:git show flutter-final:.gitignore
+# =============================================================================
 
-# IntelliJ related
-*.iml
-*.ipr
-*iws
-.idea/
+# --- 构建产物 / 依赖 ---------------------------------------------------------
+node_modules/
+dist/
+dist-ssr/
+# 绿色包产物(scripts/pack-portable.ps1 的输出):exe + 114MB libmpv + zip,共 240MB+。
+# `dist` 只匹配同名条目,匹配不到这个目录 —— 自家脚本产出的东西必须自家忽略掉。
+dist-portable/
+target/
+*.local
+packaging/
 
-# VS Code
-.vscode/
+# libmpv 大二进制(117MB dll):本地构建输入,不入普通库;CI 现拉(见 .github/workflows/build.yml)
+apps/desktop/libmpv/*.dll
 
-# Cursor AI Editor
-.cursor/
+# 绿色包运行时数据(exe 同级 userdata/);跑 dev 构建时会出现在 target/ 下,别入库
+userdata/
 
-# CodeGraph (AI coding assistant)
-.codegraph/
+# --- 本地工作材料(用户 2026-07-15 明确不入库)---------------------------------
+docs/desktop-drafts.html
+scripts/pack-portable.ps1
 
-# Agent / Skill runtime files
-.agents/
-skills-lock.json
-
-# Claude Code 本地文件（技能 SKILL.md、本地设置、worktree 等仅本地，不提交）
-.claude/skills/
-.claude/settings.local.json
-.claude/worktrees/
-.claude/plans/
-
-# Zed Editor
-.zed/
-
-# Fleet IDE
-.fleet/
-
-# Run configurations
-.run/
-
-# Environment & Secrets
+# --- 密钥 / 凭据 -------------------------------------------------------------
 *.env
 *.env.local
 *.env.*.local
 .envrc
-# OAuth 凭据原文（仅本地参考，绝不提交）
-Trakt.txt
-Bangumi.txt
-# Cloudflare 代理本地环境变量（含 secret，绝不提交）
-oauth-proxy/.dev.vars
-oauth-proxy/.wrangler/
-
-# Android / iOS Signing & certificates
 *.keystore
 *.jks
 *.p12
 *.key
 *.pem
-*.mobileprovision
 key.properties
-android/key.properties
-ios/Runner/ExportOptions.plist
+# OAuth 凭据原文(仅本地参考,绝不提交)
+Trakt.txt
+Bangumi.txt
+# Cloudflare 代理本地环境变量(含 secret,绝不提交)
+oauth-proxy/.dev.vars
+oauth-proxy/.wrangler/
+# Ani-rss API reference dumps(含私有服务器地址,绝不提交)
+api-docs.json
 
-# Backup / merge artifacts
-*.orig
-*.rej
+# --- 日志 / 临时 -------------------------------------------------------------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+linplayer_log_*.txt
+.tmp/
+ScreenShot_*.png
 
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
-.dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
-.pub-cache/
-.pub/
-.packages
-build/
-coverage/
-
-# Flutter version management
-.fvm/
-
-# Symbolication related
-app.*.symbols
-
-# Obfuscation related
-app.*.map.json
-
-# TV 专属 mihomo 内核(28MB)与 zashboard 面板(310 文件)——按需脚本拉取,不入库。
-# 见 android/app/src/tv/jniLibs/armeabi-v7a/README.md 与 scripts/fetch_mihomo_tv.ps1。
-# 曾经被误提进仓库,与自己的 README 直接矛盾;CI 已补 fetch 步骤,别再让它们溜回来。
-android/app/src/tv/jniLibs/armeabi-v7a/*.so
-android/app/src/tv/assets/zashboard/
-
-# Android build artifacts
-android/app/debug/
-android/app/profile/
-android/app/release/
-android/.gradle/
-android/.kotlin/
-android/gradle-user-home/
-android/captures/
-android/local.properties
-android/gradlew
-android/gradlew.bat
-android/gradle/wrapper/gradle-wrapper.jar
-android/init.gradle
+# --- 打包产物(安卓端将来会有)-----------------------------------------------
 *.apk
 # *.apk 匹配不到 bundletool 产出的 .apks(APK Set),漏一个字母就够 50MB 裸奔在 git status 里
 *.apks
 *.aab
 *.dex
 
-# iOS build artifacts
-ios/Pods/
-ios/.symlinks/
-ios/Flutter/Flutter.framework
-ios/Flutter/Flutter.podspec
-ios/Flutter/App.framework
-ios/Flutter/Engine.framework
-ios/Flutter/ephemeral/
-
-# Windows build artifacts
-windows/flutter/generated_plugin_registrant.cc
-windows/flutter/generated_plugin_registrant.h
-windows/flutter/generated_plugins.cmake
-windows/flutter/ephemeral/
-
-# Linux/macOS Flutter artifacts
-linux/flutter/ephemeral/
-macos/Flutter/ephemeral/
-
-# 自动生成的插件注册文件（flutter pub get 会重新生成，不应提交）
-# 与上面 Windows 的处理保持一致，避免新增/移除插件时产生无意义 diff。
-linux/flutter/generated_plugin_registrant.cc
-linux/flutter/generated_plugin_registrant.h
-linux/flutter/generated_plugins.cmake
-macos/Flutter/GeneratedPluginRegistrant.swift
-**/generated_plugin_registrant.dart
-
-# Native build system caches
-**/.gradle/
-**/.kotlin/
-**/.cxx/
-
-# Generated files
-*.g.dart
-*.freezed.dart
-*.mocks.dart
-packaging/
-
-# 插件系统：打包产物（.lpk 可由 tools/pack_plugin.dart 随时重新生成）
-/dist/
-*.lpk
-
-# 插件开发参考素材：保存到本地的网页（仅供解析/逆向参考，不提交 GitHub）
-# 「保存完整网页」会生成 <名字>.html + <名字>_files/ 一对，这里按需忽略。
-/user.htm
-/user_files/
-/*UHD Service*
-登录 — UHD Service.html
-登录 — UHD Service_files/
-
-# Vendored 三方包（third_party/flutter_qjs 源码需提交，但其构建产物不提交）。
-# build/、.dart_tool/、coverage/、*.iml 已被上面的全局规则覆盖；此处仅作显式声明。
-third_party/**/.dart_tool/
-third_party/**/build/
-third_party/**/.cxx/
-third_party/**/example/
-
-# Ani-rss API reference dumps (contain private server address — never commit)
-api-docs.json
-Swagger UI.html
-Swagger UI_files/
-
-# 运行时日志导出文件
-linplayer_log_*.txt
+# --- 编辑器 / 工具 -----------------------------------------------------------
+.vscode/
+.idea/
+.cursor/
+.zed/
+.fleet/
+.run/
+.codegraph/
 .omo/
-devtools_options.yaml
+*.iml
+*.ipr
+*.iws
+*.suo
+*.sw?
+*.sln
+.DS_Store
+.history
 
-# 绿色包运行时数据(exe 同级 userdata/);跑 dev 构建时会出现在 target/ 下,别入库
-userdata/
+# Agent / Skill 运行时文件
+.agents/
+skills-lock.json
+.claude/skills/
+.claude/settings.local.json
+.claude/worktrees/
+.claude/plans/
+
+# --- 合并/备份残留 -----------------------------------------------------------
+*.orig
+*.rej

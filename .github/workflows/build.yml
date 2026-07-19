@@ -1,9 +1,11 @@
-# PC 端(Rust + React + Tauri,native-poc/)构建 → Windows 免安装绿色包 → 预发布。
+# PC 端(Rust + React + Tauri)构建 → Windows 免安装绿色包 → 预发布。
 #
 # 这个文件曾经叫 "Build Flutter",构建 Android 手机/TV 两个 APK。现在 PC 端已迁到
-# Rust 栈,苹果全线不做,Android 端待重构 —— 那两个 job 连同它们依赖的
-# build-libmpv-pgs.yml 一起删了。Android 的 jniLibs/*.so 是**提交在仓库里**的,
-# 删 workflow 不会弄丢已有二进制;等安卓端重构完再把构建接回来。
+# Rust 栈,苹果全线不做 —— 那两个 job 连同它们依赖的 build-libmpv-pgs.yml 一起删了。
+#
+# 2026-07-19 全面重构:Flutter/Dart 全删、原 native-poc/ 提到仓库根(apps/ + ui/ +
+# crates/),那批自建的 jniLibs/*.so 也一并删除(要翻旧账:git tag flutter-final)。
+# 安卓端将来直接用现成的 libmpv .so,不再自建 JNI 封装,届时在这里加回 job。
 #
 # 发布链路:本 workflow 出 v<ver>-pre 预发布(= App 内的「预览版」渠道),
 # publish.yml 手动把它提升成正式 Release(= 「稳定版」渠道)。两个渠道的定义
@@ -14,14 +16,36 @@ on:
   push:
     branches: [ main, master ]
     # 只有 PC 端的东西改了才值得烧一个 windows runner(计费 2 倍)。
-    # Flutter 侧(lib/、android/)现在不由本 workflow 构建,改它不该触发。
+    # 原 native-poc/ 已于 2026-07-19 提到仓库根;这里只列 PC 端真正的构建输入。
     paths:
-      - 'native-poc/**'
+      - 'apps/desktop/**'
+      - 'crates/**'
+      - 'ui/**'
+      - 'public/**'
+      - 'scripts/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'index.html'
+      - 'vite.config.ts'
+      - 'tsconfig*.json'
       - '.github/workflows/build.yml'
   pull_request:
     branches: [ main, master ]
     paths:
-      - 'native-poc/**'
+      - 'apps/desktop/**'
+      - 'crates/**'
+      - 'ui/**'
+      - 'public/**'
+      - 'scripts/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'index.html'
+      - 'vite.config.ts'
+      - 'tsconfig*.json'
       - '.github/workflows/build.yml'
   workflow_dispatch:
     inputs:
@@ -55,7 +79,7 @@ jobs:
         run: |
           $v = "${{ inputs.version }}"
           if (-not $v) {
-            $base = (Get-Content native-poc/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+            $base = (Get-Content apps/desktop/tauri.conf.json -Raw | ConvertFrom-Json).version
             $v = "$base-build${{ github.run_number }}"
           }
           "version=$v" >> $env:GITHUB_OUTPUT
@@ -67,7 +91,7 @@ jobs:
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: native-poc
+          workspaces: .
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -78,9 +102,9 @@ jobs:
           # 类型擦除在 22.18+ 默认开、24 默认开;这里钉 24,和本地验证过的大版本一致。
           node-version: '24'
           cache: npm
-          cache-dependency-path: native-poc/package-lock.json
+          cache-dependency-path: package-lock.json
 
-      # 完整版 libmpv。100MB+,不进仓库(native-poc/.gitignore:23),所以每次构建现拉。
+      # 完整版 libmpv。100MB+,不进仓库(.gitignore),所以每次构建现拉。
       # 这段逻辑原先住在 build-libmpv-pgs.yml 的 assemble-windows-libmpv job 里,
       # 那个 workflow 删了,逻辑搬到这儿 —— 少一次跨 workflow 的产物传递,也少一个
       # 「上游 workflow 半年没跑过、libmpv-latest 早就过期」的失败面。
@@ -103,8 +127,8 @@ jobs:
           7z x mpv-dev.7z -ompv-dev | Out-Null
           $dll = Get-ChildItem mpv-dev -Recurse -Filter libmpv-2.dll | Select-Object -First 1
           if (-not $dll) { throw "压缩包里没有 libmpv-2.dll" }
-          Copy-Item $dll.FullName native-poc/src-tauri/libmpv/libmpv-2.dll -Force
-          $size = (Get-Item native-poc/src-tauri/libmpv/libmpv-2.dll).Length
+          Copy-Item $dll.FullName apps/desktop/libmpv/libmpv-2.dll -Force
+          $size = (Get-Item apps/desktop/libmpv/libmpv-2.dll).Length
           Write-Host "libmpv-2.dll size: $size"
           if ($size -lt 60MB) { throw "libmpv-2.dll 只有 $size 字节,不是完整版" }
 
@@ -114,27 +138,23 @@ jobs:
       - name: Stamp version into tauri.conf.json
         shell: pwsh
         run: |
-          $p = "native-poc/src-tauri/tauri.conf.json"
+          $p = "apps/desktop/tauri.conf.json"
           $c = (Get-Content $p -Raw) -replace '("version"\s*:\s*")[^"]*(")', '${1}${{ steps.version.outputs.version }}${2}'
           Set-Content $p -Value $c -NoNewline -Encoding utf8NoBOM
           Select-String -Path $p -Pattern '"version"'
 
       - name: Install frontend deps
-        working-directory: native-poc
         run: npm ci
 
       - name: Check telemetry redaction
-        working-directory: native-poc
         run: npm run check:telemetry
 
       - name: Rust tests
-        working-directory: native-poc
         run: cargo test --workspace
 
       # 前端 sourcemap 由 @sentry/vite-plugin 在 beforeBuildCommand 里顺手上传
       # (它自己读 SENTRY_AUTH_TOKEN;没 token 就整个不挂,有 token 而传失败则构建红)。
       - name: Build
-        working-directory: native-poc
         env:
           DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
           DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
@@ -147,7 +167,6 @@ jobs:
       # ★ 判断写在脚本里,不写成 `if: ${{ secrets.X != '' }}` —— GitHub 不给 step 的
       #   if: 表达式访问 secrets 上下文,那样写会直接跳过或报错(本仓上次接 Sentry 踩过)。
       - name: Upload Rust debug symbols to Sentry
-        working-directory: native-poc
         shell: pwsh
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
@@ -167,7 +186,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "符号上传失败(exit $LASTEXITCODE)" }
 
       # 自己组包,**不复用本地的 scripts/pack-portable.ps1** —— 那个脚本被
-      # native-poc/.gitignore 明确排除(用户 2026-07-15 定的「本地工作材料不入库」),
+      # .gitignore 明确排除(用户 2026-07-15 定的「本地工作材料不入库」),
       # CI 检出的树里根本没有它。它做的也多半是开发环路的事(读 hjbl.env、解压到
       # 测试目录、保留 userdata),CI 只需要「exe + dll → zip」这一步。
       #
@@ -176,9 +195,9 @@ jobs:
       - name: Pack portable zip
         shell: pwsh
         run: |
-          $rel = "native-poc/target/release"
+          $rel = "target/release"
           $exe = "$rel/app.exe"
-          $dll = "$rel/libmpv-2.dll"   # build.rs 会把它从 src-tauri/libmpv/ 拷过来
+          $dll = "$rel/libmpv-2.dll"   # build.rs 会把它从 apps/desktop/libmpv/ 拷过来
           foreach ($f in @($exe, $dll)) {
             if (-not (Test-Path $f)) { throw "缺少产物 $f" }
           }
