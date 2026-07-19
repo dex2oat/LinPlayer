@@ -72,7 +72,11 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # ★ 不能降到 22 以下:下面那步 `npm run check:telemetry` 是让 node 直接跑
+          # src/telemetry.check.ts(类型擦除,换来「零测试框架」)。Node 20 不支持,
+          # 报 ERR_UNKNOWN_FILE_EXTENSION ".ts" —— 本次就是这么红的第一轮。
+          # 类型擦除在 22.18+ 默认开、24 默认开;这里钉 24,和本地验证过的大版本一致。
+          node-version: '24'
           cache: npm
           cache-dependency-path: native-poc/package-lock.json
 
