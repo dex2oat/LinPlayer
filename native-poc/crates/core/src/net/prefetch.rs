@@ -1033,17 +1033,24 @@ mod tests {
             .await
             .unwrap();
 
-        let got = tokio::time::timeout(Duration::from_secs(30), async {
+        /* ★ 读错误必须**带出来**,不能 `Err(_) => break`。
+           吞掉它的话,「流被提前掐断」和「正常读完」在结果上长得一模一样,
+           只剩一个短掉的字节数,查都没法查。2026-07-19 CI 上就是这么栽的。 */
+        let (got, read_err) = tokio::time::timeout(Duration::from_secs(30), async {
             let mut total = 0usize;
             let mut buf = vec![0u8; 64 * 1024];
+            let mut err = None;
             loop {
                 match cli.read(&mut buf).await {
                     Ok(0) => break,
                     Ok(n) => total += n,
-                    Err(_) => break,
+                    Err(e) => {
+                        err = Some(e.to_string());
+                        break;
+                    }
                 }
             }
-            total
+            (total, err)
         })
         .await
         .expect("整片读完不该超时");
@@ -1067,11 +1074,21 @@ mod tests {
                 "第 {i} 个请求跳到了段 {c},超出窗口 {window} = 不是顺序预取"
             );
         }
-        // got 是裸 socket 收到的字节,含响应头(约 150 字节),故比对时留出头部余量。
-        let body = got as u64 - TOTAL;
+        /* got 是裸 socket 收到的字节,含响应头(约 150 字节),故比对时留出头部余量。
+           ★ 先断言再做减法。反过来写(`let body = got - TOTAL;` 放在断言前)的话,
+             收短了就是 u64 下溢 panic —— debug 下只剩一句
+             `attempt to subtract with overflow`,把「实收多少、错在哪」全毁了。
+             断言的价值在于失败时说人话,不是在于它存在。 */
+        let short_by = TOTAL.saturating_sub(got as u64);
         assert!(
-            got as u64 > TOTAL && body < 1024,
-            "应当把整片喂完(含响应头),实收 {got},TOTAL={TOTAL}"
+            got as u64 > TOTAL,
+            "流被提前掐断:实收 {got} 字节,比整片 {TOTAL} 少了 {short_by};\
+             读取错误={read_err:?};已取分段={uniq:?}"
+        );
+        assert!(
+            got as u64 - TOTAL < 1024,
+            "多收了 {} 字节,响应头不该这么大",
+            got as u64 - TOTAL
         );
     }
 
