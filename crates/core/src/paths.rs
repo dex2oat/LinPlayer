@@ -320,6 +320,7 @@ fn migrate_from(
     /* identifier 命名的根有**两个**:插件在 Roaming 的(app_config_dir),
        WebView2 profile 在 Local 的(实测 %LOCALAPPDATA%\com.linplayer.poc\EBWebView, 126MB)。
        只处理一个就会漏掉大头。 */
+    // 历史 identifier。2026-07-20 已改回 xyz.linplayer.app,但老版本留下的根仍要按旧名清。
     const ID: &str = "com.linplayer.poc";
     if let Some(c) = &roaming_base {
         move_item(&c.join(ID).join("plugins_root"), &data.join("plugins"));
