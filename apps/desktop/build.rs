@@ -40,13 +40,22 @@ fn main() {
         println!("cargo:rustc-link-arg-bins=/EXPORT:AmdPowerXpressRequestHighPerformance");
     }
 
-    // 把 libmpv-2.dll 拷到产物目录(target/<profile>/),让 exe 运行时能找到
-    if let Ok(out) = std::env::var("OUT_DIR") {
-        // OUT_DIR = target/<profile>/build/<pkg>/out  -> 上溯 3 层到 target/<profile>
-        if let Some(profile_dir) = Path::new(&out).ancestors().nth(3) {
-            let src = libdir.join("libmpv-2.dll");
-            let dst = profile_dir.join("libmpv-2.dll");
-            let _ = std::fs::copy(&src, &dst);
+    /* 把 libmpv-2.dll 拷到产物目录(target/<profile>/),让 exe 运行时能找到。
+       ★ 这是 DLL 进发行包的**唯一**机制,打包脚本和 CI 都从 target/<profile>/ 取它。
+         tauri.conf.json 里原先还挂着 `"resources": ["libmpv/libmpv-2.dll"]` —— 那是条
+         死配置(bundle.active=false 根本不走 bundler),但 tauri_build **仍然会校验
+         resources 路径是否存在**,于是在没有该 DLL 的 Linux 构建机上直接把 build.rs
+         干失败:`resource path libmpv/libmpv-2.dll doesn't exist`。已删,别照着
+         bundler 文档再加回来。
+       Linux 上没有这个文件,整块跳过。 */
+    if target_os == "windows" {
+        if let Ok(out) = std::env::var("OUT_DIR") {
+            // OUT_DIR = target/<profile>/build/<pkg>/out  -> 上溯 3 层到 target/<profile>
+            if let Some(profile_dir) = Path::new(&out).ancestors().nth(3) {
+                let src = libdir.join("libmpv-2.dll");
+                let dst = profile_dir.join("libmpv-2.dll");
+                let _ = std::fs::copy(&src, &dst);
+            }
         }
     }
 
