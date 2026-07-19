@@ -131,27 +131,75 @@ jobs:
         working-directory: native-poc
         run: cargo test --workspace
 
-      # 一步完成:tauri build(前端 sourcemap 由 @sentry/vite-plugin 顺手上传)
-      # + Rust 符号上传 + 打 zip。刻意复用本地那条 `npm run pack` —— 「发行包里装哪些
-      # 文件」只在 pack-portable.ps1 一处定义,CI 和本地不会各说各话。
-      - name: Build + pack portable zip
+      # 前端 sourcemap 由 @sentry/vite-plugin 在 beforeBuildCommand 里顺手上传
+      # (它自己读 SENTRY_AUTH_TOKEN;没 token 就整个不挂,有 token 而传失败则构建红)。
+      - name: Build
         working-directory: native-poc
         env:
           DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
           DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: npm run pack
+        run: npx tauri build
 
-      # 命名必须让 App 的更新器认得出来:它按小写子串 "windows" 挑资产。
-      - name: Rename zip to release convention
+      # Rust 侧的符号。前端那半上面已经传了,但 MSVC 的函数名/行号在 app.pdb 里,
+      # 而发行包只装 exe —— 不传的话用户机器上的 panic 回来就是一列十六进制地址。
+      # ★ 判断写在脚本里,不写成 `if: ${{ secrets.X != '' }}` —— GitHub 不给 step 的
+      #   if: 表达式访问 secrets 上下文,那样写会直接跳过或报错(本仓上次接 Sentry 踩过)。
+      - name: Upload Rust debug symbols to Sentry
+        working-directory: native-poc
+        shell: pwsh
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          if (-not $env:SENTRY_AUTH_TOKEN) {
+            Write-Host "::notice::SENTRY_AUTH_TOKEN 未设置,跳过符号上传(崩溃堆栈将无法符号化)"
+            exit 0
+          }
+          $cli = "node_modules/@sentry/cli-win32-x64/bin/sentry-cli.exe"
+          if (-not (Test-Path $cli)) { throw "sentry-cli 不在,npm ci 装漏了?" }
+          # project 必须是 DSN 所指的那个(slug 叫 flutter,历史原因:移动端先建的)。
+          # 传到别的项目**两边都不报错**,symbolication 却永远不发生。
+          # 不加 --include-sources:那会把 Rust 源码上传到 Sentry,与 Dart 侧
+          # upload_sources: false 保持同一条口径。
+          & $cli debug-files upload --org linplayer --project flutter `
+            target/release/app.pdb target/release/app.exe
+          if ($LASTEXITCODE -ne 0) { throw "符号上传失败(exit $LASTEXITCODE)" }
+
+      # 自己组包,**不复用本地的 scripts/pack-portable.ps1** —— 那个脚本被
+      # native-poc/.gitignore 明确排除(用户 2026-07-15 定的「本地工作材料不入库」),
+      # CI 检出的树里根本没有它。它做的也多半是开发环路的事(读 hjbl.env、解压到
+      # 测试目录、保留 userdata),CI 只需要「exe + dll → zip」这一步。
+      #
+      # ★ 发行包内容改动时,这里和 pack-portable.ps1 要一起改 —— 下面的清单断言
+      #   保证 CI 这半至少不会静默少装文件。
+      - name: Pack portable zip
         shell: pwsh
         run: |
-          $src = Get-ChildItem native-poc/dist-portable/*_portable_x64.zip | Select-Object -First 1
-          if (-not $src) { throw "pack 没有产出 zip" }
+          $rel = "native-poc/target/release"
+          $exe = "$rel/app.exe"
+          $dll = "$rel/libmpv-2.dll"   # build.rs 会把它从 src-tauri/libmpv/ 拷过来
+          foreach ($f in @($exe, $dll)) {
+            if (-not (Test-Path $f)) { throw "缺少产物 $f" }
+          }
+          $stage = "pack/LinPlayer"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          # 改名成 LinPlayer.exe:DLL 是按目录找的,和 exe 叫什么无关。
+          # 应用内更新的 applier 也按这个名字找主程序。
+          Copy-Item $exe "$stage/LinPlayer.exe" -Force
+          Copy-Item $dll "$stage/libmpv-2.dll" -Force
+
+          $want = @("LinPlayer.exe", "libmpv-2.dll")
+          $got  = (Get-ChildItem $stage -File | ForEach-Object Name | Sort-Object)
+          if (Compare-Object $want ($got) ) {
+            throw "发行包内容对不上。期望 $($want -join ', ');实得 $($got -join ', ')"
+          }
+
+          # 命名必须让 App 的更新器认得出来:它按小写子串 "windows" 挑资产。
           New-Item -ItemType Directory -Force -Path release | Out-Null
-          Copy-Item $src.FullName "release/LinPlayer-Windows-v${{ steps.version.outputs.version }}.zip"
-          Get-ChildItem release
+          $zip = "release/LinPlayer-Windows-v${{ steps.version.outputs.version }}.zip"
+          Compress-Archive -Path (Get-ChildItem -LiteralPath $stage).FullName -DestinationPath $zip -CompressionLevel Optimal
+          "zip: $zip  $([math]::Round((Get-Item $zip).Length / 1MB, 1)) MB"
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
