@@ -190,7 +190,7 @@ jobs:
           # 不加 --include-sources:那会把 Rust 源码上传到 Sentry,与 Dart 侧
           # upload_sources: false 保持同一条口径。
           & $cli debug-files upload --org linplayer --project flutter `
-            target/release/app.pdb target/release/app.exe
+            target/release/app.pdb target/release/LinPlayer.exe
           if ($LASTEXITCODE -ne 0) { throw "符号上传失败(exit $LASTEXITCODE)" }
 
       # 自己组包,**不复用本地的 scripts/pack-portable.ps1** —— 那个脚本被
@@ -204,15 +204,15 @@ jobs:
         shell: pwsh
         run: |
           $rel = "target/release"
-          $exe = "$rel/app.exe"
+          # mainBinaryName 已让 tauri 直接产出 LinPlayer.exe(crate 名仍是 app,故 pdb 还叫 app.pdb)。
+          $exe = "$rel/LinPlayer.exe"
           $dll = "$rel/libmpv-2.dll"   # build.rs 会把它从 apps/desktop/libmpv/ 拷过来
           foreach ($f in @($exe, $dll)) {
             if (-not (Test-Path $f)) { throw "缺少产物 $f" }
           }
           $stage = "pack/LinPlayer"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          # 改名成 LinPlayer.exe:DLL 是按目录找的,和 exe 叫什么无关。
-          # 应用内更新的 applier 也按这个名字找主程序。
+          # 应用内更新的 applier 按 LinPlayer.exe 这个名字找主程序。
           Copy-Item $exe "$stage/LinPlayer.exe" -Force
           Copy-Item $dll "$stage/libmpv-2.dll" -Force
 
