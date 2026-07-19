@@ -24,7 +24,18 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["json", "socks"] }
+# ★ default-features = false 不能省。reqwest 0.12 的默认特性含 `default-tls` = **native-tls**,
+# 而 cargo 的特性是**全图合并**的 —— 这一行漏写,就把整个 workspace 拖进 openssl,
+# 连带作废本文件下面 sentry 那段「混两套 TLS 会把 openssl 拖进来」的努力(core 那边一直是对的)。
+# Windows 上看不出来(native-tls 走 SChannel,不加系统依赖);**Linux 上是实打实的**:
+# 二进制会多链 libssl.so.3/libcrypto.so.3,绿色包平白多两个系统依赖,还多编一大堆 C。
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "socks",
+  "rustls-tls",
+  "charset",
+  "http2",
+] }
 async-trait = "0.1"
 # rt:imgcache 的 spawn_blocking(把同步写盘挪出 async worker)。
 # 别依赖「别的依赖恰好开了这个特性」—— 那种编过是巧合,哪天依赖树一变就红。
@@ -55,6 +66,11 @@ windows-sys = { version = "0.59", features = [
   "Win32_Graphics_Gdi",
   "Win32_System_LibraryLoader",
 ] }
+
+# libmpv 在非 Windows 上是**运行时 dlopen** 的(理由见 src/mpv.rs 的 `mod ffi` 注释:
+# 发行版之间 soname 分裂,编译期绑死哪个都是错)。cfg 必须和那边的 `#[cfg(not(windows))]` 对齐。
+[target.'cfg(not(windows))'.dependencies]
+libloading = "0.8"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # x11-dl 而不是 x11:前者**运行时 dlopen** libX11,构建机不需要 X11 开发头,

@@ -155,8 +155,17 @@ function loadDm(): DmSettings {
     return DM_FALLBACK; // 存档坏了就用默认,不能让它挡住起播
   }
 }
-/** 解码档位 → mpv hwdec 值。零拷贝(d3d11va)是 Win 最佳,软解(no)排查用。 */
-const HWDECS: [string, string][] = [["auto-safe", "硬解"], ["d3d11va", "零拷贝"], ["no", "软解"]];
+/** 平台判定。只用来挑「哪些档位在本平台真的有意义」,不参与任何功能开关。
+    WebKitGTK 的 UA 里带 "Linux",WebView2 不带。 */
+const IS_LINUX = navigator.userAgent.includes("Linux");
+/** 解码档位 → mpv hwdec 值。中间那档是**各平台各自的零拷贝路径**:
+    Win 是 d3d11va,Linux 是 vaapi。把 d3d11va 摆给 Linux 用户,得到的是一个
+    点了没任何反应的按钮 —— mpv 认不出这个值只会静默回落,不报错。软解(no)排查用。 */
+const HWDECS: [string, string][] = [
+  ["auto-safe", "硬解"],
+  [IS_LINUX ? "vaapi" : "d3d11va", "零拷贝"],
+  ["no", "软解"],
+];
 /** 定时关闭档位(分钟)。照搬旧 Flutter 端既有档位(player_screen_state _showTimerDialog),不另造一套。 */
 const SLEEP_MINS = [15, 30, 45, 60, 90, 120];
 /** 画面比例档位 → mpv video-aspect-override("" = 还原源比例)。 */
@@ -164,16 +173,30 @@ const ASPECTS: [string, string][] = [
   ["", "原始"], ["16:9", "16:9"], ["4:3", "4:3"], ["1.85", "1.85:1"], ["2.35", "2.35:1"], ["21:9", "21:9"],
 ];
 /** 字幕字体档位。「默认」不能传字面量(核层守卫会当占位跳过),故映射到 mpv 真默认 sans-serif。 */
-const SUB_FONTS: [string, string][] = [
-  ["sans-serif", "默认"], ["Microsoft YaHei", "微软雅黑"], ["Noto Sans CJK SC", "思源黑体"],
-  ["SimHei", "黑体"], ["KaiTi", "楷体"],
-];
+/** ★ 字体是**按名字**交给 libass 的,系统里没有这个名字就静默回落成默认 ——
+    摆一排本平台根本不存在的字体,用户点了只会觉得「选了没用」。两端各给各的常见 CJK 字体。 */
+const SUB_FONTS: [string, string][] = IS_LINUX
+  ? [
+      ["sans-serif", "默认"], ["Noto Sans CJK SC", "思源黑体"],
+      ["Source Han Sans SC", "思源黑体(Adobe)"], ["WenQuanYi Zen Hei", "文泉驿正黑"],
+      ["Noto Serif CJK SC", "思源宋体"],
+    ]
+  : [
+      ["sans-serif", "默认"], ["Microsoft YaHei", "微软雅黑"], ["Noto Sans CJK SC", "思源黑体"],
+      ["SimHei", "黑体"], ["KaiTi", "楷体"],
+    ];
 /** 延迟显示:带符号一位小数,0 也显示 0.0s 免得以为没接上。 */
 const fmtDelay = (s: number) => `${s > 0 ? "+" : ""}${s.toFixed(1)}s`;
 /** 浮点步进会攒出 0.30000000000000004,统一钉到一位小数。 */
 const round1 = (v: number) => Math.round(v * 10) / 10;
-/** hwdec-current 回读的是实际解码器(如 d3d11va-copy),归一到三档才好高亮。 */
-const normHwdec = (h: string) => (!h || h === "no" ? "no" : h.startsWith("d3d11") ? "d3d11va" : "auto-safe");
+/** hwdec-current 回读的是实际解码器(Win 如 d3d11va-copy,Linux 如 vaapi-copy/nvdec),
+    归一到三档才好高亮。零拷贝那档按本平台的取值回填,否则 Linux 上永远高亮不中。 */
+const normHwdec = (h: string) =>
+  !h || h === "no"
+    ? "no"
+    : /^(d3d11|vaapi|nvdec|vdpau)/.test(h)
+      ? (IS_LINUX ? "vaapi" : "d3d11va")
+      : "auto-safe";
 
 export default function App() {
   const [booted, setBooted] = useState(false);

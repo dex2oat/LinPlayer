@@ -35,20 +35,173 @@ struct mpv_event_end_file {
     error: c_int,
 }
 
-#[link(name = "mpv")]
-extern "C" {
-    fn mpv_create() -> *mut mpv_handle;
-    fn mpv_initialize(ctx: *mut mpv_handle) -> c_int;
-    fn mpv_terminate_destroy(ctx: *mut mpv_handle);
-    fn mpv_set_option_string(ctx: *mut mpv_handle, name: *const c_char, data: *const c_char) -> c_int;
-    fn mpv_set_property_string(ctx: *mut mpv_handle, name: *const c_char, data: *const c_char) -> c_int;
-    fn mpv_get_property(ctx: *mut mpv_handle, name: *const c_char, format: c_int, data: *mut c_void) -> c_int;
-    fn mpv_get_property_string(ctx: *mut mpv_handle, name: *const c_char) -> *mut c_char;
-    fn mpv_free(data: *mut c_void);
-    fn mpv_command(ctx: *mut mpv_handle, args: *const *const c_char) -> c_int;
-    fn mpv_error_string(error: c_int) -> *const c_char;
-    fn mpv_wait_event(ctx: *mut mpv_handle, timeout: f64) -> *mut mpv_event;
+/* ---------- libmpv 的绑定方式:两端故意不同 ----------
+
+   Windows:链接期绑定。仓库自带 mpv.lib + libmpv-2.dll,版本由我们自己说了算。
+
+   Linux:**运行时 dlopen,编译期不绑任何 soname**。
+   必须这样,因为发行版之间 libmpv 的 soname 是分裂的:
+     Ubuntu 22.04 → libmpv.so.1 (mpv 0.34)
+     Ubuntu 24.04 / Fedora / Arch → libmpv.so.2 (mpv 0.36+)
+   链接期绑哪个都是错的:绑 .so.1,新系统上一启动就是「找不到 libmpv.so.1」;
+   绑 .so.2 就得换更新的构建机,glibc 随之抬到 2.39,又反过来砍掉一批老系统。
+   两条路都堵死。dlopen 把这个选择推迟到运行时,一个包适配所有发行版,
+   顺带让构建机连 libmpv-dev 都不用装。 */
+
+#[cfg(windows)]
+mod ffi {
+    use super::{mpv_event, mpv_handle};
+    use std::ffi::{c_char, c_int, c_void};
+
+    #[link(name = "mpv")]
+    extern "C" {
+        pub fn mpv_create() -> *mut mpv_handle;
+        pub fn mpv_initialize(ctx: *mut mpv_handle) -> c_int;
+        pub fn mpv_terminate_destroy(ctx: *mut mpv_handle);
+        pub fn mpv_set_option_string(ctx: *mut mpv_handle, name: *const c_char, data: *const c_char) -> c_int;
+        pub fn mpv_set_property_string(ctx: *mut mpv_handle, name: *const c_char, data: *const c_char) -> c_int;
+        pub fn mpv_get_property(ctx: *mut mpv_handle, name: *const c_char, format: c_int, data: *mut c_void) -> c_int;
+        pub fn mpv_get_property_string(ctx: *mut mpv_handle, name: *const c_char) -> *mut c_char;
+        pub fn mpv_free(data: *mut c_void);
+        pub fn mpv_command(ctx: *mut mpv_handle, args: *const *const c_char) -> c_int;
+        pub fn mpv_error_string(error: c_int) -> *const c_char;
+        pub fn mpv_wait_event(ctx: *mut mpv_handle, timeout: f64) -> *mut mpv_event;
+    }
 }
+
+#[cfg(not(windows))]
+mod ffi {
+    use super::{mpv_event, mpv_handle};
+    use std::ffi::{c_char, c_int, c_void};
+    use std::sync::OnceLock;
+
+    type FnCreate = unsafe extern "C" fn() -> *mut mpv_handle;
+    type FnCtx = unsafe extern "C" fn(*mut mpv_handle) -> c_int;
+    type FnCtxVoid = unsafe extern "C" fn(*mut mpv_handle);
+    type FnSetStr = unsafe extern "C" fn(*mut mpv_handle, *const c_char, *const c_char) -> c_int;
+    type FnGetProp = unsafe extern "C" fn(*mut mpv_handle, *const c_char, c_int, *mut c_void) -> c_int;
+    type FnGetPropStr = unsafe extern "C" fn(*mut mpv_handle, *const c_char) -> *mut c_char;
+    type FnFree = unsafe extern "C" fn(*mut c_void);
+    type FnCmd = unsafe extern "C" fn(*mut mpv_handle, *const *const c_char) -> c_int;
+    type FnErrStr = unsafe extern "C" fn(c_int) -> *const c_char;
+    type FnWaitEv = unsafe extern "C" fn(*mut mpv_handle, f64) -> *mut mpv_event;
+
+    pub struct Api {
+        // ★ 必须把 Library 留在结构里:它一 drop 就 dlclose,下面那堆函数指针会**全部悬垂**。
+        _lib: libloading::Library,
+        create: FnCreate,
+        initialize: FnCtx,
+        terminate_destroy: FnCtxVoid,
+        set_option_string: FnSetStr,
+        set_property_string: FnSetStr,
+        get_property: FnGetProp,
+        get_property_string: FnGetPropStr,
+        free: FnFree,
+        command: FnCmd,
+        error_string: FnErrStr,
+        wait_event: FnWaitEv,
+    }
+
+    /* 依次尝试的候选名。**顺序有意义**:新的在前 —— 同时装了两代库的系统上要用新的。
+       不写绝对路径,交给 ld.so 按标准规则搜索 —— 其中包含 build.rs 写进 ELF 的 $ORIGIN,
+       所以用户往程序目录丢一个 libmpv.so.2 依然会优先生效,和 Windows 那边
+       「DLL 放 exe 同级」的语义对齐。 */
+    const CANDIDATES: &[&str] = &["libmpv.so.2", "libmpv.so.1", "libmpv.so"];
+
+    fn api() -> Option<&'static Api> {
+        static API: OnceLock<Option<Api>> = OnceLock::new();
+        API.get_or_init(|| unsafe {
+            let lib = CANDIDATES
+                .iter()
+                .find_map(|n| libloading::Library::new(n).ok())?;
+            // 先把符号全取出来再构造结构体:取符号会借用 lib,而 lib 随后要被移动进去。
+            // 少一个符号就整体放弃 —— 半套 API 比没有更危险。
+            let create = *lib.get::<FnCreate>(b"mpv_create\0").ok()?;
+            let initialize = *lib.get::<FnCtx>(b"mpv_initialize\0").ok()?;
+            let terminate_destroy = *lib.get::<FnCtxVoid>(b"mpv_terminate_destroy\0").ok()?;
+            let set_option_string = *lib.get::<FnSetStr>(b"mpv_set_option_string\0").ok()?;
+            let set_property_string = *lib.get::<FnSetStr>(b"mpv_set_property_string\0").ok()?;
+            let get_property = *lib.get::<FnGetProp>(b"mpv_get_property\0").ok()?;
+            let get_property_string = *lib.get::<FnGetPropStr>(b"mpv_get_property_string\0").ok()?;
+            let free = *lib.get::<FnFree>(b"mpv_free\0").ok()?;
+            let command = *lib.get::<FnCmd>(b"mpv_command\0").ok()?;
+            let error_string = *lib.get::<FnErrStr>(b"mpv_error_string\0").ok()?;
+            let wait_event = *lib.get::<FnWaitEv>(b"mpv_wait_event\0").ok()?;
+            Some(Api {
+                _lib: lib,
+                create,
+                initialize,
+                terminate_destroy,
+                set_option_string,
+                set_property_string,
+                get_property,
+                get_property_string,
+                free,
+                command,
+                error_string,
+                wait_event,
+            })
+        })
+        .as_ref()
+    }
+
+    /* 同名薄壳,签名与 Windows 那半逐字一致 —— 调用点因此完全不需要知道
+       自己链的是哪种。库加载不了时全部安全降级:mpv_create 返回 null,
+       Player::new 当场报「mpv_create 失败」,不会带着半死不活的状态往下走。 */
+    pub unsafe fn mpv_create() -> *mut mpv_handle {
+        match api() {
+            Some(a) => (a.create)(),
+            None => std::ptr::null_mut(),
+        }
+    }
+    /// MPV_ERROR_GENERIC。库没加载时用它当统一失败码。
+    const ERR_GENERIC: c_int = -20;
+    pub unsafe fn mpv_initialize(ctx: *mut mpv_handle) -> c_int {
+        api().map_or(ERR_GENERIC, |a| (a.initialize)(ctx))
+    }
+    pub unsafe fn mpv_terminate_destroy(ctx: *mut mpv_handle) {
+        if let Some(a) = api() {
+            (a.terminate_destroy)(ctx)
+        }
+    }
+    pub unsafe fn mpv_set_option_string(ctx: *mut mpv_handle, n: *const c_char, d: *const c_char) -> c_int {
+        api().map_or(ERR_GENERIC, |a| (a.set_option_string)(ctx, n, d))
+    }
+    pub unsafe fn mpv_set_property_string(ctx: *mut mpv_handle, n: *const c_char, d: *const c_char) -> c_int {
+        api().map_or(ERR_GENERIC, |a| (a.set_property_string)(ctx, n, d))
+    }
+    pub unsafe fn mpv_get_property(ctx: *mut mpv_handle, n: *const c_char, f: c_int, d: *mut c_void) -> c_int {
+        api().map_or(ERR_GENERIC, |a| (a.get_property)(ctx, n, f, d))
+    }
+    pub unsafe fn mpv_get_property_string(ctx: *mut mpv_handle, n: *const c_char) -> *mut c_char {
+        match api() {
+            Some(a) => (a.get_property_string)(ctx, n),
+            None => std::ptr::null_mut(),
+        }
+    }
+    pub unsafe fn mpv_free(d: *mut c_void) {
+        if let Some(a) = api() {
+            (a.free)(d)
+        }
+    }
+    pub unsafe fn mpv_command(ctx: *mut mpv_handle, args: *const *const c_char) -> c_int {
+        api().map_or(ERR_GENERIC, |a| (a.command)(ctx, args))
+    }
+    pub unsafe fn mpv_error_string(e: c_int) -> *const c_char {
+        match api() {
+            Some(a) => (a.error_string)(e),
+            None => std::ptr::null(),
+        }
+    }
+    pub unsafe fn mpv_wait_event(ctx: *mut mpv_handle, t: f64) -> *mut mpv_event {
+        match api() {
+            Some(a) => (a.wait_event)(ctx, t),
+            None => std::ptr::null_mut(),
+        }
+    }
+}
+
+use ffi::*;
 
 fn err_str(code: c_int) -> String {
     unsafe {
@@ -306,10 +459,26 @@ unsafe impl Send for Player {}
 impl Player {
     pub fn new() -> Result<Self, String> {
         let video = create_overlay();
+        /* ★ 建窗失败必须当场报错,不能带着 wid=0 往下走。
+           mpv 拿到 wid=0 会认为「没给嵌入目标」,配合 force-window=yes **自己弹一个
+           独立窗口** —— 用户看到的是「莫名其妙多出来一个播放器窗口,还不受 UI 控制」,
+           而不是一条能读懂的错误。Linux 上没 X11(纯 Wayland 没 XWayland)正好走这条路。 */
+        if video == 0 {
+            return Err("创建视频窗口失败(Linux 上通常是连不上 X11 显示服务器)".into());
+        }
         unsafe {
             let ctx = mpv_create();
             if ctx.is_null() {
-                return Err("mpv_create 失败".into());
+                /* 非 Windows 上最常见的原因不是 mpv 内部出错,而是**根本没找到 libmpv**
+                   (dlopen 三个候选名全失败)。把这句话说清楚,别让用户对着
+                   「mpv_create 失败」去查播放器设置。 */
+                return Err(if cfg!(windows) {
+                    "mpv_create 失败".into()
+                } else {
+                    "mpv_create 失败(通常是没装 libmpv:Debian/Ubuntu `libmpv2`、\
+                     Fedora `mpv-libs`、Arch `mpv`;或把 libmpv.so.2 放到程序同级目录)"
+                        .to_string()
+                });
             }
             let set = |name: &str, val: &str| {
                 let n = CString::new(name).unwrap();

@@ -248,8 +248,12 @@ jobs:
         uses: actions/checkout@v4
 
       # Tauri v2 在 Linux 上是 GTK3 + WebKitGTK 4.1(不是 4.0,别装错包名)。
-      # libmpv-dev 提供链接期要的 libmpv.so 符号链接 —— build.rs 发的
-      # `cargo:rustc-link-lib=dylib=mpv` 靠它,缺了就是 `cannot find -lmpv`。
+      #
+      # ★ 这里**故意不装 libmpv-dev**:libmpv 是运行时 dlopen 的(见 apps/desktop/src/mpv.rs
+      #   的 `mod ffi`)。装了反而有害 —— 一旦哪天有人给 build.rs 加回 link-lib,
+      #   构建机上有 .so 就会「碰巧编过」,而 ELF 里被钉进一条 libmpv.so.1 的 DT_NEEDED,
+      #   包发到 Ubuntu 24.04(只有 libmpv.so.2)上直接起不来。让构建机没有这个库,
+      #   这类回归就不可能悄悄溜过去。
       - name: Install system deps
         run: |
           sudo apt-get update
@@ -258,12 +262,7 @@ jobs:
             libgtk-3-dev \
             librsvg2-dev \
             libayatana-appindicator3-dev \
-            libmpv-dev \
             libxrandr-dev
-          # 回读确认链接期真能找到 libmpv,别等到 link 阶段才发现装的是运行时包。
-          test -e /usr/lib/x86_64-linux-gnu/libmpv.so || \
-            { echo "libmpv-dev 没提供 libmpv.so"; exit 1; }
-          pkg-config --modversion mpv || true
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -304,6 +303,26 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: npx tauri build
 
+      # 和 Windows 那半同一条口径:不传符号的话,Linux 用户回来的 panic 就是一列
+      # 十六进制地址,遥测等于白接。根 Cargo.toml 的 debug="line-tables-only" 在 ELF 上
+      # 是把行号表放进二进制本身,所以直接把二进制交给 sentry-cli 就够了(不像 MSVC 要另找 pdb)。
+      # ★ 判断写在脚本里,不写成 `if: ${{ secrets.X != '' }}` —— GitHub 不给 step 的
+      #   if: 表达式访问 secrets 上下文。
+      - name: Upload Rust debug symbols to Sentry
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SENTRY_AUTH_TOKEN:-}" ]; then
+            echo "::notice::SENTRY_AUTH_TOKEN 未设置,跳过符号上传(崩溃堆栈将无法符号化)"
+            exit 0
+          fi
+          CLI=node_modules/@sentry/cli-linux-x64/bin/sentry-cli
+          test -x "$CLI" || { echo "sentry-cli 不在,npm ci 装漏了?"; exit 1; }
+          # project 必须是 DSN 所指的那个(slug 叫 flutter,历史原因:移动端先建的)。
+          # 传到别的项目**两边都不报错**,symbolication 却永远不发生。
+          "$CLI" debug-files upload --org linplayer --project flutter target/release/app
+
       # 打包成 **zip**(不是 Linux 更习惯的 tar.gz):应用内更新器解包走的是
       # core/update.rs 的 extract_zip,喂它 tar.gz 会当场失败。格式必须和更新链路一致。
       # 资产名必须含小写子串 "linux" —— update.rs 的 asset_keywords() 就按这个挑。
@@ -320,8 +339,16 @@ jobs:
           # 回读 rpath,确认 build.rs 那条 $ORIGIN 真的写进 ELF 了(写不进去不会报错,
           # 只是用户自带 libmpv 的那条路静默失效)。
           readelf -d "$BIN" | grep -E 'RUNPATH|RPATH' || echo "::warning::ELF 里没有 RUNPATH"
-          # 依赖自检:libmpv 必须是动态依赖,否则说明根本没链上。
-          ldd "$BIN" | grep -q libmpv || { echo "二进制没有链接 libmpv"; exit 1; }
+
+          # ★ 反向断言:libmpv **绝不能**出现在 DT_NEEDED 里。
+          #   出现了就说明有人把它变回了链接期依赖,而那会把某个具体 soname
+          #   (构建机上是 libmpv.so.1)钉死进 ELF —— 包在 Ubuntu 24.04 等只有
+          #   libmpv.so.2 的系统上一启动就死,而 CI 全绿、本机也照跑。必须在这儿拦住。
+          if readelf -d "$BIN" | grep -q 'NEEDED.*libmpv'; then
+            echo "libmpv 被链成了硬依赖(DT_NEEDED),应当是运行时 dlopen"; exit 1
+          fi
+          # 正向断言:dlopen 的候选名确实编进了二进制。
+          grep -q 'libmpv\.so\.2' "$BIN" || { echo "二进制里找不到 dlopen 候选名"; exit 1; }
 
           STAGE=pack/LinPlayer
           mkdir -p "$STAGE"

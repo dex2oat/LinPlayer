@@ -12,8 +12,12 @@ fn main() {
          白翻一遍,真出问题时还多一条误导性的线索。 */
     if target_os == "windows" {
         println!("cargo:rustc-link-search=native={}", libdir.display());
+        println!("cargo:rustc-link-lib=dylib=mpv");
     }
-    println!("cargo:rustc-link-lib=dylib=mpv");
+    /* ★ 非 Windows **故意不发 link-lib**:那边 libmpv 是运行时 dlopen 的
+       (见 src/mpv.rs 的 `mod ffi`)。发了的话就又把 libmpv.so 变成链接期硬依赖 ——
+       构建机得装 libmpv-dev,而且 ELF 里会留下一条写死的 DT_NEEDED soname,
+       dlopen 那套「一个包适配所有发行版」的意义当场归零。 */
 
     /* Linux:把 $ORIGIN 写进 rpath,让**可执行文件同级目录**优先于系统库。
        这是绿色包分发在 Linux 上的等价物:包里放一份 libmpv.so.2 就能自带一个已知可用的
