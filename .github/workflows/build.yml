@@ -321,7 +321,8 @@ jobs:
           test -x "$CLI" || { echo "sentry-cli 不在,npm ci 装漏了?"; exit 1; }
           # project 必须是 DSN 所指的那个(slug 叫 flutter,历史原因:移动端先建的)。
           # 传到别的项目**两边都不报错**,symbolication 却永远不发生。
-          "$CLI" debug-files upload --org linplayer --project flutter target/release/app
+          # 产物名跟 tauri.conf.json 的 mainBinaryName 走(= LinPlayer),不是 crate 名 app。
+          "$CLI" debug-files upload --org linplayer --project flutter target/release/LinPlayer
 
       # 打包成 **zip**(不是 Linux 更习惯的 tar.gz):应用内更新器解包走的是
       # core/update.rs 的 extract_zip,喂它 tar.gz 会当场失败。格式必须和更新链路一致。
@@ -334,7 +335,11 @@ jobs:
       - name: Pack portable zip
         run: |
           set -euo pipefail
-          BIN=target/release/app
+          # ★ 名字来自 tauri.conf.json 的 mainBinaryName,**不是** crate 名(app)。
+          #   d9a24706 加 mainBinaryName 时只同步了 Windows job,这里漏了 —— Windows 绿、
+          #   Linux 在打包步骤炸「缺少产物」(还在找 crate 名那个)。
+          #   有 cargo test ci_binary_paths_match_main_binary_name 钉住两边一致。
+          BIN=target/release/LinPlayer
           test -f "$BIN" || { echo "缺少产物 $BIN"; exit 1; }
 
           # ★ strip 必须排在上面那步 Sentry 符号上传**之后**:调试信息已经传走了,

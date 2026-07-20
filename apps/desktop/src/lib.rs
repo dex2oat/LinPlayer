@@ -4790,6 +4790,50 @@ mod api_contract_tests {
     ///
     /// 这条把占位项钉成一份白名单:接好了一个就从名单里删一个,新加占位必须显式登记。
     /// 名单和代码对不上就红,不用再靠人眼扫 UI。
+    /// CI 里写死的产物路径,必须跟 tauri.conf.json 的 `mainBinaryName` 一致。
+    ///
+    /// d9a24706 加 mainBinaryName 把产物从 `app` 改名成 `LinPlayer` 时,**只同步了
+    /// Windows job** —— Linux job 还在找 `target/release/app`,于是 Windows 全绿、
+    /// Linux 在打包步骤炸「缺少产物 target/release/app」。这类「两处只改了一处」的漂移
+    /// 光靠人眼扫 YAML 是拦不住的(本仓库已在 @shared 别名、SHADER_FAMILIES 上各栽过一次)。
+    ///
+    /// 注意 `.pdb` 跟的是 **crate 名**(app),不是 mainBinaryName —— 那是 MSVC 的规矩,
+    /// 故意放行,别"顺手改整齐"了。
+    #[test]
+    fn ci_binary_paths_match_main_binary_name() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let name = conf["mainBinaryName"]
+            .as_str()
+            .expect("tauri.conf.json 缺 mainBinaryName");
+        let yml = include_str!("../../../.github/workflows/build.yml");
+
+        let mut checked = 0;
+        for (i, _) in yml.match_indices("target/release/") {
+            let rest = &yml[i + "target/release/".len()..];
+            let tok: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+                .collect();
+            if tok.is_empty() || tok.ends_with(".pdb") || tok.ends_with(".dll") {
+                continue; // pdb 跟 crate 名;dll 是第三方库,都不归 mainBinaryName 管
+            }
+            let stem = tok.strip_suffix(".exe").unwrap_or(&tok);
+            assert_eq!(
+                stem, name,
+                "build.yml 里的 target/release/{tok} 和 tauri.conf.json 的 \
+                 mainBinaryName={name:?} 对不上 —— 产物改名只改一半,另一个平台的 job 会\
+                 在打包步骤炸「缺少产物」,而先跑完的那个平台是绿的"
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 2,
+            "只扫到 {checked} 处 target/release/ 产物路径 —— Windows 和 Linux 两个 job 都该有,\
+             扫不到说明 build.yml 换了写法,这条测试已经形同虚设"
+        );
+    }
+
     /// 打包脚本必须是**纯 ASCII**。
     ///
     /// 它自己的文件头就写着 "ASCII-only on purpose",但没有任何东西拦着人违反 ——
