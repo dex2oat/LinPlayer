@@ -450,6 +450,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ★ 安卓 job 也要装 Linux 的 GTK/webkit 开发包。
+      #   反直觉但必须:APK 是交叉编译到 aarch64-linux-android 的,**不需要**这些;
+      #   但下面的 `cargo test -p linplayer-android` 是编到**宿主**(x86_64 linux)跑的,
+      #   而 tauri 在 Linux 宿主上要链 glib/gtk/webkit。
+      #   不装的表现是 `failed to run custom build command for glib-sys` ——
+      #   报错指向 glib,和"安卓"三个字毫无关系,很容易往交叉编译上瞎找。
+      #   (Windows 本地不报:那边的 tauri 不需要 GTK。典型的本地过 ≠ CI 过。)
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y             libwebkit2gtk-4.1-dev             libgtk-3-dev             librsvg2-dev             libayatana-appindicator3-dev             libxrandr-dev
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
