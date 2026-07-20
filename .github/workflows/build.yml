@@ -621,10 +621,18 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p release
-          APK=$(find apps/android/gen/android -name "*.apk" -type f | head -1)
-          if [ -z "$APK" ]; then
+          # ★ 不能用 `find | head -1`:gradle 同时留着 universal / debug 等变体时,
+          #   head -1 挑到哪个纯看目录序,而下面**无条件**把它命名成 -arm64 ——
+          #   发出去的可能是另一个变体的包,构建全绿、文件名还理直气壮。
+          #   改成:必须**恰好一个**候选,多于一个就报出来让人看清再决定。
+          mapfile -t APKS < <(find apps/android/gen/android -name "*.apk" -type f)
+          if [ "${#APKS[@]}" -eq 0 ]; then
             echo "::error::没找到 APK 产物"; find apps/android/gen/android -name "*.apk" -o -name "*.aab" | head -20; exit 1
           fi
+          if [ "${#APKS[@]}" -gt 1 ]; then
+            echo "::error::找到多个 APK,不知道该发哪个:"; printf '  %s\n' "${APKS[@]}"; exit 1
+          fi
+          APK="${APKS[0]}"
           cp "$APK" "release/LinPlayer-TV-${{ needs.version.outputs.version }}-arm64.apk"
           ls -lh release/
           # ★ 体积闸门。上面那个 CARGO_PROFILE_RELEASE_DEBUG 一旦失效(改错、被别处覆盖),
