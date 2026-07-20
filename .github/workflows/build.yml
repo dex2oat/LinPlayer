@@ -596,17 +596,24 @@ jobs:
           #   —— 错了:**只有 libclang 定位那部分是**,sysroot 这条两个平台都要。
           SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           test -d "$SYSROOT" || { echo "::error::NDK sysroot 不存在: $SYSROOT"; exit 1; }
-          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--sysroot=$SYSROOT"
-          export "BINDGEN_EXTRA_CLANG_ARGS_aarch64-linux-android=--sysroot=$SYSROOT"
+          # ★ 带连字符的变量名 **bash 不能 export**(不是合法标识符,报
+          #   "not a valid identifier")。只能用 `env NAME=VAL cmd` 前缀传给子进程。
+          #   scripts/build-android.sh 里原样写着这条,我照样撞了一次 —— 别再撞第三次。
+          #   两种写法都传:bindgen 查 target 变量时连字符版和下划线版都认,
+          #   但不同版本偏好不同,一起给最省事。
+          ENVV=(
+            "BINDGEN_EXTRA_CLANG_ARGS_aarch64-linux-android=--sysroot=$SYSROOT"
+            "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--sysroot=$SYSROOT"
+          )
           echo "sysroot = $SYSROOT"
           # ★ 必须 cd 进 apps/android:仓库里现在有**两个** tauri.conf.json
           #   (apps/desktop 和 apps/android),CLI 自动发现会挑到哪个不确定。
           #   在哪个目录跑就用哪个配置,这是唯一不含糊的写法。
           cd apps/android
           if [ "${{ steps.signing.outputs.have }}" = "yes" ]; then
-            npx tauri android build --apk --target aarch64
+            env "${ENVV[@]}" npx tauri android build --apk --target aarch64
           else
-            npx tauri android build --apk --debug --target aarch64
+            env "${ENVV[@]}" npx tauri android build --apk --debug --target aarch64
           fi
 
       # 产物路径在 tauri 版本之间变过,不写死 —— 找出来再改名,找不到就明确报错,
