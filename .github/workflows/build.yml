@@ -81,6 +81,14 @@ jobs:
       # build.rs 拿它注入 Sentry release,vite 拿它做 sourcemap release)。
       # 加 -build<run_number> 是为了让**每次预发布都比上一次大** —— App 内的更新
       # 比较逻辑正是按 major.minor.patch.build 逐级比的,不加就永远检测不到新预览版。
+      # ★ 校验每个 `run:` 块的 shell 语法。yaml 合法 ≠ 脚本合法:
+      #   用脚本批量改 workflow 时把某步的 if/then 切断,YAML 照样解析得过,
+      #   要等 runner 跑到那一步才报 "syntax error: unexpected end of file"。
+      #   本仓已经这样烧过两轮 CI(一次回车符混进脚本,一次切多了行),所以设成闸门。
+      #   放在 version job 里:它最先跑、最便宜,坏了就别开另外三个 runner 了。
+      - name: Check workflow shell syntax
+        run: bash scripts/check-workflows.sh
+
       - id: v
         run: |
           V="${{ inputs.version }}"
@@ -546,6 +554,11 @@ jobs:
       - name: Android init (if needed)
         run: |
           if [ ! -d apps/android/gen/android ]; then
+            (cd apps/android && npx tauri android init --skip-targets-install)
+          else
+            echo "gen/android 已在仓库中,跳过 init"
+          fi
+
       # ★ libmpv.so 不入库(仓库红线:脚本能拉的别入库),jniLibs/ 整个是 gitignore 的。
       #   所以**这一步不跑就没有播放器** —— APK 照常构建、照常绿,装上去按播放才报
       #   「APK 里没有 libmpv.so」。下面有校验兜底,别把它删了当优化。
