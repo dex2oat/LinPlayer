@@ -2,7 +2,7 @@
 # 出 Android TV 的 APK。 用法: bash scripts/build-android-apk.sh [--release|--debug]
 #
 # 为什么不能直接 `npx tauri android build`:
-# gradle 会转手调 cargo 去编 aarch64,而 rquickjs-sys 在安卓要现跑 bindgen ——
+# gradle 会转手调 cargo 去编安卓目标,而 rquickjs-sys 在安卓要现跑 bindgen ——
 # 那一整套 libclang/resource-dir/sysroot/INCLUDE 的坑和 scripts/build-android.sh 里
 # 写的是同一批(见那个文件顶部的逐条说明)。所以这里复用它导出的环境,
 # 只把最后一步从 `cargo ndk build` 换成 tauri CLI。
@@ -34,7 +34,8 @@ ENVV=(
   # host 侧的 bindgen(经 proc-macro rquickjs-macro 传导,永远编 host)也要 builtin 头
   "BINDGEN_EXTRA_CLANG_ARGS=-resource-dir=$RES"
   # 预置了 per-target 变量后 cargo-ndk 就不再补 sysroot,得自带
-  "BINDGEN_EXTRA_CLANG_ARGS_aarch64-linux-android=--sysroot=$SYSROOT -resource-dir=$RES"
+  "BINDGEN_EXTRA_CLANG_ARGS_armv7-linux-androideabi=--sysroot=$SYSROOT -resource-dir=$RES"
+  "BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi=--sysroot=$SYSROOT -resource-dir=$RES"
 )
 # host bindgen 还缺 WinSDK/CRT 头(stdio.h),从 vcvars64 灌 INCLUDE。
 if [ -n "${INCLUDE:-}" ]; then
@@ -61,4 +62,6 @@ MODE="${1:---release}"
 CLI="$(pwd)/node_modules/@tauri-apps/cli/tauri.js"
 cd apps/android
 [ "$MODE" = "--debug" ] && EXTRA=(--debug) || EXTRA=()
-exec env "${ENVV[@]}" node "$CLI" android build --apk --target aarch64 "${EXTRA[@]}"
+# ★ TV 包是 **32 位(armv7)**,不是 arm64 —— 与 .github/workflows/build.yml 保持一致。
+# 两边不一致的话,本地测的包和用户装的包 ABI 不同,而症状只在真机上才出现。
+exec env "${ENVV[@]}" node "$CLI" android build --apk --target armv7 "${EXTRA[@]}"

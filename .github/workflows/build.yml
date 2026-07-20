@@ -461,7 +461,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ★ 安卓 job 也要装 Linux 的 GTK/webkit 开发包。
-      #   反直觉但必须:APK 是交叉编译到 aarch64-linux-android 的,**不需要**这些;
+      #   反直觉但必须:APK 是交叉编译到 armv7-linux-androideabi 的,**不需要**这些;
       #   但下面的 `cargo test -p linplayer-android` 是编到**宿主**(x86_64 linux)跑的,
       #   而 tauri 在 Linux 宿主上要链 glib/gtk/webkit。
       #   不装的表现是 `failed to run custom build command for glib-sys` ——
@@ -492,7 +492,9 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi
+          # armv7 是 TV 包实际用的;aarch64 先留着 —— 将来的安卓移动端要它,
+          # 多装一个 target 只花几秒,不值得为省它再改一次这里。
+          targets: armv7-linux-androideabi,aarch64-linux-android
 
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@v2
@@ -544,43 +546,53 @@ jobs:
       - name: Android init (if needed)
         run: |
           if [ ! -d apps/android/gen/android ]; then
-            (cd apps/android && npx tauri android init --skip-targets-install)
-          else
-            echo "gen/android 已在仓库中,跳过 init"
-          fi
-
       # ★ libmpv.so 不入库(仓库红线:脚本能拉的别入库),jniLibs/ 整个是 gitignore 的。
       #   所以**这一步不跑就没有播放器** —— APK 照常构建、照常绿,装上去按播放才报
       #   「APK 里没有 libmpv.so」。下面有校验兜底,别把它删了当优化。
       #
+      # ★ TV 端出 **32 位(armeabi-v7a)**,不是 arm64。
+      #   机顶盒里 32 位用户空间仍是主流,32 位包在 64 位设备上也能跑(反过来不行),
+      #   所以 TV 用 v7a 覆盖面最大;arm64 留给将来的安卓移动端。
+      #   改 ABI 时**四处要一起改**:这里的 jar/DEST、下面的 --target、
+      #   rust targets(上面 dtolnay 那步)、产物文件名。漏一处的表现是
+      #   「APK 里的 .so 和代码不是同一个 ABI」→ 装得上,一播放就 UnsatisfiedLinkError。
+      #
       #   来源与版本:media-kit/libmpv-android-video-build v1.1.11 的 full 变体。
-      #   * 选 full 不选 default:full 才带 PGS 图形字幕(旧 Flutter 版就是为这个换的,
-      #     见历史 commit 35a81e1e)。
-      #   * 这个 jar 里还有个 libmediakitandroidhelper.so —— 那是 media_kit(Flutter)
-      #     专用的胶水,我们不用,只取 libmpv.so。
-      - name: Fetch libmpv (arm64)
+      #   选 full 不选 default:full 才带 PGS 图形字幕(旧 Flutter 版就是为这个换的,
+      #   见历史 commit 35a81e1e)。jar 里那个 libmediakitandroidhelper.so 是
+      #   media_kit(Flutter)专用胶水,我们不用,只取 libmpv.so。
+      - name: Fetch libmpv (armeabi-v7a)
         run: |
           set -euo pipefail
           VER="v1.1.11"
-          DEST="apps/android/gen/android/app/src/main/jniLibs/arm64-v8a"
+          ABI="armeabi-v7a"
+          DEST="apps/android/gen/android/app/src/main/jniLibs/$ABI"
           mkdir -p "$DEST"
-          curl -fsSL -o /tmp/libmpv.jar \
-            "https://github.com/media-kit/libmpv-android-video-build/releases/download/$VER/full-arm64-v8a.jar"
-          unzip -o -j /tmp/libmpv.jar "lib/arm64-v8a/libmpv.so" -d "$DEST"
+          curl -fsSL -o /tmp/libmpv.jar             "https://github.com/media-kit/libmpv-android-video-build/releases/download/$VER/full-$ABI.jar"
+          unzip -o -j /tmp/libmpv.jar "lib/$ABI/libmpv.so" -d "$DEST"
           ls -lh "$DEST/libmpv.so"
-          # ★ 校验它确实是 arm64 ELF 而不是一张 LFS 指针/错误页。
+          # ★ 校验它确实是 32 位 ARM ELF,而不是 LFS 指针/错误页/**拿错 ABI**。
           #   旧仓库在这条上栽过:APK 里是文本指针,运行时 UnsatisfiedLinkError
           #   报 "bad ELF magic 76657273"(那其实是 "vers"),构建全程是绿的。
+          #   拿错 ABI 同样是构建绿、装得上、一播放就炸,所以 class/machine 一起验:
+          #     e_ident[4] class   01=32位  02=64位
+          #     e_machine (16..17) 28 00=ARM   b7 00=AArch64(小端)
           # ★ 不要写成 `... | grep -q ...`。本步开头是 set -o pipefail,而 grep -q 命中后
           #   会立刻退出并关掉管道,上游进程吃 SIGPIPE 非零退出 → **命中反而判失败**。
-          #   下面那条符号校验就是这么红的一次(符号明明在)。一律先落盘再 grep。
-          MAGIC=$(head -c 4 "$DEST/libmpv.so" | od -An -tx1)
-          case "$MAGIC" in
-            *"7f 45 4c 46"*) ;;
-            *) echo "::error::libmpv.so 不是 ELF(magic=$MAGIC)"; head -c 64 "$DEST/libmpv.so" | od -c | head; exit 1 ;;
+          #   下面那条符号校验就是这么红过一次(符号明明在)。一律先落盘再 grep。
+          HDR=$(head -c 20 "$DEST/libmpv.so" | od -An -tx1 | tr -s ' ')
+          echo "ELF header: $HDR"
+          case "$HDR" in
+            *"7f 45 4c 46 01"*) ;;
+            *) echo "::error::libmpv.so 不是 32 位 ELF(header=$HDR)"; exit 1 ;;
+          esac
+          case "$HDR" in
+            *"28 00"*) ;;
+            *) echo "::error::libmpv.so 不是 ARM 32 位(e_machine 不是 28 00,header=$HDR)"; exit 1 ;;
           esac
           # ★ 这个二进制没有 JNI_OnLoad,靠 av_jni_set_java_vm 登记 JavaVM
-          #   (Rust 侧 crates/mpv 的 set_android_java_vm 依赖它)。换版本时这条会先红。
+          #   (Rust 侧 crates/mpv 的 set_android_java_vm 依赖它)。换版本/换 ABI 时这条会先红。
+          #   armeabi-v7a 那份已实测同样满足(8066 个导出符号,有 av_jni_set_java_vm、无 JNI_OnLoad)。
           NM=$(find "$ANDROID_NDK_ROOT" "$ANDROID_NDK_HOME" -name 'llvm-nm' -type f 2>/dev/null | head -1)
           if [ -n "$NM" ]; then
             "$NM" -D --defined-only "$DEST/libmpv.so" > /tmp/mpv-syms.txt
@@ -595,6 +607,7 @@ jobs:
           else
             echo "::warning::找不到 llvm-nm,跳过符号校验"
           fi
+
 
       # ⚠️ 只写 keystore.properties **还不够**:Tauri 生成的 build.gradle.kts 默认不读它,
       #    要真出签名包,得在 gen/android/app/build.gradle.kts 里加 signingConfigs 并引用。
@@ -636,7 +649,7 @@ jobs:
           CARGO_PROFILE_RELEASE_DEBUG: "false"
         run: |
           # ★ rquickjs-sys 在安卓要现跑 bindgen 生成 FFI —— 必须显式给 NDK sysroot,
-          #   否则 bindgen 拿**宿主的 /usr/include** 去编 aarch64,报
+          #   否则 bindgen 拿**宿主的 /usr/include** 去编安卓目标,报
           #   "bits/libc-header-start.h file not found"(指向 glibc 多架构头,
           #   和"安卓"三个字毫无关系,极易往别处找)。
           #   我一开始以为 scripts/build-android.sh 里那套 sysroot 折腾是 Windows 特有的
@@ -649,8 +662,8 @@ jobs:
           #   两种写法都传:bindgen 查 target 变量时连字符版和下划线版都认,
           #   但不同版本偏好不同,一起给最省事。
           ENVV=(
-            "BINDGEN_EXTRA_CLANG_ARGS_aarch64-linux-android=--sysroot=$SYSROOT"
-            "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--sysroot=$SYSROOT"
+            "BINDGEN_EXTRA_CLANG_ARGS_armv7-linux-androideabi=--sysroot=$SYSROOT"
+            "BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi=--sysroot=$SYSROOT"
           )
           echo "sysroot = $SYSROOT"
           # ★ 必须 cd 进 apps/android:仓库里现在有**两个** tauri.conf.json
@@ -658,9 +671,9 @@ jobs:
           #   在哪个目录跑就用哪个配置,这是唯一不含糊的写法。
           cd apps/android
           if [ "${{ steps.signing.outputs.have }}" = "yes" ]; then
-            env "${ENVV[@]}" npx tauri android build --apk --target aarch64
+            env "${ENVV[@]}" npx tauri android build --apk --target armv7
           else
-            env "${ENVV[@]}" npx tauri android build --apk --debug --target aarch64
+            env "${ENVV[@]}" npx tauri android build --apk --debug --target armv7
           fi
 
       # 产物路径在 tauri 版本之间变过,不写死 —— 找出来再改名,找不到就明确报错,
@@ -669,7 +682,7 @@ jobs:
         run: |
           mkdir -p release
           # ★ 不能用 `find | head -1`:gradle 同时留着 universal / debug 等变体时,
-          #   head -1 挑到哪个纯看目录序,而下面**无条件**把它命名成 -arm64 ——
+          #   head -1 挑到哪个纯看目录序,而下面**无条件**把它命名成 -arm32 ——
           #   发出去的可能是另一个变体的包,构建全绿、文件名还理直气壮。
           #   改成:必须**恰好一个**候选,多于一个就报出来让人看清再决定。
           mapfile -t APKS < <(find apps/android/gen/android -name "*.apk" -type f)
@@ -680,7 +693,7 @@ jobs:
             echo "::error::找到多个 APK,不知道该发哪个:"; printf '  %s\n' "${APKS[@]}"; exit 1
           fi
           APK="${APKS[0]}"
-          cp "$APK" "release/LinPlayer-TV-${{ needs.version.outputs.version }}-arm64.apk"
+          cp "$APK" "release/LinPlayer-TV-${{ needs.version.outputs.version }}-arm32.apk"
           ls -lh release/
           # ★ 体积闸门。上面那个 CARGO_PROFILE_RELEASE_DEBUG 一旦失效(改错、被别处覆盖),
           #   APK 会从 21MB 悄悄涨回 105MB —— 构建照样绿,只有用户下载时才发现。
