@@ -65,8 +65,11 @@ export default function DetailPage({
         alt=""
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
       />
-      {/* 内容整块压在 backdrop 上,不加任何底/描边(用户 2026-07-20 定,
-          三种兜底方案逐条否掉的经过见 tv.css 顶部那段记录)。 */}
+      {/* ★ 均匀遮罩(用户 2026-07-20:「加一点遮罩吧,不然看不清字真的很伤」)。
+          详情页是**整页正文**压在 backdrop 上,和首页 Hero 只有左下角一小块不同 ——
+          Hero 那边用户明确不要任何兜底,这里明确要,两处别互相照抄。 */}
+      <div className="scrim" />
+      {/* 内容本身不加底、不描边(那三种方案已被逐条否掉,见 tv.css 顶部记录)。 */}
       <div style={{ position: "relative", height: "100%", padding: "48px 64px" }}>
         {d.data.type_ === "Movie" ? (
           <Movie d={d.data} session={session} go={go} />
