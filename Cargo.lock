@@ -2484,6 +2484,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "linplayer-android"
+version = "0.1.0"
+dependencies = [
+ "linplayer-core",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tokio",
+]
+
+[[package]]
 name = "linplayer-core"
 version = "0.1.0"
 dependencies = [

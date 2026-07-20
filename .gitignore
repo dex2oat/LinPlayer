@@ -95,3 +95,18 @@ skills-lock.json
 # --- 合并/备份残留 -----------------------------------------------------------
 *.orig
 *.rej
+
+# --- Android 构建产物(用户红线:不必要的不进仓库)-------------------------------
+# gen/android 是 `tauri android init` 生成的 Gradle 工程。
+# ★ 工程骨架**要入库**(CI 里有 TV manifest 的 LEANBACK 断言,而且改了 manifest
+#   不入库的话每次 init 都会被覆盖回去);但它下面的构建产物一个都不要。
+apps/android/gen/android/app/build/
+apps/android/gen/android/build/
+apps/android/gen/android/.gradle/
+apps/android/gen/android/local.properties
+apps/android/gen/android/keystore.properties
+apps/android/gen/android/app/src/main/jniLibs/
+**/*.apk
+**/*.aab
+**/*.keystore
+**/*.jks

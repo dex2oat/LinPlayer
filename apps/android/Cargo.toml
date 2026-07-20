@@ -1,0 +1,34 @@
+[package]
+name = "linplayer-android"
+version = "0.1.0"
+description = "LinPlayer Android TV 宿主壳(Tauri 2 mobile):把 linplayer-core 的能力注册成 TV UI 可调的命令"
+edition = "2021"
+
+# cdylib 是安卓唯一真正用到的产物(Java 层 System.loadLibrary 加载它);
+# staticlib/rlib 留着是为了 `cargo build`/`cargo test` 在宿主上也能跑通这个包。
+[lib]
+name = "linplayer_android_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+serde_json = "1" # 与桌面同源:版本的唯一权威是 tauri.conf.json,build.rs 注入 LP_VERSION
+
+[dependencies]
+# 唯一的业务依赖。**不依赖 apps/desktop** —— 那个包绑死 libmpv/Win32/X11,交叉编译第一步就死。
+linplayer-core = { path = "../../crates/core" }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# ★ default-features = false 不能省。理由与 apps/desktop/Cargo.toml 里那段一字不差:
+# cargo 的特性是全图合并的,漏写就把整个 workspace 拖进 openssl —— 而安卓交叉编译
+# 根本没有可用的 OpenSSL,那不是「多两个依赖」,是**直接编不过**。
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "socks",
+  "rustls-tls",
+  "charset",
+  "http2",
+] }
+# spawn_blocking(imgcache 把同步读写盘挪出 async worker)+ timeout(线路探测)。
+tokio = { version = "1", features = ["sync", "rt", "time"] }

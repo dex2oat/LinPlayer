@@ -91,7 +91,16 @@ export default defineConfig(async () => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/apps/desktop/**", "**/target/**"],
+      /* ★ 必须挡掉安卓的 gradle 构建树。
+         gen/android/app/build/ 里有正在被 gradle 写的 .so,vite 的 FSWatcher
+         监听到它会直接 EBUSY **崩掉整个 dev server**(实测:
+         watch liblinplayer_android_lib.so → errno -4082 → 进程退出)。
+         症状是"跑着跑着前端就没了",而报错在 chokidar 深处,很难联想到安卓构建。 */
+      ignored: [
+        "**/apps/desktop/**",
+        "**/apps/android/gen/**",
+        "**/target/**",
+      ],
     },
   },
 }));

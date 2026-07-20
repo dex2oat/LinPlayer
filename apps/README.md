@@ -6,7 +6,7 @@
 | 目录 | 状态 | 说明 |
 |------|------|------|
 | `desktop/` | 在用 | Tauri 2 壳，Windows / Linux。前端取 `ui/desktop`，产物 `target/release/app.exe` |
-| `android/` | 待建 | Android 壳（手机 + TV 共用）。直接链现成的 libmpv `.so`，不自建 JNI 封装 |
+| `android/` | 在用 | Android TV 壳（Tauri 2 mobile）。前端取 `dist/index-tv.html`，出 APK 见 `android/README.md`。**播放器还是桩**——仓库里没有安卓 libmpv `.so`；接的时候直接链现成的，不自建 JNI 封装 |
 
 ## desktop 的几个约定
 

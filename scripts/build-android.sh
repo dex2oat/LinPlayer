@@ -75,5 +75,9 @@ for abi in "${ABIS[@]}"; do
 done
 
 TFLAGS=(); for abi in "${ABIS[@]}"; do TFLAGS+=(-t "$abi"); done
-echo "编译 ABIs: ${ABIS[*]}"
-exec env "${ENVV[@]}" cargo ndk "${TFLAGS[@]}" build --release -p linplayer-core
+# 默认只编核层(本脚本原本的用途:证明「一份 Rust 核两吃」)。
+# 想编安卓宿主壳:LP_ANDROID_PKG=linplayer-android bash scripts/build-android.sh
+# —— 上面那堆 bindgen 环境变量对它同样必需(它传递依赖 rquickjs-sys),照抄一遍纯属浪费。
+PKG="${LP_ANDROID_PKG:-linplayer-core}"
+echo "编译 ABIs: ${ABIS[*]}  包: $PKG"
+exec env "${ENVV[@]}" cargo ndk "${TFLAGS[@]}" build --release -p "$PKG"
