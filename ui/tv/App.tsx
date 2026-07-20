@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { currentSession, onAccountsChanged, type LoginResult } from "@shared/api";
-import { applyTvScale, onTvKey } from "./app/focus";
+import { applyTvScale, consumeBack, onTvKey } from "./app/focus";
 import { TvIconSprite } from "./app/icons";
 import { FULLSCREEN_PAGES, RAIL_PAGES, type PageId } from "./app/nav";
 import PageBoundary from "./app/PageBoundary";
@@ -63,7 +63,17 @@ export default function App() {
 
   /* 壳的返回键。★ 这条通道要 apps/android 的 Activity 先 emit,
      否则真机上 KEYCODE_BACK 被 Activity 吃掉,全站返回键失灵。 */
-  useEffect(() => onTvKey((k) => k === "back" && back()), [back]);
+  useEffect(
+    () =>
+      onTvKey((k) => {
+        if (k !== "back") return;
+        /* ★ 先问内层要不要吃掉(面板/对话框)。不问的话,面板开着按返回会
+           **面板没关、页面先退了** —— 用户只想关字幕面板,结果回到了上一页。 */
+        if (consumeBack()) return;
+        back();
+      }),
+    [back],
+  );
 
   /* 会话。账号表变了要重问 —— 删掉最后一台服务器就该退回首启页。 */
   useEffect(() => {

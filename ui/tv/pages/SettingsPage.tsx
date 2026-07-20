@@ -366,7 +366,7 @@ export default function SettingsPage(_props: { go: (r: Route) => void }) {
       </div>
 
       {picker && (
-        <FocusBoundary className="panel" focusKey="SET_PICK">
+        <FocusBoundary className="panel" focusKey="SET_PICK" onBack={() => setPicker(null)}>
           <div className="ph">{picker.title}</div>
           <div className="scroll">
             {picker.opts.map((o) => (

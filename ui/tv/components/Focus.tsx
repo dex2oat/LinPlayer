@@ -11,6 +11,7 @@
    ============================================================ */
 
 import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
+import { pushBackHandler } from "../app/focus";
 import {
   FocusContext,
   useFocusable,
@@ -244,11 +245,15 @@ export function FocusBoundary({
   focusKey,
   className,
   style,
+  onBack,
 }: {
   children: ReactNode;
   focusKey?: string;
   className?: string;
   style?: React.CSSProperties;
+  /** 返回键:关掉这个面板。**传了它,返回键就不会再穿透去退页面**。
+   *  不传的话按返回会直接退出整个页面 —— 用户只想关面板,结果回上一页了。 */
+  onBack?: () => void;
 }) {
   const { ref, focusKey: fk, focusSelf } = useFocusable<object, HTMLDivElement>({
     focusKey,
@@ -260,6 +265,19 @@ export function FocusBoundary({
   useEffect(() => {
     focusSelf();
   }, [focusSelf]);
+
+  /* 挂载期间占住返回键最内层。用 ref 存回调,避免调用方每次渲染换个函数身份
+     就把处理器反复注销重注册(那样在快速重渲染时会漏掉一次按键)。 */
+  const backRef = useRef(onBack);
+  backRef.current = onBack;
+  useEffect(() => {
+    if (!onBack) return;
+    return pushBackHandler(() => {
+      backRef.current?.();
+      return true;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!onBack]);
 
   return (
     <FocusContext.Provider value={fk}>

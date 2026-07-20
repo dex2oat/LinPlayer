@@ -119,6 +119,40 @@ export function installTvKeyBridge() {
   });
 }
 
+/* ------------------------------------------------------------
+   返回键消费栈
+   ------------------------------------------------------------ */
+
+/** 返回键处理器,从内到外依次询问;返回 true = 我吃掉了,别再往外传。 */
+const backHandlers: Array<() => boolean> = [];
+
+/** 注册一层返回键处理(面板/对话框挂载时调)。返回退订函数。
+ *
+ *  ★ 为什么需要这个:App 原来无条件把 back 变成「退一层路由」,
+ *    于是**面板开着时按返回,面板没关、整个页面先退掉了** ——
+ *    用户只想关掉字幕面板,结果回到了上一页。
+ *    这是全站每个面板的通病(不是某一页的),所以解法必须在这一层,
+ *    不能靠每个页面自己记得拦。 */
+export function pushBackHandler(fn: () => boolean): () => void {
+  backHandlers.push(fn);
+  return () => {
+    const i = backHandlers.lastIndexOf(fn);
+    if (i >= 0) backHandlers.splice(i, 1);
+  };
+}
+
+/** 由最内层向外询问。true = 已被消费,调用方不要再退页面。 */
+export function consumeBack(): boolean {
+  for (let i = backHandlers.length - 1; i >= 0; i--) {
+    try {
+      if (backHandlers[i]()) return true;
+    } catch {
+      /* 某一层抛错不该让返回键整个失灵 —— 那是遥控器彻底没反应的 P0。 */
+    }
+  }
+  return false;
+}
+
 /** 订阅壳键。返回退订函数,直接丢给 useEffect 的 cleanup。 */
 export function onTvKey(fn: (k: TvKey) => void): () => void {
   const h = (e: Event) => fn((e as CustomEvent<TvKey>).detail);

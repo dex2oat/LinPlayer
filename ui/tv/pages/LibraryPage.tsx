@@ -297,7 +297,7 @@ function Grid({
       </FocusColumn>
 
       {open && (
-        <FocusBoundary className="panel" focusKey="LIB_PANEL">
+        <FocusBoundary className="panel" focusKey="LIB_PANEL" onBack={closePanel}>
           <div className="ph">筛选与排序</div>
           <div className="scroll">
             <FocusColumn>

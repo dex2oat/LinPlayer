@@ -99,10 +99,10 @@ export function TvIconSprite() {
           <rect x="17.4" y="5" width="2.6" height="14" rx="1" fill="currentColor" stroke="none"/><path d="M4 5v14l11-7z" fill="currentColor" stroke="none"/>
         </symbol>
         <symbol id="i-rew" viewBox="0 0 24 24">
-          <path d="M11 4.5A7.5 7.5 0 1 1 4 12"/><path d="M4 4.5V9h4.5"/><text x="12" y="15.5" font-size="8" text-anchor="middle" fill="currentColor" stroke="none" font-family="sans-serif">10</text>
+          <path d="M11 4.5A7.5 7.5 0 1 1 4 12"/><path d="M4 4.5V9h4.5"/><text x="12" y="15.5" fontSize="8" textAnchor="middle" fill="currentColor" stroke="none" fontFamily="sans-serif">10</text>
         </symbol>
         <symbol id="i-fwd" viewBox="0 0 24 24">
-          <path d="M13 4.5A7.5 7.5 0 1 0 20 12"/><path d="M20 4.5V9h-4.5"/><text x="12" y="15.5" font-size="8" text-anchor="middle" fill="currentColor" stroke="none" font-family="sans-serif">10</text>
+          <path d="M13 4.5A7.5 7.5 0 1 0 20 12"/><path d="M20 4.5V9h-4.5"/><text x="12" y="15.5" fontSize="8" textAnchor="middle" fill="currentColor" stroke="none" fontFamily="sans-serif">10</text>
         </symbol>
         <symbol id="i-sub" viewBox="0 0 24 24">
           <rect x="3" y="5" width="18" height="14" rx="2"/><path d="M6.5 14h5M14 14h3.5"/>

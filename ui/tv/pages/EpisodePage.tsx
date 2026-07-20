@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { setFocus } from "@noriginmedia/norigin-spatial-navigation";
 import {
   aggregateSearch,
   downloadEnqueue,
@@ -11,18 +12,23 @@ import {
   listAccounts,
   play,
   posterUrl,
+  setActiveLine,
   setFavorite,
   setPlayed,
+  setTrack,
   thumbUrl,
+  tracks,
   type AccountInfo,
   type Item,
   type LoginResult,
   type MediaVersion,
   type StreamInfo,
+  type Track,
 } from "@shared/api";
 import type { Route } from "../App";
+import { onTvKey } from "../app/focus";
 import { Icon } from "../app/icons";
-import { FocusColumn, FocusItem, FocusRow } from "../components/Focus";
+import { FocusBoundary, FocusColumn, FocusItem, FocusRow } from "../components/Focus";
 import { useAsync } from "../lib/useAsync";
 
 /** 集详情(草稿 15)。**版本 / 音轨 / 字幕的选择全部集中在这一页** ——
@@ -68,11 +74,19 @@ export default function EpisodePage({
      拿不到就整个「标记已看」按钮不渲染,而不是猜一个默认值画上去。 */
   const cur = episodes.find((e) => e.id === curId) ?? null;
 
+  /* 版本 + 各条流。选择器行和底部媒体信息块共用这一份 ——
+     VersionRow 内部另有一次 item_media(它要在跨服探测的编排里用),不合并:
+     合并就得把探测编排整个提上来,为省一次本机请求把一个自洽的组件拆散不划算。 */
+  const media = useAsync(() => itemMedia(curId), [curId]);
+
   const [view, setView] = useEpView();
   const [fav, setFav] = useState<boolean | null>(null);
   const [played, setPlayedLocal] = useState<boolean | null>(null);
-  const [ver, setVer] = useState<MediaVersion | null>(null);
+  const [picks, setPicks] = useState<Picks>(NO_PICKS);
   const [msg, setMsg] = useState<string | null>(null);
+
+  /* 换集 = 换片源,上一集选的音轨/字幕/版本在新的一集上根本不是同一条流,留着就是错的。 */
+  useEffect(() => setPicks(NO_PICKS), [curId]);
 
   useEffect(() => setFav(d?.is_favorite ?? null), [d?.is_favorite]);
   useEffect(() => setPlayedLocal(cur?.played ?? null), [cur?.played]);
@@ -82,11 +96,18 @@ export default function EpisodePage({
   if (!d) return <Empty text="载入中…" />;
 
   const resume = d.resume_secs > 1 ? d.resume_secs : 0;
+  /** 当前生效的版本:用户没挑就是服务器给的第一个。媒体信息块和轨道映射都按它算。
+   *  (名字不叫 cur —— 上面那个 cur 是"本集在分集表里的那一行",两回事。) */
+  const curVer = picks.ver ?? media.data?.[0] ?? null;
+
   const start = async (secs: number) => {
     setMsg(null);
     try {
-      await play(curId, secs, ver?.id ?? null);
+      await play(curId, secs, curVer?.id ?? null);
       go({ page: "player" });
+      /* ★ 落轨放在导航之后且不 await:applyPicks 要等 mpv 的 track-list 出来
+         (见它自己的注释),阻塞在这儿会让按下播放到画面出现之间多卡一两秒。 */
+      void applyPicks(curVer, picks);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
     }
@@ -173,7 +194,7 @@ export default function EpisodePage({
                 curId,
                 "Episode",
                 d.series_name ? `${d.series_name} · ${d.name}` : d.name,
-                ver?.container ?? "",
+                curVer?.container ?? "",
                 posterUrl(session, curId, 480),
               )
                 .then(() => setMsg("已加入下载队列"))
@@ -185,6 +206,16 @@ export default function EpisodePage({
           </FocusItem>
         </div>
 
+        {/* ★ 播放键正下方的四个入口。原来这一页只能「按下去看运气」——
+            字幕/音轨/版本/线路都调不了(用户 2026-07-20 评审)。 */}
+        <PickBar
+          fk="EP"
+          versions={media.data}
+          cur={curVer}
+          picks={picks}
+          onPicks={setPicks}
+        />
+
         {msg && <div style={{ color: "var(--tv-ink-2)", fontSize: 19, marginBottom: 18 }}>{msg}</div>}
 
         <VersionRow
@@ -194,7 +225,9 @@ export default function EpisodePage({
              (Episode.SeriesName 缺失)。这时只能拿上层剧条目的名字顶上,
              置信度不足 → 卡片打「可能匹配」黄标,不假装是精确匹配。 */
           titleConfident={d.series_name != null}
-          onSelect={setVer}
+          /* 版本行和 PickBar 的「版本」选的是同一件事,共用同一份状态 ——
+             两个各记各的,用户在一处换了版本、另一处显示的还是旧的。 */
+          onSelect={(v) => setPicks((p) => ({ ...p, ver: v }))}
         />
 
         {/* 集数栏紧跟版本行,**不用 margin-top:auto 贴底** ——
@@ -240,6 +273,9 @@ export default function EpisodePage({
             )}
           </>
         )}
+
+        {/* 页面下部原来是空的。放当前版本的规格,不重复顶部已有的时长/剩余。 */}
+        <MediaInfo v={curVer} />
       </FocusColumn>
     </div>
   );
@@ -585,11 +621,18 @@ function specLabel(v: MediaVersion): string {
     .join(" · ");
 }
 
+/** 一条流的人话标签。服务端给了 display_title 就用它(那是 Emby 自己拼好的,
+ *  比我们拼的准),没有才自己拼语言+编码+声道。 */
+function streamLabel(s: StreamInfo): string {
+  return (
+    s.display_title ??
+    [s.language, s.codec.toUpperCase(), s.channel_layout].filter((x): x is string => !!x).join(" ")
+  );
+}
+
 /** 卡片上只**列出**有哪些音轨/字幕,不在这里逐条选(选定版本后进面板挑)。 */
 function trackLabel(v: MediaVersion): string {
-  const one = (s: StreamInfo) =>
-    s.display_title ??
-    [s.language, s.codec.toUpperCase(), s.channel_layout].filter((x): x is string => !!x).join(" ");
+  const one = streamLabel;
   const audio = v.streams.filter((s) => s.type_ === "Audio").slice(0, 2).map(one).join(" / ");
   const subs = v.streams
     .filter((s) => s.type_ === "Subtitle")
@@ -628,4 +671,396 @@ const BAR: React.CSSProperties = {
   maxWidth: 940,
   marginBottom: 28,
 };
+
+/* ============================================================
+   播放键下面的四个选择器 —— 集详情页和**电影详情页共用**。
+
+   ★ 「线路」出现在详情页是**用户 2026-07-20 评审的新要求**。
+     本目录 README 里写着「线路只出现在线路管理页」,那条是旧口径,
+     以用户最新要求为准 —— 后人看到两边不一致时别当成写错了顺手删掉。
+
+   ★ 四个入口恒画,**没有可选项时开出来的面板如实说「没有」**,不是把入口藏掉:
+     藏掉的表现是"这台机器上怎么没有字幕按钮",用户会以为是 App 少做了功能。
+     这也和播放页 OSD 的轨道面板同一套写法(PlayerPage 的「没有可选的X」)。
+   ============================================================ */
+
+type PickKind = "sub" | "audio" | "ver" | "line";
+
+/** 用户在详情页做的选择。**不落地到设置**:它只对这一次起播有效。 */
+export type Picks = {
+  ver: MediaVersion | null;
+  /** null = 没挑过 → 交给核层的音轨偏好(track_preference),别在这里替它做主。 */
+  audio: StreamInfo | null;
+  /** "off" = 用户显式关字幕;null 同上,交给核层偏好。 */
+  sub: StreamInfo | "off" | null;
+};
+
+export const NO_PICKS: Picks = { ver: null, audio: null, sub: null };
+
+const PICK_TITLE: Record<PickKind, string> = {
+  sub: "字幕",
+  audio: "音频",
+  ver: "版本",
+  line: "线路",
+};
+const PICK_ICON = { sub: "sub", audio: "audio", ver: "file", line: "server" } as const;
+
+export function PickBar({
+  fk,
+  versions,
+  cur,
+  picks,
+  onPicks,
+}: {
+  /** 焦点键前缀。同一个组件在电影页和集详情页各挂一次,键重了 setFocus 会还错地方。 */
+  fk: string;
+  versions: MediaVersion[] | null;
+  /** 当前生效的版本(用户没挑就是第一个)。字幕/音频列表都从它的 streams 里出。 */
+  cur: MediaVersion | null;
+  picks: Picks;
+  onPicks: (p: Picks) => void;
+}) {
+  const [open, setOpen] = useState<PickKind | null>(null);
+  const [acc, setAcc] = useState<AccountInfo | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  /* 线路表挂在账号上,没有单独的「取当前服务器线路」命令 → 从账号表里挑 active 那台。 */
+  useEffect(() => {
+    let alive = true;
+    void listAccounts()
+      .then((l) => {
+        if (alive) setAcc(l.find((a) => a.active) ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /* 面板一卸载,焦点在树上就没有落点了 —— 那是 TV 最经典的 P0(遥控器整个失灵)。
+     必须显式还给刚才那个入口。 */
+  const close = useCallback(
+    (k: PickKind) => {
+      setOpen(null);
+      void setFocus(`${fk}_${k}`);
+    },
+    [fk],
+  );
+
+  useEffect(
+    () => onTvKey((k) => k === "back" && open != null && close(open)),
+    [open, close],
+  );
+
+  const subs = cur?.streams.filter((s) => s.type_ === "Subtitle") ?? [];
+  const auds = cur?.streams.filter((s) => s.type_ === "Audio") ?? [];
+  const vers = versions ?? [];
+  const lines = acc?.lines ?? [];
+  /* picks.sub 的 "off" 分支单独摘出来,免得每个用到的地方都写一遍窄化。 */
+  const subSel = picks.sub && picks.sub !== "off" ? picks.sub : null;
+
+  const val: Record<PickKind, string> = {
+    sub: picks.sub === "off" ? "关闭" : subSel ? streamLabel(subSel) : subs.length ? "默认" : "无",
+    audio: picks.audio ? streamLabel(picks.audio) : auds.length ? "默认" : "无",
+    ver: cur ? cur.name || resLabel(cur) : "—",
+    line: lines[acc?.active_line ?? 0]?.name ?? "默认",
+  };
+
+  return (
+    <>
+      <div className="filters" style={{ marginBottom: 26 }}>
+        {(Object.keys(PICK_TITLE) as PickKind[]).map((k) => (
+          <FocusItem
+            key={k}
+            focusKey={`${fk}_${k}`}
+            className="btn fx"
+            onEnter={() => setOpen(k)}
+          >
+            <Icon n={PICK_ICON[k]} className="ic ic-btn" />
+            {PICK_TITLE[k]}
+            {/* 当前值挂在按钮里:三米外「字幕」两个字看不出现在是哪条轨。 */}
+            <span style={PICK_VAL}>{val[k]}</span>
+          </FocusItem>
+        ))}
+      </div>
+
+      {err && <div style={{ color: "var(--danger)", fontSize: 18, marginBottom: 16 }}>{err}</div>}
+
+      {open && (
+        <FocusBoundary className="panel" focusKey={`${fk}_PANEL`} onBack={() => close(open)}>
+          <div className="ph">{PICK_TITLE[open]}</div>
+          <div className="scroll">
+            <FocusColumn>
+              {open === "sub" &&
+                (subs.length === 0 ? (
+                  <Dead text="该版本没有内封字幕" />
+                ) : (
+                  <>
+                    <PickRow
+                      on={picks.sub === "off"}
+                      label="关闭字幕"
+                      onEnter={() => {
+                        onPicks({ ...picks, sub: "off" });
+                        close("sub");
+                      }}
+                    />
+                    {subs.map((s) => (
+                      <PickRow
+                        key={s.index}
+                        on={subSel?.index === s.index}
+                        label={streamLabel(s)}
+                        right={s.is_default ? "默认" : undefined}
+                        onEnter={() => {
+                          onPicks({ ...picks, sub: s });
+                          close("sub");
+                        }}
+                      />
+                    ))}
+                  </>
+                ))}
+
+              {open === "audio" &&
+                (auds.length === 0 ? (
+                  <Dead text="该版本没有音轨" />
+                ) : (
+                  auds.map((s) => (
+                    <PickRow
+                      key={s.index}
+                      on={picks.audio?.index === s.index}
+                      label={streamLabel(s)}
+                      right={s.is_default ? "默认" : undefined}
+                      onEnter={() => {
+                        onPicks({ ...picks, audio: s });
+                        close("audio");
+                      }}
+                    />
+                  ))
+                ))}
+
+              {open === "ver" &&
+                (vers.length === 0 ? (
+                  <Dead text="没有可选的版本" />
+                ) : (
+                  vers.map((v) => (
+                    <PickRow
+                      key={v.id}
+                      on={cur?.id === v.id}
+                      label={v.name || resLabel(v)}
+                      right={specLabel(v) || undefined}
+                      onEnter={() => {
+                        /* 换版本 = 换文件,原来选的那条音轨/字幕在新文件里不是同一条流,清掉。 */
+                        onPicks({ ver: v, audio: null, sub: null });
+                        close("ver");
+                      }}
+                    />
+                  ))
+                ))}
+
+              {open === "line" &&
+                (!acc || lines.length === 0 ? (
+                  <Dead text="该服务器没有配置备用线路" />
+                ) : (
+                  lines.map((ln, i) => (
+                    <PickRow
+                      key={ln.id}
+                      on={i === acc.active_line}
+                      label={ln.name}
+                      right={ln.remark ?? undefined}
+                      onEnter={() => {
+                        close("line");
+                        setErr(null);
+                        /* 切线路是**服务器级**的,不是本次播放级 —— 它会刷新会话地址。
+                           乐观改本地态,失败再回滚,免得面板关了却看不出成没成。 */
+                        setAcc({ ...acc, active_line: i });
+                        void setActiveLine(acc.server, i).catch((e) => {
+                          setAcc(acc);
+                          setErr(e instanceof Error ? e.message : String(e));
+                        });
+                      }}
+                    />
+                  ))
+                ))}
+            </FocusColumn>
+          </div>
+        </FocusBoundary>
+      )}
+    </>
+  );
+}
+
+function PickRow({
+  on,
+  label,
+  right,
+  onEnter,
+}: {
+  on: boolean;
+  label: string;
+  right?: string;
+  onEnter: () => void;
+}) {
+  return (
+    <FocusItem className={`pitem${on ? " on" : ""}`} onEnter={onEnter}>
+      {label}
+      <span className="r">{on ? "✓" : (right ?? "")}</span>
+    </FocusItem>
+  );
+}
+
+/** 面板里"这一项确实没得选"。不可聚焦 —— 能聚焦就是按下去没反应,比不能聚焦更糟。 */
+function Dead({ text }: { text: string }) {
+  return (
+    <div className="pitem" style={{ color: "var(--tv-ink-3)" }}>
+      {text}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------
+   起播后落轨
+   ------------------------------------------------------------ */
+
+/** 把详情页选的音轨/字幕落到播放器。
+ *
+ *  ★ `play()` 只吃 mediaSourceId(版本),**没有**音轨/字幕参数 —— 那两样是播放器
+ *    属性,只能起播后用 `set_track` 落。这是核层的契约,不是这里图省事。
+ *
+ *  ★ mpv 的 aid/sid 是**按类型从 1 起编号**的,而 Emby `StreamInfo.index` 是容器里的
+ *    绝对序号,两者不通用(一个 1 视频+2 音轨+3 字幕的文件里,第一条字幕 index=3、sid=1)。
+ *    所以先拿语言去 `tracks()` 里认人,语言不唯一才退回「同类型里的第几条」这个序号。
+ *
+ *  ★ 必须轮询:`play()` 在 mpv loadfile 发出去就返回了,这时 track-list 通常还是空的,
+ *    直接 setTrack 会静默打空 —— 表现是"选了日语,放出来还是国语"。
+ *
+ *  ponytail: 轮询上限 2s(10×200ms),再慢就放弃并让核层的轨道偏好生效;
+ *  真机上若发现慢盘/网盘首帧超过 2s,把 TRACK_TRIES 调大即可。 */
+export async function applyPicks(v: MediaVersion | null, p: Picks): Promise<void> {
+  // 一样都没挑 → 什么都别做,交给核层的 track_preference。抢着设反而覆盖掉用户的全局偏好。
+  if (!p.audio && !p.sub) return;
+
+  let list: Track[] = [];
+  for (let i = 0; i < TRACK_TRIES && list.length === 0; i++) {
+    list = await tracks().catch(() => []);
+    if (list.length === 0) await new Promise((r) => setTimeout(r, 200));
+  }
+
+  // sid=no 是 mpv 关字幕的写法,不是某条轨的 id。
+  if (p.sub === "off") await setTrack("sub", "no").catch(() => {});
+  else if (p.sub) await setTrack("sub", mpvId(list, "sub", v, p.sub)).catch(() => {});
+  if (p.audio) await setTrack("audio", mpvId(list, "audio", v, p.audio)).catch(() => {});
+}
+
+const TRACK_TRIES = 10;
+
+function mpvId(list: Track[], kind: "sub" | "audio", v: MediaVersion | null, s: StreamInfo): string {
+  const lang = (s.language ?? "").toLowerCase();
+  const same = list.filter((t) => t.kind === kind && t.lang.toLowerCase() === lang);
+  // 语言唯一时按语言认最稳;双日语音轨这种靠语言分不开,只能退回序号。
+  if (lang && same.length === 1) return same[0].id;
+  const ord = (v?.streams ?? []).filter((x) => x.type_ === s.type_).findIndex((x) => x.index === s.index);
+  return String(ord >= 0 ? ord + 1 : 1);
+}
+
+/* ------------------------------------------------------------
+   媒体信息块
+   ------------------------------------------------------------ */
+
+/** 当前版本的规格。**缺的字段整项不画** —— 编一个 "未知" 出来只是把噪音填满栅格。 */
+export function MediaInfo({ v }: { v: MediaVersion | null }) {
+  if (!v) return null;
+  const vid = videoOf(v);
+  const auds = v.streams.filter((s) => s.type_ === "Audio");
+  const subs = v.streams.filter((s) => s.type_ === "Subtitle");
+
+  const rows: [string, string][] = [];
+  const push = (k: string, val: string | null | undefined) => {
+    if (val) rows.push([k, val]);
+  };
+  push("分辨率", vid?.width && vid?.height ? `${vid.width}×${vid.height}` : fmtRes(vid?.height ?? null));
+  push("编码", vid?.codec ? vid.codec.toUpperCase() : null);
+  push("码率", fmtBitrate(v.bitrate ?? vid?.bitrate ?? null));
+  push("体积", fmtSize(v.size_bytes));
+  // 帧率服务端给的是 23.976023 这种,抹到两位;整数帧(24/25/30)不留小数尾巴。
+  push("帧率", vid?.frame_rate ? `${+vid.frame_rate.toFixed(2)} fps` : null);
+  // SDR 不是信息量,只有 HDR10/DV/HLG 这些才值一格。
+  push(
+    "动态范围",
+    vid?.video_range && vid.video_range.toUpperCase() !== "SDR" ? vid.video_range : null,
+  );
+  push("封装", v.container ? v.container.toUpperCase() : null);
+
+  if (rows.length === 0 && auds.length === 0 && subs.length === 0) return null;
+
+  return (
+    <div className="row">
+      <div className="rowhead">
+        <div className="t">媒体信息</div>
+      </div>
+      <div style={MI_GRID}>
+        {rows.map(([k, val]) => (
+          <div key={k}>
+            <div style={MI_K}>{k}</div>
+            <div style={MI_V}>{val}</div>
+          </div>
+        ))}
+      </div>
+      {auds.length > 0 && (
+        <div style={MI_LIST}>
+          <div style={MI_K}>音轨</div>
+          {auds.map((s) => (
+            <div key={s.index} style={MI_LINE}>
+              {[
+                s.language,
+                s.codec.toUpperCase(),
+                s.channel_layout ?? (s.channels ? `${s.channels} 声道` : null),
+                s.profile,
+              ]
+                .filter((x): x is string => !!x)
+                .join(" · ")}
+            </div>
+          ))}
+        </div>
+      )}
+      {subs.length > 0 && (
+        <div style={MI_LIST}>
+          <div style={MI_K}>字幕</div>
+          <div style={MI_LINE}>
+            {subs
+              .map((s) => s.language ?? s.display_title ?? s.codec.toUpperCase())
+              .join(" · ")}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const PICK_VAL: React.CSSProperties = {
+  color: "var(--tv-ink-3)",
+  fontWeight: 500,
+  maxWidth: 200,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const MI_GRID: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(4, minmax(0,1fr))",
+  gap: "22px 32px",
+  maxWidth: 1200,
+};
+
+const MI_K: React.CSSProperties = {
+  fontSize: 15,
+  letterSpacing: "0.1em",
+  color: "var(--tv-ink-3)",
+  fontWeight: 640,
+};
+
+const MI_V: React.CSSProperties = { fontSize: 21, fontWeight: 600, marginTop: 5 };
+
+const MI_LIST: React.CSSProperties = { marginTop: 24, maxWidth: 1200 };
+
+const MI_LINE: React.CSSProperties = { fontSize: 18, color: "var(--tv-ink-2)", marginTop: 6 };
 

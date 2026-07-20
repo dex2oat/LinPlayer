@@ -4,6 +4,7 @@ import {
   downloadEnqueue,
   fmtTime,
   itemDetail,
+  itemMedia,
   personUrl,
   play,
   posterUrl,
@@ -20,7 +21,14 @@ import { Icon } from "../app/icons";
 import { CardPoster } from "../components/Cards";
 import { FocusColumn, FocusItem, FocusRow } from "../components/Focus";
 import { useAsync } from "../lib/useAsync";
-import { VersionRow } from "./EpisodePage";
+import {
+  MediaInfo,
+  NO_PICKS,
+  PickBar,
+  VersionRow,
+  applyPicks,
+  type Picks,
+} from "./EpisodePage";
 
 /** 剧集详情(草稿 03)与电影详情(草稿 16)。两者共用 Hero,按 type_ 分支:
     剧集 → 季度 chip + 分集条;电影 → 版本行(电影没有"集"这一层,版本行只能留在本页)。
@@ -57,7 +65,10 @@ export default function DetailPage({
         alt=""
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
       />
-      <div style={{ position: "relative", height: "100%", padding: "48px 64px" }}>
+      {/* ★ on-art:整块内容直接压在 backdrop 上,没有渐变兜底 → 必须描边。
+          亮封面上的白字不描边是真的读不了(用户实测「看都看不清」)。
+          挂在容器上而不是逐个文字块挂:text-shadow 会继承,漏一块就是漏一块。 */}
+      <div className="on-art" style={{ position: "relative", height: "100%", padding: "48px 64px" }}>
         {d.data.type_ === "Movie" ? (
           <Movie d={d.data} session={session} go={go} />
         ) : (
@@ -203,7 +214,11 @@ function Movie({
   session: LoginResult;
   go: (r: Route) => void;
 }) {
-  const [ver, setVer] = useState<MediaVersion | null>(null);
+  /* 版本 + 各条流。选择器行和底部媒体信息块共用这一份。 */
+  const media = useAsync(() => itemMedia(d.id), [d.id]);
+  const [picks, setPicks] = useState<Picks>(NO_PICKS);
+  /** 当前生效的版本:用户没挑就是服务器给的第一个。 */
+  const cur = picks.ver ?? media.data?.[0] ?? null;
 
   return (
     <FocusColumn focusKey="DETAIL_MOVIE">
@@ -217,12 +232,23 @@ function Movie({
         session={session}
         go={go}
         label={d.resume_secs > 1 ? `继续播放 ${fmtTime(d.resume_secs)}` : "播放"}
-        version={ver}
+        version={cur}
+        picks={picks}
       />
 
+      {/* ★ 播放键正下方的四个入口(用户 2026-07-20 评审:「想看前调不了」)。 */}
+      <PickBar fk="MOVIE" versions={media.data} cur={cur} picks={picks} onPicks={setPicks} />
+
       {/* ★ 电影有版本行(电影没有"集"这一层),但用的是**集详情页那一套完全相同的版本卡** ——
-          同一个概念两套视觉,用户每换一页就要重新认一遍。 */}
-      <VersionRow itemId={d.id} matchTitle={d.name} titleConfident onSelect={setVer} />
+          同一个概念两套视觉,用户每换一页就要重新认一遍。
+          它和 PickBar 的「版本」选的是同一件事(本机这几个 MediaSource),只是它还多画了
+          「别台 Emby 有没有这部」这一层,所以两个共用同一份 picks.ver,不各记各的。 */}
+      <VersionRow
+        itemId={d.id}
+        matchTitle={d.name}
+        titleConfident
+        onSelect={(v) => setPicks((p) => ({ ...p, ver: v }))}
+      />
 
       {d.people.length > 0 && (
         <>
@@ -261,6 +287,9 @@ function Movie({
           </div>
         </>
       )}
+
+      {/* 页面下部原来是空的。放当前版本的规格。 */}
+      <MediaInfo v={cur} />
 
       <Similar id={d.id} session={session} go={go} />
     </FocusColumn>
@@ -312,6 +341,7 @@ function Buttons({
   go,
   label,
   version,
+  picks,
 }: {
   d: ItemDetail;
   /** 剧集页起播的是"下一集",电影页就是本体。 */
@@ -320,6 +350,8 @@ function Buttons({
   go: (r: Route) => void;
   label: string;
   version?: MediaVersion | null;
+  /** 电影页才有(剧的层级不选版本/音轨/字幕)。 */
+  picks?: Picks;
 }) {
   const playId = target?.id ?? d.id;
   const resume = target ? target.resume_secs : d.resume_secs;
@@ -332,6 +364,9 @@ function Buttons({
     try {
       await play(playId, secs, version?.id ?? null);
       go({ page: "player" });
+      /* ★ 落轨放在导航之后且不 await:applyPicks 要等 mpv 的 track-list 出来,
+         阻塞在这儿会让按下播放到画面出现之间多卡一两秒。 */
+      if (picks) void applyPicks(version ?? null, picks);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
     }

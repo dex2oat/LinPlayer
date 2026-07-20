@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { setFocus } from "@noriginmedia/norigin-spatial-navigation";
 import {
   listFavorites,
-  posterUrl,
   setFavorite,
   type Item,
   type LoginResult,
@@ -15,6 +14,7 @@ import { SORTS, sortItems, type SortId } from "@shared/favorites-sort";
 import type { Route } from "../App";
 import { onTvKey } from "../app/focus";
 import { Icon } from "../app/icons";
+import { CardPoster, CardWide } from "../components/Cards";
 import { FocusBoundary, FocusColumn, FocusItem } from "../components/Focus";
 import { useAsync } from "../lib/useAsync";
 
@@ -26,7 +26,10 @@ import { useAsync } from "../lib/useAsync";
     ★ 排序入口和媒体库同一套:**单焦点项 + 右侧面板**,不做横排 chip。
       遥控器的代价是焦点格数,横排四个排序 chip 够到最后一个要按三次。
     ★ 「取消收藏」走菜单键 → 面板。它**不是唯一入口**(详情页有收藏按钮),
-      所以即便壳还没转发 KEYCODE_MENU 也不会有能力丢失 —— 只是少了个快捷方式。 */
+      所以即便壳还没转发 KEYCODE_MENU 也不会有能力丢失 —— 只是少了个快捷方式。
+    ★ **按类型分区**(用户 2026-07-20 评审):分集用横卡,剧/电影用竖版海报。
+      一个网格混着放的结果是横竖封面互相裁 —— 剧的竖版海报塞进 16:9 要裁掉大半张脸,
+      集的 16:9 截图塞进 2:3 两边留黑边。两种封面本来就是两种比例,不该共用一个网格。 */
 
 /** 默认 = 服务端返回的原始顺序(约等于收藏时间倒序)。
  *  它不在 SORTS 里,因为"不排"本来就不需要一个排序键。 */
@@ -47,9 +50,6 @@ export default function FavoritesPage({
   const [sort, setSort] = useState<Sort>(null);
   const [asc, setAsc] = useState(false);
   const [panel, setPanel] = useState(false);
-  /* 菜单键要对"现在焦点落在哪张卡"生效,而焦点态只有 FocusItem 自己知道 →
-     靠 onFocus 回上来记一笔。 */
-  const [focused, setFocused] = useState<Item | null>(null);
   const [menu, setMenu] = useState<Item | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -58,6 +58,29 @@ export default function FavoritesPage({
     [fav.data, removed],
   );
   const shown = useMemo(() => (sort ? sortItems(items, sort, asc) : items), [items, sort, asc]);
+
+  /* 分集 vs 剧/电影。分集的封面本来就是 16:9 截图,剧和电影的本来就是竖版海报。 */
+  const eps = useMemo(() => shown.filter((it) => it.type_ === "Episode"), [shown]);
+  const rest = useMemo(() => shown.filter((it) => it.type_ !== "Episode"), [shown]);
+
+  /* 菜单键要对"现在焦点落在哪张卡"生效。CardWide / CardPoster 没有 onFocus 出口,
+     而 components/ 是不许改的 → 从 DOM 反查:焦点态那一项带 .foc,而两个分区里的卡片
+     就是按数组顺序渲染的直接子节点,序号即索引。
+     ponytail: 真要多处用就给 Cards 加个 onFocus 透传,这里一处不值当动公共组件。 */
+  const epRef = useRef<HTMLDivElement>(null);
+  const restRef = useRef<HTMLDivElement>(null);
+  const focusedItem = useCallback((): Item | null => {
+    for (const [ref, list] of [
+      [epRef, eps],
+      [restRef, rest],
+    ] as const) {
+      const i = [...(ref.current?.children ?? [])].findIndex((n) =>
+        n.classList.contains("foc"),
+      );
+      if (i >= 0) return list[i] ?? null;
+    }
+    return null;
+  }, [eps, rest]);
 
   const say = useCallback((m: string) => {
     setToast(m);
@@ -75,7 +98,7 @@ export default function FavoritesPage({
     () =>
       onTvKey((k) => {
         if (k === "menu") {
-          if (!panel && !menu && focused) setMenu(focused);
+          if (!panel && !menu) setMenu(focusedItem());
           return;
         }
         if (k !== "back") return;
@@ -83,7 +106,7 @@ export default function FavoritesPage({
         if (menu) setMenu(null);
         else if (panel) closeSort();
       }),
-    [panel, menu, focused, closeSort],
+    [panel, menu, focusedItem, closeSort],
   );
 
   const cancelFav = (it: Item) => {
@@ -140,29 +163,42 @@ export default function FavoritesPage({
         ) : items.length === 0 ? (
           <Empty go={go} />
         ) : (
-          <div className="grid poster c6">
-            {shown.map((it) => (
-              <FocusItem
-                key={it.id}
-                className="cell fx"
-                onFocus={() => setFocused(it)}
-                onEnter={() => go({ page: "detail", itemId: it.id })}
-              >
-                <div className="th">
-                  {it.has_primary && (
-                    <img src={posterUrl(session, it.id, 480)} alt="" loading="lazy" />
-                  )}
-                </div>
-                <div className="nm">{it.name}</div>
-                <div className="sub">{it.year ?? ""}</div>
-              </FocusItem>
-            ))}
-          </div>
+          <>
+            {/* ★ 空的那一区**整段不渲染**(标题也不留):只收藏了剧的人看见一个空的
+                「分集」标题,只会以为收藏丢了。 */}
+            {eps.length > 0 && (
+              <Section title="分集" count={eps.length} r={epRef}>
+                {eps.map((it) => (
+                  <CardWide
+                    key={it.id}
+                    it={it}
+                    session={session}
+                    showProgress
+                    /* 收藏的分集直接进集详情页。走 detail 的话会落进剧集分支,
+                       而分集条目没有 children —— 那是一页空的。 */
+                    onEnter={() => go({ page: "episode", itemId: it.id })}
+                  />
+                ))}
+              </Section>
+            )}
+            {rest.length > 0 && (
+              <Section title="剧集与电影" count={rest.length} r={restRef}>
+                {rest.map((it) => (
+                  <CardPoster
+                    key={it.id}
+                    it={it}
+                    session={session}
+                    onEnter={() => go({ page: "detail", itemId: it.id })}
+                  />
+                ))}
+              </Section>
+            )}
+          </>
         )}
       </FocusColumn>
 
       {panel && (
-        <FocusBoundary className="panel" focusKey="FAV_PANEL">
+        <FocusBoundary className="panel" focusKey="FAV_PANEL" onBack={closeSort}>
           <div className="ph">排序</div>
           <div className="scroll">
             <FocusColumn>
@@ -192,7 +228,7 @@ export default function FavoritesPage({
       )}
 
       {menu && (
-        <FocusBoundary className="panel" focusKey="FAV_MENU">
+        <FocusBoundary className="panel" focusKey="FAV_MENU" onBack={() => setMenu(null)}>
           <div className="ph">{menu.name}</div>
           <div className="scroll">
             <FocusItem className="pitem" autoFocus onEnter={() => {
@@ -215,6 +251,35 @@ export default function FavoritesPage({
 }
 
 /* ------------------------------------------------------------ */
+
+/** 一个类型分区。卡片是**换行铺满**而不是 .track 单行横滚 ——
+ *  收藏是个"全都在这儿"的页面,横滚一行会把大半藏在屏幕外。
+ *  卡片自带固定宽(.card169 320 / .card23 220),flex-wrap 就够铺,不用再上 .grid。 */
+function Section({
+  title,
+  count,
+  r,
+  children,
+}: {
+  title: string;
+  count: number;
+  r: React.RefObject<HTMLDivElement | null>;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="row">
+      <div className="rowhead">
+        <div className="t">{title}</div>
+        <div style={{ fontSize: 17, color: "var(--tv-ink-3)" }}>{count} 项</div>
+      </div>
+      <div ref={r} style={WRAP}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const WRAP: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: "32px 28px" };
 
 /** 空态。**不画插画** —— 客厅里一张占半屏的灰色矢量图只会让人以为页面挂了,
  *  一句话加一个能按的大按钮就够,而且按钮天然接住了焦点(否则焦点无处可落)。 */

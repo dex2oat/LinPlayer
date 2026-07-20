@@ -202,7 +202,7 @@ export default function DownloadsPage() {
       </FocusColumn>
 
       {settings && (
-        <FocusBoundary className="panel" focusKey="DL_SETTINGS_PANEL">
+        <FocusBoundary className="panel" focusKey="DL_SETTINGS_PANEL" onBack={closeSettings}>
           <div className="ph">下载设置</div>
           <div className="scroll">
             <FocusColumn>
@@ -243,7 +243,7 @@ export default function DownloadsPage() {
       )}
 
       {menu && (
-        <FocusBoundary className="panel" focusKey="DL_MENU">
+        <FocusBoundary className="panel" focusKey="DL_MENU" onBack={() => setMenu(null)}>
           <div className="ph">{rowTitle(menu)}</div>
           <div className="scroll">
             {menu.status !== "Completed" && (
