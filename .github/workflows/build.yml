@@ -176,7 +176,12 @@ jobs:
           DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: npx tauri build
+        # ★ 必须 cd 进 apps/desktop:仓库里现在有**两个** tauri.conf.json
+        #   (apps/desktop 和 apps/android),从仓库根跑 `npx tauri build` 时 CLI
+        #   会挑中安卓那个,然后去找一个根本不存在的 linplayer-android.exe:
+        #   "failed to rename app binary ... linplayer-android.exe"。
+        #   报错完全不提「配置选错了」,极难反推。在哪个目录跑就用哪个配置。
+        run: cd apps/desktop && npx tauri build
 
       # Rust 侧的符号。前端那半上面已经传了,但 MSVC 的函数名/行号在 app.pdb 里,
       # 而发行包只装 exe —— 不传的话用户机器上的 panic 回来就是一列十六进制地址。
@@ -309,7 +314,12 @@ jobs:
           DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: npx tauri build
+        # ★ 必须 cd 进 apps/desktop:仓库里现在有**两个** tauri.conf.json
+        #   (apps/desktop 和 apps/android),从仓库根跑 `npx tauri build` 时 CLI
+        #   会挑中安卓那个,然后去找一个根本不存在的 linplayer-android.exe:
+        #   "failed to rename app binary ... linplayer-android.exe"。
+        #   报错完全不提「配置选错了」,极难反推。在哪个目录跑就用哪个配置。
+        run: cd apps/desktop && npx tauri build
 
       # 和 Windows 那半同一条口径:不传符号的话,Linux 用户回来的 panic 就是一列
       # 十六进制地址,遥测等于白接。根 Cargo.toml 的 debug="line-tables-only" 在 ELF 上
@@ -578,6 +588,17 @@ jobs:
           #   只能在调用侧按住 —— scripts/build-android-apk.sh 里是同一条,改要一起改。
           CARGO_PROFILE_RELEASE_DEBUG: "false"
         run: |
+          # ★ rquickjs-sys 在安卓要现跑 bindgen 生成 FFI —— 必须显式给 NDK sysroot,
+          #   否则 bindgen 拿**宿主的 /usr/include** 去编 aarch64,报
+          #   "bits/libc-header-start.h file not found"(指向 glibc 多架构头,
+          #   和"安卓"三个字毫无关系,极易往别处找)。
+          #   我一开始以为 scripts/build-android.sh 里那套 sysroot 折腾是 Windows 特有的
+          #   —— 错了:**只有 libclang 定位那部分是**,sysroot 这条两个平台都要。
+          SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          test -d "$SYSROOT" || { echo "::error::NDK sysroot 不存在: $SYSROOT"; exit 1; }
+          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--sysroot=$SYSROOT"
+          export "BINDGEN_EXTRA_CLANG_ARGS_aarch64-linux-android=--sysroot=$SYSROOT"
+          echo "sysroot = $SYSROOT"
           # ★ 必须 cd 进 apps/android:仓库里现在有**两个** tauri.conf.json
           #   (apps/desktop 和 apps/android),CLI 自动发现会挑到哪个不确定。
           #   在哪个目录跑就用哪个配置,这是唯一不含糊的写法。
