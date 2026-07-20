@@ -571,15 +571,27 @@ jobs:
           # ★ 校验它确实是 arm64 ELF 而不是一张 LFS 指针/错误页。
           #   旧仓库在这条上栽过:APK 里是文本指针,运行时 UnsatisfiedLinkError
           #   报 "bad ELF magic 76657273"(那其实是 "vers"),构建全程是绿的。
-          head -c 4 "$DEST/libmpv.so" | od -An -tx1 | grep -q "7f 45 4c 46" \
-            || { echo "::error::libmpv.so 不是 ELF"; head -c 64 "$DEST/libmpv.so" | od -c | head; exit 1; }
+          # ★ 不要写成 `... | grep -q ...`。本步开头是 set -o pipefail,而 grep -q 命中后
+          #   会立刻退出并关掉管道,上游进程吃 SIGPIPE 非零退出 → **命中反而判失败**。
+          #   下面那条符号校验就是这么红的一次(符号明明在)。一律先落盘再 grep。
+          MAGIC=$(head -c 4 "$DEST/libmpv.so" | od -An -tx1)
+          case "$MAGIC" in
+            *"7f 45 4c 46"*) ;;
+            *) echo "::error::libmpv.so 不是 ELF(magic=$MAGIC)"; head -c 64 "$DEST/libmpv.so" | od -c | head; exit 1 ;;
+          esac
           # ★ 这个二进制没有 JNI_OnLoad,靠 av_jni_set_java_vm 登记 JavaVM
           #   (Rust 侧 crates/mpv 的 set_android_java_vm 依赖它)。换版本时这条会先红。
           NM=$(find "$ANDROID_NDK_ROOT" "$ANDROID_NDK_HOME" -name 'llvm-nm' -type f 2>/dev/null | head -1)
           if [ -n "$NM" ]; then
-            "$NM" -D --defined-only "$DEST/libmpv.so" | grep -q ' av_jni_set_java_vm$' \
-              || { echo "::error::libmpv.so 没有 av_jni_set_java_vm —— 换版本了?看 crates/mpv 的 set_android_java_vm 注释"; exit 1; }
-            echo "av_jni_set_java_vm 存在 ✓"
+            "$NM" -D --defined-only "$DEST/libmpv.so" > /tmp/mpv-syms.txt
+            echo "导出符号数: $(wc -l < /tmp/mpv-syms.txt)"
+            if grep -q ' av_jni_set_java_vm$' /tmp/mpv-syms.txt; then
+              echo "av_jni_set_java_vm 存在 OK"
+            else
+              echo "::error::libmpv.so 没有 av_jni_set_java_vm —— 换版本了?看 crates/mpv 的 set_android_java_vm 注释"
+              echo "--- 实际的 jni 相关符号 ---"; grep -i jni /tmp/mpv-syms.txt || echo "(一个都没有)"
+              exit 1
+            fi
           else
             echo "::warning::找不到 llvm-nm,跳过符号校验"
           fi
