@@ -199,8 +199,19 @@ impl DiskCache {
     fn create(total: u64, cache_bytes: u64, threads: usize) -> Option<Arc<DiskCache>> {
         let dir = crate::paths::cache_dir("prefetch");
         std::fs::create_dir_all(&dir).ok()?;
-        // 进程 id + 总长做名字:同一进程内多次起播不会互相踩(旧的先 Drop 删掉)。
-        let path = dir.join(format!("s{}_{}.part", std::process::id(), total));
+        /* 文件名必须**每个实例唯一**,不能是 (pid, total)。
+           旧名 `s{pid}_{total}.part` 的前提是「同一进程内起播是串行的,旧的先 Drop 删掉」——
+           这个前提不成立:两个会话完全可能并存(孤儿播放器还没 Drop、新播放器已起来,
+           见 [[desktop-double-audio-orphan-player]];同一部片 total 当然相同)。
+           一旦重名,后来者的 `truncate(true)` 会把前者的数据**整个清零**,而前者的 `slots`
+           表在内存里,仍然认为那些段「就绪」→ 后来者再写一个高位槽把文件撑长 →
+           前者读低位槽读回一整块**稀疏零**,并当作有效数据发给播放器。
+           这就是 CI 上 `concurrent_connections_do_not_starve_each_other` 偶发红的真凶:
+           cargo test 是同进程多线程并行,几个预取测试的 TOTAL 都是 40MB,互相 truncate。
+           (孤立跑 30 次全绿、全量并行约 1/5 翻车,差别正是「有没有别的会话同时在」。) */
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = dir.join(format!("s{}_{}_{}.part", std::process::id(), total, seq));
         let file = std::fs::OpenOptions::new()
             .create(true)
             .read(true)
@@ -781,6 +792,40 @@ fn parse_range(header: &str) -> Option<(u64, Option<u64>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /* 两个并存的会话**绝不能共用同一个磁盘缓存文件**。
+       旧名是 `s{pid}_{total}.part` —— 同一部片(total 相同)开两个会话就撞名,
+       后者 `truncate(true)` 把前者的数据清零,而前者的 slots 表在内存里仍说「就绪」;
+       后者再写个高位槽把文件撑长,前者读低位槽就读回一整块**稀疏零**当成有效数据发出去。
+
+       这条是确定性的(不靠调度运气):按旧代码 `a.get(0)` 会返回一块全零并断言失败。
+       线上对应场景:孤儿播放器还没 Drop、新播放器已起播(见 [[desktop-double-audio-orphan-player]]);
+       CI 上对应的是 cargo test 同进程并行跑多个 TOTAL=40MB 的预取测试。 */
+    #[tokio::test]
+    async fn two_live_sessions_never_share_one_cache_file() {
+        const TOTAL: u64 = 40 * 1024 * 1024;
+        let len = CHUNK_SIZE as usize;
+
+        let a = DiskCache::create(TOTAL, 16 * 1024 * 1024, 2).expect("建缓存 A");
+        assert!(a.put(0, vec![1u8; len]).await, "A 写第 0 段");
+
+        // 第二个会话:同一部片、同一进程,紧接着起来(旧代码在这里就把 A 的文件截断了)
+        let b = DiskCache::create(TOTAL, 16 * 1024 * 1024, 2).expect("建缓存 B");
+        assert_ne!(a.path, b.path, "两个并存会话拿到了同一个缓存文件名");
+        // 写一个**高位**槽:把文件撑长,于是 A 的低位槽变成可读的稀疏空洞(零)
+        assert!(b.put(3, vec![2u8; len]).await, "B 写第 3 段");
+
+        // A 仍认为第 0 段就绪 —— 那它读回来的就必须是 A 自己写的那份,不能是零、更不能是 B 的
+        assert!(a.has(0).await, "A 的第 0 段本来就该还在");
+        let got = a.get(0, len).await.expect("A 的第 0 段读不回来");
+        assert!(
+            got.iter().all(|v| *v == 1),
+            "A 读回的第 0 段被另一个会话污染了:全零?{} / 含 B 的字节?{} —— \
+             这块数据会被原样当作视频流发给播放器",
+            got.iter().all(|v| *v == 0),
+            got.contains(&2)
+        );
+    }
 
     /* 预取超前窗口必须**独立于**缓存上限被兜住(2026-07-19 拆分)。
        这两件事一度共用一个值:缓存上限放开到 GB 级后,预取窗口跟着变 GB 级,
