@@ -89,9 +89,9 @@ function Hero({
           alt=""
         />
       ))}
-      {/* ★ on-art:文字直接压在封面上,没有渐变兜底,必须描边。
-          亮场景的封面上白字不描边是真的读不了(用户实测)。 */}
-      <div className="info on-art">
+      {/* 文字直接落在封面上:不画渐变、不加底、不描边。
+          用户 2026-07-20 逐条否掉了这三种(见 tv.css 里那段记录)。 */}
+      <div className="info">
         <h3>{it.name}</h3>
         <div className="meta">
           {it.rating != null && <span className="score">{it.rating.toFixed(1)}</span>}

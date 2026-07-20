@@ -65,9 +65,8 @@ export default function DetailPage({
         alt=""
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
       />
-      {/* ★ 这里**不能**套 on-art:它现在是一块不透明底(深底浅字),
-          套在这个铺满整屏的容器上等于拿板子把 backdrop 整个盖掉。
-          底只给真正压在图上的紧凑文字块 —— 见 Head。 */}
+      {/* 内容整块压在 backdrop 上,不加任何底/描边(用户 2026-07-20 定,
+          三种兜底方案逐条否掉的经过见 tv.css 顶部那段记录)。 */}
       <div style={{ position: "relative", height: "100%", padding: "48px 64px" }}>
         {d.data.type_ === "Movie" ? (
           <Movie d={d.data} session={session} go={go} />
@@ -305,9 +304,8 @@ function Movie({
 function Head({ d, extra }: { d: ItemDetail; extra: string | null }) {
   const pct = d.runtime_secs > 0 ? Math.round((d.resume_secs / d.runtime_secs) * 100) : 0;
   return (
-    /* ★ on-art = 深底浅字的实底。标题/评分/简介直接压在 backdrop 上,
-       没有底的话亮封面上白字读不了(用户实测)。只包这一块,不包整页。 */
-    <div className="on-art" style={{ maxWidth: 900 }}>
+    /* 标题/评分/简介直接压在 backdrop 上,不加底也不描边(用户 2026-07-20 定)。 */
+    <div style={{ maxWidth: 900 }}>
       <h3 style={{ fontSize: 40, fontWeight: 700, letterSpacing: "-.02em", margin: "0 0 10px" }}>
         {d.name}
       </h3>
