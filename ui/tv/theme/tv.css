@@ -534,18 +534,30 @@ body {
   font-weight: 640;
   padding: 18px 28px 8px;
 }
+/* ★ 高度必须是 min-height 不能是 height。
+   面板里放的是**真实文件名**(「…2160p.WEB-DL.DV.HDR10Plus.H265.DDP5.1.Atmos-CMCTV.mkv」)
+   和长音轨名,一行放不下会换行:实测内容需要 92px,写死 64px 就把第二行整整切掉 28px ——
+   看起来正是"一半文字露出来、一半嵌在列表里"。
+   注意这个 bug **只有喂真实长文本才量得出来**,拿「选项 1」这种占位符测永远是绿的。 */
 .pitem {
-  height: 64px;
+  min-height: 64px;
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 0 28px;
+  padding: 12px 28px;
   font-size: 18px;
   color: var(--tv-ink-2);
   position: relative;
+  /* ★ 放在 .pitem 上而不是包一层 <span>:标签在多数调用点是**裸文本节点**
+     (匿名 flex 项,CSS 选不中它)。overflow-wrap 是继承属性,写在这里能一次覆盖
+     全站 20 处 .pitem,不用逐个改 TSX。
+     用 anywhere 不用 break-word:只有 anywhere 会同时把 min-content 宽算小,
+     否则匿名项的 min-width:auto 仍按整串文件名算,照样撑破面板。 */
+  overflow-wrap: anywhere;
 }
 .pitem .r {
   margin-left: auto;
+  flex: none;
   color: var(--tv-ink-3);
   font-size: 17px;
 }
