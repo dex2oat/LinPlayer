@@ -65,10 +65,10 @@ export default function DetailPage({
         alt=""
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
       />
-      {/* ★ on-art:整块内容直接压在 backdrop 上,没有渐变兜底 → 必须描边。
-          亮封面上的白字不描边是真的读不了(用户实测「看都看不清」)。
-          挂在容器上而不是逐个文字块挂:text-shadow 会继承,漏一块就是漏一块。 */}
-      <div className="on-art" style={{ position: "relative", height: "100%", padding: "48px 64px" }}>
+      {/* ★ 这里**不能**套 on-art:它现在是一块不透明底(深底浅字),
+          套在这个铺满整屏的容器上等于拿板子把 backdrop 整个盖掉。
+          底只给真正压在图上的紧凑文字块 —— 见 Head。 */}
+      <div style={{ position: "relative", height: "100%", padding: "48px 64px" }}>
         {d.data.type_ === "Movie" ? (
           <Movie d={d.data} session={session} go={go} />
         ) : (
@@ -305,7 +305,9 @@ function Movie({
 function Head({ d, extra }: { d: ItemDetail; extra: string | null }) {
   const pct = d.runtime_secs > 0 ? Math.round((d.resume_secs / d.runtime_secs) * 100) : 0;
   return (
-    <div style={{ maxWidth: 900 }}>
+    /* ★ on-art = 深底浅字的实底。标题/评分/简介直接压在 backdrop 上,
+       没有底的话亮封面上白字读不了(用户实测)。只包这一块,不包整页。 */
+    <div className="on-art" style={{ maxWidth: 900 }}>
       <h3 style={{ fontSize: 40, fontWeight: 700, letterSpacing: "-.02em", margin: "0 0 10px" }}>
         {d.name}
       </h3>
