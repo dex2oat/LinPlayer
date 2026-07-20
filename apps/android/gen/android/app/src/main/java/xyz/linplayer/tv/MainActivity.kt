@@ -1,11 +1,130 @@
 package xyz.linplayer.tv
 
+import android.graphics.Color
 import android.os.Bundle
+import android.view.KeyEvent
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+import android.view.ViewGroup
+import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 
+/**
+ * TV 宿主 Activity。除了 Tauri 自带的那点事,这里还担三件**缺一不可**的活:
+ *
+ *  1. 加载 libmpv.so —— 必须从 Java 侧 System.loadLibrary,不能只靠 Rust 那边 dlopen。
+ *  2. 造渲染面 —— 一层 SurfaceView 垫在透明 WebView 底下,把 Surface 递给 mpv。
+ *  3. 转发遥控器按键 —— 返回键/媒体键被 Activity 吃掉的话,WebView 根本收不到。
+ *
+ * 三件事的理由分别写在下面各自的位置。
+ */
 class MainActivity : TauriActivity() {
+
+  companion object {
+    /**
+     * 先于一切把 libmpv 加载进来,Rust 侧随后 dlopen("libmpv.so") 拿到的是同一个句柄。
+     *
+     * ★ 注意**它并不负责登记 JavaVM**。我起初以为 System.loadLibrary 会触发
+     *   `JNI_OnLoad`、mpv 在那里自己抓 JavaVM —— 对这个二进制是错的:
+     *   实测 `llvm-nm -D`(media-kit/libmpv-android-video-build v1.1.11 full-arm64-v8a)
+     *   **没有导出 JNI_OnLoad**,只导出 `av_jni_set_java_vm`。
+     *   登记这件事由 Rust 侧在 nativeSetSurface 里做,见那边的注释。
+     *   漏了它的表现是「一切成功但黑屏」,不报错 —— 别把那句登记删了。
+     *
+     * 加载失败不在这里崩:jniLibs 是 gitignore 的、靠 CI 拉取,漏了那一步就会
+     * UnsatisfiedLinkError。让它继续走,Rust 侧 mpv_create 会给出一句能读懂的错
+     * (「APK 里没有 libmpv.so」),而不是开机就闪退。
+     */
+    init {
+      try {
+        System.loadLibrary("mpv")
+      } catch (e: UnsatisfiedLinkError) {
+        Logger.error("libmpv.so 加载失败,播放功能不可用: ${e.message}")
+      }
+    }
+  }
+
+  /** 返回键交给前端处理(见 onKeyDown),不要 WryActivity 默认那套 webView.goBack()。 */
+  override val handleBackNavigation: Boolean = false
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
   }
+
+  override fun onWebViewCreate(webView: WebView) {
+    /* UI 层必须透明,否则它会把底下的视频整个盖住 —— 这就是「有声音没画面」。 */
+    webView.setBackgroundColor(Color.TRANSPARENT)
+
+    /* ★ post 而不是直接做:onWebViewCreate 触发时 WebView 还没 attach 到父容器,
+       这时 webView.parent 是 null,加不进去(而且不会报错,只是静默什么都没发生)。 */
+    webView.post {
+      val parent = webView.parent as? ViewGroup ?: run {
+        Logger.error("WebView 没有父容器,无法插入视频面")
+        return@post
+      }
+      val sv = SurfaceView(this)
+      /* ★ 不要 setZOrderOnTop(true)。默认模式下 SurfaceView 在自己那块区域把窗口
+         「打个洞」,视频从窗口**下面**透上来,而层级里排在它后面的 View(这里是 WebView)
+         照常画在上面 —— 正是我们要的「视频在底、UI 在上」。
+         设成 OnTop 会让它盖在 WebView 之上,表现是有画面但所有 UI 都点不到也看不见。 */
+      sv.holder.addCallback(object : SurfaceHolder.Callback {
+        override fun surfaceCreated(h: SurfaceHolder) = nativeSetSurface(h.surface)
+        override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) =
+          nativeSetSurface(h.surface)
+        /* 传 null 让 Rust 侧释放全局引用。不清的话 mpv 会继续往一块已经销毁的
+           Surface 上画 —— 那是原生崩溃,不是黑屏。 */
+        override fun surfaceDestroyed(h: SurfaceHolder) = nativeSetSurface(null)
+      })
+      // index 0 = 排在 WebView 底下
+      parent.addView(
+        sv, 0,
+        ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+      )
+    }
+  }
+
+  /**
+   * 遥控器按键转发。
+   *
+   * ★ 不转发的话这些键**根本到不了 WebView**:返回键被 Activity 的返回栈吃掉,
+   *   媒体键被系统路由走。前端 ui/tv/app/focus.ts 里的 `window.__lpTvKey` 契约
+   *   就是为这条通道写的,那边先落的,这边一直空着。
+   *
+   * 方向键和 OK 键**不在这里转发** —— 它们本来就会正常派发给 WebView,
+   * 再转发一次等于每次按键触发两遍导航(焦点一次跳两格)。
+   */
+  override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+    val name = when (keyCode) {
+      KeyEvent.KEYCODE_BACK -> "back"
+      KeyEvent.KEYCODE_MENU -> "menu"
+      KeyEvent.KEYCODE_MEDIA_PLAY -> "play"
+      KeyEvent.KEYCODE_MEDIA_PAUSE -> "pause"
+      KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> "playpause"
+      KeyEvent.KEYCODE_MEDIA_STOP -> "stop"
+      KeyEvent.KEYCODE_MEDIA_NEXT -> "next"
+      KeyEvent.KEYCODE_MEDIA_PREVIOUS -> "prev"
+      KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> "ff"
+      KeyEvent.KEYCODE_MEDIA_REWIND -> "rew"
+      else -> return super.onKeyDown(keyCode, event)
+    }
+    runOnUiThread {
+      findWebView()?.evaluateJavascript("window.__lpTvKey && window.__lpTvKey('$name')", null)
+    }
+    return true // 吃掉,别再走系统默认行为(返回键的默认行为是退出 Activity)
+  }
+
+  /** WryActivity 把 WebView 存成 private,只能从视图树里捞。 */
+  private fun findWebView(): WebView? {
+    val root = window?.decorView as? ViewGroup ?: return null
+    fun dig(v: android.view.View): WebView? {
+      if (v is WebView) return v
+      if (v is ViewGroup) for (i in 0 until v.childCount) dig(v.getChildAt(i))?.let { return it }
+      return null
+    }
+    return dig(root)
+  }
+
+  /** 见 apps/android/src/lib.rs 的同名 JNI 导出。传 null = Surface 没了。 */
+  private external fun nativeSetSurface(surface: android.view.Surface?)
 }

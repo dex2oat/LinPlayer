@@ -1228,3 +1228,19 @@ body {
     color: var(--tv-ink);
   }
 }
+
+/* ---- 播放时整条渲染链透明到底 ----
+
+   ★ 安卓/桌面上原生视频都在 WebView(或透明窗)**下面**,靠 UI 层透明才看得见。
+     这条链上任何一层不透明,结果都是**黑屏但有声音** —— 而且完全不报错。
+     这里三层缺一不可:
+       html   —— body 背景透明时,画布会回退用 html 的背景(CSS 背景传播规则),
+                 只清 body 是不够的,这一条最容易漏。
+       body   —— 上面写死了 #000。
+       .tv-app —— 写死了 var(--tv-bg)。
+     由 PlayerPage 在挂载/卸载时开关 html.playing。 */
+html.playing,
+html.playing body,
+html.playing .tv-app {
+  background: transparent;
+}

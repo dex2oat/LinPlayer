@@ -15,6 +15,8 @@ serde_json = "1"                             # build.rs 从 tauri.conf.json 取 
 
 [dependencies]
 linplayer-core = { path = "../../crates/core" }
+# libmpv 封装 + 平台渲染面。提成共享 crate 是因为安卓壳也要用同一份(见 crates/mpv/Cargo.toml)。
+linplayer-mpv = { path = "../../crates/mpv" }
 dirs = "5"                                   # 截图/shader 落盘目录(与 core 的 config_path 同源)
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
@@ -54,28 +56,8 @@ sentry = { version = "0.48.5", default-features = false, features = [
 ] }
 
 # ---------- 平台专有 ----------
-# 这两块**必须**按 target 分:windows-sys 原先挂在 [dependencies] 里无条件依赖,
-# 在 Linux 上第一步就编不过(它的 Win32_* feature 根本没有对应实现)。
-#
-# mpv 的合成方案(见 src/mpv.rs 顶部)两端同构:都是「独立顶层无边框窗口垫在透明主窗口
-# 正下方并保持对齐」,只是一边用 Win32、一边用 X11。
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = [
-  "Win32_Foundation",
-  "Win32_UI_WindowsAndMessaging",
-  "Win32_Graphics_Gdi",
-  "Win32_System_LibraryLoader",
-] }
-
-# libmpv 在非 Windows 上是**运行时 dlopen** 的(理由见 src/mpv.rs 的 `mod ffi` 注释:
-# 发行版之间 soname 分裂,编译期绑死哪个都是错)。cfg 必须和那边的 `#[cfg(not(windows))]` 对齐。
-[target.'cfg(not(windows))'.dependencies]
-libloading = "0.8"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-# x11-dl 而不是 x11:前者**运行时 dlopen** libX11,构建机不需要 X11 开发头,
-# 而且在没有 X11 的会话里是「打不开 display」的软失败,不是链接期硬失败。
-x11-dl = "2"
+# windows-sys / x11-dl / libloading 原先在这里,随 mpv.rs 一起搬进了 crates/mpv ——
+# 它们**只**被那个文件用(搬之前 grep 过,桌面壳其余代码一处都没引用)。
 
 [dev-dependencies]
 # test 特性给的是内存 transport(sentry::test::with_captured_events),用来验证

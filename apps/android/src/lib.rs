@@ -1,21 +1,22 @@
 //! LinPlayer Android TV 宿主壳。
 //!
 //! ## 它和 apps/desktop 是什么关系
-//! **没有关系,故意的。** 桌面壳绑死 libmpv 导入库 / windows-sys / x11-dl,
-//! 交叉编译到 aarch64-linux-android 第一步就死。两端真正共用的是 `crates/core`
-//! (平台无关,已证明可交叉编译),各自的壳只负责「把核层能力注册成前端命令」。
+//! 仍然**不依赖** apps/desktop —— 那个包绑死 tauri 桌面特性,交叉编译到
+//! aarch64-linux-android 第一步就死。两端共用的是 crate:
+//!   * `crates/core` —— 平台无关的数据源/网络/配置;
+//!   * `crates/mpv`  —— libmpv 封装 + 各平台渲染面(2026-07-20 从桌面壳提出来的)。
 //!
-//! 因此本文件里的命令是从 `apps/desktop/src/lib.rs` **逐字照抄签名和返回类型**的。
+//! 本文件里的命令是从 `apps/desktop/src/lib.rs` **逐字照抄签名和返回类型**的。
 //! 前端 `ui/shared/api.ts` 的 TS 类型和这些结构体逐字段对应,改一个名字前端就静默拿到
 //! undefined —— 不报错,只是数据不见了。加字段/改名请两端一起改。
 //!
-//! ## 播放器为什么是桩
-//! 仓库里**一个安卓 libmpv .so 都没有**(Flutter 那套删除时一并没了)。播放相关命令
-//! 全部注册成「明确报错」的桩:
-//! - 不注册的话,前端 invoke 抛的是通用的 "command not found",查起来要翻半天;
-//! - 假装成功返回空数据更糟 —— 上层会以为播起来了,然后卡在一块黑屏上等永远不来的
-//!   status 更新。
-//! 桩至少给出一句人话。接入 .so 后把这些桩替换成真实现即可,注册表不用动。
+//! ## 播放链路(安卓)
+//! `libmpv.so` 由 Java 层 `System.loadLibrary("mpv")` 加载,渲染面是垫在透明 WebView
+//! 底下的 SurfaceView。两条都不能省,理由分别写在 MainActivity.kt 和 crates/mpv 的
+//! `mod overlay` 里。
+//!
+//! ⚠️ **本轮接入未经真机验证** —— 手上没有安卓设备,CI 只能证明它编得过、
+//! libmpv.so 确实进了 APK。首次真机跑挂了先看 `adb logcat -s mpv`。
 
 mod imgcache;
 
@@ -58,32 +59,67 @@ fn session_of(state: &State<'_, AppState>) -> Result<Session, String> {
 }
 
 /* ============================================================
-   播放器桩 —— 安卓侧还没有 libmpv .so
+   播放器 —— 原生 libmpv(与桌面同一份 crates/mpv)
    ============================================================ */
 
-/// 所有播放相关命令的统一错误。写死一句人话,别让用户看见 "command not found"。
-fn no_player<T>() -> Result<T, String> {
-    Err("Android 播放器未接入(缺 libmpv .so),该功能暂不可用".to_string())
+use linplayer_mpv::{Player, Status};
+
+/// 播放器实例 + 当前 Emby 播放会话。
+///
+/// ★ 为什么懒创建而不是启动时就建:安卓的 Surface 由系统在 surfaceCreated 回调里给,
+///   App 启动那一刻它还不存在。启动时建 Player 必然拿到 wid=0 直接失败。
+struct PlayerState {
+    player: Mutex<Option<Player>>,
+    /// 当前播放会话(Emby 上报三件套共享)。网盘/本地源没有,故 Option。
+    playback: Mutex<Option<linplayer_core::emby::PlaybackTarget>>,
 }
 
-/// 播放状态。**桩永远不返回它**,但类型必须在 —— 前端 `Status` 的字段名靠它对齐,
-/// 接入 .so 那天直接填就行(字段与 apps/desktop/src/mpv.rs 的 Status 逐字相同)。
-#[derive(serde::Serialize)]
-struct Status {
-    time: f64,
-    duration: f64,
-    paused: bool,
-    buffered: f64,
+impl Default for PlayerState {
+    fn default() -> Self {
+        Self { player: Mutex::new(None), playback: Mutex::new(None) }
+    }
+}
+
+/// 取播放器;没有就现建一个。
+///
+/// ★ 建失败的最常见原因是 Surface 还没就绪(用户在页面还没铺好时就按了播放),
+///   这时**不缓存失败结果** —— 下次再调会重试,而不是一路错到重启 App。
+fn ensure_player(ps: &PlayerState) -> Result<std::sync::MutexGuard<'_, Option<Player>>, String> {
+    let mut g = ps.player.lock().unwrap();
+    if g.is_none() {
+        *g = Some(Player::new()?);
+    }
+    Ok(g)
 }
 
 #[tauri::command]
-fn play(_item_id: String, _resume_secs: f64, _media_source_id: Option<String>) -> Result<f64, String> {
-    no_player()
+async fn play(
+    state: State<'_, AppState>,
+    ps: State<'_, PlayerState>,
+    item_id: String,
+    resume_secs: f64,
+    media_source_id: Option<String>,
+) -> Result<f64, String> {
+    let s = session_of(&state)?;
+    let target =
+        emby::resolve_stream(&state.http, &s, &item_id, media_source_id.as_deref()).await?;
+
+    let g = ensure_player(&ps)?;
+    let p = g.as_ref().unwrap();
+    let _ = p.take_error_eof(); // 清历史失效标志
+    p.load_at(&target.url, resume_secs)?;
+    p.set_pause(false);
+    *ps.playback.lock().unwrap() = Some(target);
+    Ok(resume_secs)
 }
 
+/* ponytail: 本地下载文件与网盘/聚合源的起播先不接。
+   两者都要先把「下载索引 / 源解析」这两条链路在安卓上跑通,而现在连 Emby 直连
+   都还没上过真机 —— 先证明画面和声音出得来,再铺开源类型。
+   保持明确报错而不是假装成功:假装成功的表现是黑屏等一个永远不来的 status。 */
 #[tauri::command]
 fn play_local(_id: String, _resume_secs: f64) -> Result<f64, String> {
-    no_player()
+    Err("安卓端暂不支持播放本地下载文件".to_string())
 }
 
 #[tauri::command]
@@ -93,42 +129,72 @@ fn source_play(
     _resume_secs: f64,
     _raw: Option<serde_json::Value>,
 ) -> Result<f64, String> {
-    no_player()
+    Err("安卓端暂不支持播放网盘/聚合源".to_string())
 }
 
 #[tauri::command]
-fn seek(_pos: f64) -> Result<(), String> {
-    no_player()
+fn seek(ps: State<'_, PlayerState>, pos: f64) -> Result<(), String> {
+    let g = ps.player.lock().unwrap();
+    g.as_ref().ok_or("播放器未就绪")?.seek_abs(pos)
 }
 
 #[tauri::command]
-fn set_pause(_paused: bool) -> Result<(), String> {
-    no_player()
+fn set_pause(ps: State<'_, PlayerState>, paused: bool) -> Result<(), String> {
+    let g = ps.player.lock().unwrap();
+    g.as_ref().ok_or("播放器未就绪")?.set_pause(paused);
+    Ok(())
 }
 
 #[tauri::command]
-fn set_track(_kind: String, _id: String) -> Result<(), String> {
-    no_player()
+fn set_track(ps: State<'_, PlayerState>, kind: String, id: String) -> Result<(), String> {
+    let g = ps.player.lock().unwrap();
+    g.as_ref().ok_or("播放器未就绪")?.set_track(&kind, &id);
+    Ok(())
 }
 
 #[tauri::command]
-fn status() -> Result<Status, String> {
-    no_player()
+fn status(ps: State<'_, PlayerState>) -> Result<Status, String> {
+    let g = ps.player.lock().unwrap();
+    Ok(g.as_ref().ok_or("播放器未就绪")?.status())
 }
 
 #[tauri::command]
-fn tracks() -> Result<Vec<Track>, String> {
-    no_player()
+fn tracks(ps: State<'_, PlayerState>) -> Result<Vec<Track>, String> {
+    let g = ps.player.lock().unwrap();
+    Ok(g.as_ref().ok_or("播放器未就绪")?.tracks())
 }
 
 #[tauri::command]
-fn stop_playback(_pos: f64) -> Result<(), String> {
-    no_player()
+async fn stop_playback(
+    state: State<'_, AppState>,
+    ps: State<'_, PlayerState>,
+    pos: f64,
+) -> Result<(), String> {
+    // 先上报再拆播放器:反过来的话 pos 已经取不到了。
+    let target = ps.playback.lock().unwrap().take();
+    if let Some(t) = target {
+        if let Ok(s) = session_of(&state) {
+            let _ = emby::report_stopped(&state.http, &s, &t, pos).await;
+        }
+    }
+    /* ★ 必须真的 drop 掉 Player。安卓上留着它 = 一直占着 Surface 和 MediaCodec 实例,
+       下次起播要么黑屏要么直接拿不到解码器(硬件解码器数量是有限的)。 */
+    ps.player.lock().unwrap().take();
+    Ok(())
 }
 
 #[tauri::command]
-fn report_progress(_pos: f64, _paused: bool) -> Result<(), String> {
-    no_player()
+async fn report_progress(
+    state: State<'_, AppState>,
+    ps: State<'_, PlayerState>,
+    pos: f64,
+    paused: bool,
+) -> Result<(), String> {
+    let target = ps.playback.lock().unwrap().clone();
+    let Some(t) = target else { return Ok(()) }; // 无会话(网盘源)跳过
+    let s = session_of(&state)?;
+    let _ = emby::report_progress(&state.http, &s, &t, pos, paused).await;
+    Ok(())
 }
 
 /* ============================================================
@@ -1182,6 +1248,11 @@ pub fn run() {
                 account_status: Mutex::new(HashMap::new()),
                 pending_update: Mutex::new(None),
             });
+            /* 播放器状态单独一份 State:它的生命周期和 Surface 绑,不跟 AppState 一起建。 */
+            app.manage(PlayerState::default());
+            /* mpv 提成共享 crate 后自带的日志出口是空的,把安卓这边的接进去,
+               否则它那些「静默失效」告警(如 shader 缓存没设上)全被丢掉。 */
+            linplayer_mpv::set_logger(|m| log::info!("[mpv] {m}"));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1316,4 +1387,56 @@ mod tests {
             );
         }
     }
+}
+
+/* ============================================================
+   JNI:Java 层的 SurfaceView ←→ mpv 的渲染面
+   ============================================================ */
+
+/* 由 MainActivity 的 SurfaceHolder.Callback 调用。见那边的注释。
+
+   ★ 必须 NewGlobalRef。传进来的 jobject 是**局部引用**,这次 native 调用一返回就失效;
+     而 mpv 是在之后某个时刻(Player::new → mpv_initialize)才拿它去
+     ANativeWindow_fromSurface。用局部引用的表现不是「不工作」,是**在一个和这里
+     毫无关系的地方崩溃**,极难反查。
+
+   ★ 旧的全局引用要显式 DeleteGlobalRef,否则每次转屏/回前台都漏一个 Surface。 */
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_xyz_linplayer_tv_MainActivity_nativeSetSurface(
+    env: jni::JNIEnv,
+    _this: jni::objects::JObject, // 实例方法 → 第二个参数是 this,不是 jclass
+    surface: jni::objects::JObject,
+) {
+    /* 全局引用存这里。**用 GlobalRef 而不是裸 jobject**:它的 Drop 会自己
+       DeleteGlobalRef,换面/退出时不会漏 Surface。手工管裸指针的版本写过一版,
+       jni 0.21 根本没有 delete_global_ref 这个方法(交叉编译时才报出来 ——
+       宿主 cargo check 编不到 cfg(android) 这段代码,查这类错只能真交叉编)。 */
+    static CUR: std::sync::Mutex<Option<jni::objects::GlobalRef>> = std::sync::Mutex::new(None);
+
+    let g = if surface.is_null() {
+        None
+    } else {
+        match env.new_global_ref(&surface) {
+            Ok(g) => Some(g),
+            Err(e) => {
+                log::error!("[mpv] NewGlobalRef 失败,视频将没有渲染面: {e}");
+                None
+            }
+        }
+    };
+
+    /* ★ 顺手把 JavaVM 登记给 libmpv —— 这个 libmpv 没有导出 JNI_OnLoad,
+       不登记就是「一切成功但黑屏」。理由和实测见 crates/mpv 的 set_android_java_vm。
+       挂在这里是因为这是**唯一**天然带 JNIEnv 又必定早于起播的入口。
+       重复调无害(ffmpeg 侧是幂等的设值)。 */
+    match env.get_java_vm() {
+        Ok(vm) => linplayer_mpv::set_android_java_vm(vm.get_java_vm_pointer() as *mut _),
+        Err(e) => log::error!("[mpv] 取 JavaVM 失败,硬解/渲染会起不来: {e}"),
+    }
+
+    let ptr = g.as_ref().map(|g| g.as_raw() as isize).unwrap_or(0);
+    // 先把新的存住再交给 mpv;旧的在这一行被 drop → 自动 DeleteGlobalRef。
+    *CUR.lock().unwrap() = g;
+    linplayer_mpv::set_android_surface(ptr);
 }

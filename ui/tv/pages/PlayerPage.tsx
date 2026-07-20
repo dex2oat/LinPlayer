@@ -39,6 +39,13 @@ export default function PlayerPage({
   const [osd, setOsd] = useState(false);
   const hideAt = useRef(0);
 
+  /* ★ 让整条渲染链透明,否则原生视频被 UI 层盖死 —— 黑屏但有声音,且不报错。
+     开关放在这里(而不是全局常开)是因为其它页面要那个不透明底色。 */
+  useEffect(() => {
+    document.documentElement.classList.add("playing");
+    return () => document.documentElement.classList.remove("playing");
+  }, []);
+
   /* 状态轮询。1s 够了 —— 进度条一秒动一格,人眼在三米外分辨不出更细的。
      轮询而不是订阅事件:核层没有 status 推送通道,而且轮询在页面卸载时天然停掉。 */
   useEffect(() => {

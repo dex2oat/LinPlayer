@@ -1,5 +1,5 @@
 mod imgcache;
-mod mpv;
+use linplayer_mpv as mpv; // 提成共享 crate(crates/mpv):安卓壳也要用同一份
 mod plugins_host;
 mod shaders;
 mod telemetry;
@@ -4355,6 +4355,10 @@ fn force_x11_backend() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    /* mpv 提成共享 crate 后,它自己没有日志落点 —— 把桌面的接进去。
+       不接的话它那些「静默失效」告警(shader 缓存没设上之类)会被丢掉。 */
+    mpv::set_logger(poclog);
+
     /* ★ 必须在 Tauri 起任何线程/子进程**之前**:把进程的 TEMP 指进包里。
        set_var 在多线程下是 UB,这里是 main 的第一步,还没有别的线程。
        (旧数据迁移不在这儿调 —— 它挂在 paths::root() 首次调用上自己会跑,

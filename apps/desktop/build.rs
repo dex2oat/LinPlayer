@@ -2,22 +2,12 @@ use std::path::Path;
 
 fn main() {
     let manifest = env!("CARGO_MANIFEST_DIR");
-    let libdir = Path::new(manifest).join("libmpv");
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
-    /* 链接 libmpv。两端拿库的方式不一样:
-       - Windows:仓库里自带导入库 libmpv/mpv.lib,运行时找同目录的 libmpv-2.dll。
-       - Linux:链系统的 libmpv.so(构建机装 libmpv-dev)。**不把 .lib 那条 link-search
-         也发出去** —— 那个目录里全是 Windows 产物,加进搜索路径只会让链接器在里面
-         白翻一遍,真出问题时还多一条误导性的线索。 */
-    if target_os == "windows" {
-        println!("cargo:rustc-link-search=native={}", libdir.display());
-        println!("cargo:rustc-link-lib=dylib=mpv");
-    }
-    /* ★ 非 Windows **故意不发 link-lib**:那边 libmpv 是运行时 dlopen 的
-       (见 src/mpv.rs 的 `mod ffi`)。发了的话就又把 libmpv.so 变成链接期硬依赖 ——
-       构建机得装 libmpv-dev,而且 ELF 里会留下一条写死的 DT_NEEDED soname,
-       dlopen 那套「一个包适配所有发行版」的意义当场归零。 */
+    /* ★ libmpv 的链接/DLL 拷贝已搬到 crates/mpv/build.rs ——
+       `#[link(name = "mpv")]` 在那个 crate 里,link-search 就得由它自己发。
+       留在这里的话,任何**不**依赖 apps/desktop 的包(比如 apps/android)在 Windows 上
+       一链接就是 LNK1181 找不到 mpv.lib。 */
 
     /* Linux:把 $ORIGIN 写进 rpath,让**可执行文件同级目录**优先于系统库。
        这是绿色包分发在 Linux 上的等价物:包里放一份 libmpv.so.2 就能自带一个已知可用的
@@ -42,25 +32,6 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
         println!("cargo:rustc-link-arg-bins=/EXPORT:NvOptimusEnablement");
         println!("cargo:rustc-link-arg-bins=/EXPORT:AmdPowerXpressRequestHighPerformance");
-    }
-
-    /* 把 libmpv-2.dll 拷到产物目录(target/<profile>/),让 exe 运行时能找到。
-       ★ 这是 DLL 进发行包的**唯一**机制,打包脚本和 CI 都从 target/<profile>/ 取它。
-         tauri.conf.json 里原先还挂着 `"resources": ["libmpv/libmpv-2.dll"]` —— 那是条
-         死配置(bundle.active=false 根本不走 bundler),但 tauri_build **仍然会校验
-         resources 路径是否存在**,于是在没有该 DLL 的 Linux 构建机上直接把 build.rs
-         干失败:`resource path libmpv/libmpv-2.dll doesn't exist`。已删,别照着
-         bundler 文档再加回来。
-       Linux 上没有这个文件,整块跳过。 */
-    if target_os == "windows" {
-        if let Ok(out) = std::env::var("OUT_DIR") {
-            // OUT_DIR = target/<profile>/build/<pkg>/out  -> 上溯 3 层到 target/<profile>
-            if let Some(profile_dir) = Path::new(&out).ancestors().nth(3) {
-                let src = libdir.join("libmpv-2.dll");
-                let dst = profile_dir.join("libmpv-2.dll");
-                let _ = std::fs::copy(&src, &dst);
-            }
-        }
     }
 
     /* Sentry 的 release 名要和 pack-portable.ps1 打出的 zip 版本**是同一个数**,

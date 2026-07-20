@@ -17,6 +17,12 @@ serde_json = "1" # 与桌面同源:版本的唯一权威是 tauri.conf.json,buil
 [dependencies]
 # 唯一的业务依赖。**不依赖 apps/desktop** —— 那个包绑死 libmpv/Win32/X11,交叉编译第一步就死。
 linplayer-core = { path = "../../crates/core" }
+# libmpv 封装 + 渲染面。和桌面**同一份**(2026-07-20 从 apps/desktop 提出来的),
+# 安卓走的是里面那条 dlopen 分支 —— 与 Linux 一字不差。
+linplayer-mpv = { path = "../../crates/mpv" }
+# mpv 的告警走标准 log 门面。没装 logger 时是空操作,不会panic;
+# tauri 的 android binding 会装 android_logger,所以真机上落 logcat。
+log = "0.4"
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -32,3 +38,8 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 # spawn_blocking(imgcache 把同步读写盘挪出 async worker)+ timeout(线路探测)。
 tokio = { version = "1", features = ["sync", "rt", "time"] }
+
+# SurfaceView 的 Surface 要跨 JNI 传给 mpv,并且必须做成**全局引用**
+# (局部引用出了那次 native 调用就失效,mpv 之后拿它去 ANativeWindow_fromSurface 会崩)。
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"

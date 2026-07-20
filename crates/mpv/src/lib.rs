@@ -1,6 +1,12 @@
-// 最小 libmpv 封装。
-// 合成方案:mpv 渲染进一个【独立顶层无边框窗口】,垫在【透明 Tauri 窗口】正下方并保持对齐。
-// 顶层↔顶层 DWM 能正常合成(子窗口无法进逐像素透明窗口,故不能用子窗口)。
+// 最小 libmpv 封装。桌面壳与安卓壳共用同一份。
+//
+// 渲染面在三端是同一个概念、不同的东西 —— mpv 的 `wid` 选项:
+//   Windows / Linux:一个【独立顶层无边框窗口】,垫在【透明 Tauri 窗口】正下方并保持对齐。
+//     顶层↔顶层 DWM/合成器能正常合成(子窗口无法进逐像素透明窗口,故不能用子窗口)。
+//   Android:一个 SurfaceView 的 Surface(jobject),垫在透明 WebView 底下。
+//     这里没有「对齐」这回事 —— SurfaceView 铺满 Activity,所以 sync 是空操作。
+//
+// 三端的差别被关进下面的 `mod overlay`,Player 本身不分平台。
 #![allow(non_camel_case_types)]
 
 use linplayer_core::media::Track;
@@ -214,7 +220,22 @@ pub fn mpv_log_path() -> std::path::PathBuf {
     linplayer_core::paths::logs_dir().join("mpv.log")
 }
 
-use crate::poclog;
+/* 日志出口。原先直接调 `crate::poclog`(桌面壳里的函数),提成共享 crate 后
+   两端各有各的日志落点,所以改成宿主启动时插一个钩子进来。
+   ★ 不插也能跑(默认丢弃)—— 但下面那些「静默失效」的告警就看不见了,
+     而本文件的注释反复强调那类问题只能靠回读日志发现。两个壳都记得插。 */
+static LOG: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// 宿主启动时调一次,把自己的日志函数接进来。
+pub fn set_logger(f: fn(&str)) {
+    let _ = LOG.set(f);
+}
+
+fn poclog(msg: &str) {
+    if let Some(f) = LOG.get() {
+        f(msg);
+    }
+}
 
 /// mpv 编译好的 shader 产物。放数据根而不是 %TEMP% —— 它就是要跨次启动活着才有意义,
 /// 被临时目录清理掉就等于没缓存。能重建,故归 cache/。
@@ -427,8 +448,80 @@ mod overlay {
     }
 }
 
-// 其它平台(目前不做):给出可编译的空实现,免得 mpv.rs 变成 Win/Linux 专属文件。
-#[cfg(not(any(windows, target_os = "linux")))]
+/* Android:渲染面不是我们建的窗口,而是 Java 层 SurfaceView 给的 Surface。
+
+   ★ 关键差别:桌面上 create() 是**同步造一个窗口**,安卓上 Surface 由系统在
+     surfaceCreated 回调里给,时机不由我们定。所以这里只是**取**壳先前存进来的那个,
+     没准备好就返回 0 —— Player::new 会把 0 当作「没有渲染面」直接报错,
+     正是我们要的行为(带着 wid=0 往下走,mpv 会自己弹窗,那在安卓上是彻底的黑屏)。
+
+   ★ jobject 必须是 **全局引用**,由 apps/android 的 JNI 那侧负责 NewGlobalRef ——
+     局部引用出了那次 native 调用就失效,mpv 之后拿它去 ANativeWindow_fromSurface
+     会崩在一个和这里毫无关系的地方。 */
+#[cfg(target_os = "android")]
+mod overlay {
+    use std::sync::atomic::{AtomicIsize, Ordering};
+
+    static SURFACE: AtomicIsize = AtomicIsize::new(0);
+
+    /// 由壳在 surfaceCreated / surfaceDestroyed 时调用。传 0 表示 Surface 没了。
+    pub fn set_surface(ptr: isize) {
+        SURFACE.store(ptr, Ordering::SeqCst);
+    }
+
+    pub fn create() -> isize {
+        SURFACE.load(Ordering::SeqCst)
+    }
+
+    /// SurfaceView 铺满 Activity,没有「把视频窗对齐到 UI 窗」这回事。
+    pub fn sync(_v: isize, _t: isize, _x: i32, _y: i32, _w: i32, _h: i32) {}
+}
+
+/// 安卓壳把 SurfaceView 的 Surface(**全局引用**)交进来。见 `mod overlay` 的注释。
+#[cfg(target_os = "android")]
+pub fn set_android_surface(ptr: isize) {
+    overlay::set_surface(ptr);
+}
+
+/// 安卓壳把 JavaVM 指针交进来。**必须在起播前调一次**,否则视频起不来。
+///
+/// ★ 一开始我以为靠 Java 侧 `System.loadLibrary("mpv")` 触发 `JNI_OnLoad` 就够了 ——
+///   **对这个 libmpv 二进制是错的**。实测(llvm-nm -D,media-kit/libmpv-android-video-build
+///   v1.1.11 的 full-arm64-v8a):
+///     JNI_OnLoad          → **没有导出**
+///     av_jni_set_java_vm  → 有
+///   也就是说它把「登记 JavaVM」这一步留给宿主自己调。不调的表现是最难查的那一种:
+///   库加载成功、mpv_create 成功、loadfile 也成功,然后 mediacodec 解码器和
+///   gpu-context=android 拿不到 JNI 环境 —— **黑屏,不报错**。
+///
+/// 换 libmpv 版本时请重新 `llvm-nm -D` 确认这两个符号的有无再改这里,别照抄结论。
+#[cfg(target_os = "android")]
+pub fn set_android_java_vm(vm: *mut c_void) {
+    // ffmpeg 原型:int av_jni_set_java_vm(void *vm, void *log_ctx);
+    type FnSetVm = unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int;
+    unsafe {
+        // 与 mod ffi 里 dlopen 的是同一个库,拿到的是同一个句柄,不会加载两份。
+        let Ok(lib) = libloading::Library::new("libmpv.so") else {
+            poclog("警告: dlopen libmpv.so 失败,无法登记 JavaVM");
+            return;
+        };
+        match lib.get::<FnSetVm>(b"av_jni_set_java_vm\0") {
+            Ok(f) => {
+                let rc = f(vm, std::ptr::null_mut());
+                if rc < 0 {
+                    poclog(&format!("警告: av_jni_set_java_vm 返回 {rc},硬解/渲染可能起不来"));
+                }
+            }
+            // 没有这个符号的 libmpv 说明是另一种构建(靠 JNI_OnLoad 自己抓)。不是错误。
+            Err(_) => poclog("提示: libmpv 无 av_jni_set_java_vm,按 JNI_OnLoad 自登记处理"),
+        }
+        // ★ 别让 lib 在这里 drop —— drop = dlclose,会把上面刚登记好的东西一起卸掉。
+        std::mem::forget(lib);
+    }
+}
+
+// 其它平台(目前不做):给出可编译的空实现,免得本文件变成 Win/Linux/Android 专属。
+#[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
 mod overlay {
     pub fn create() -> isize {
         0
@@ -464,7 +557,13 @@ impl Player {
            独立窗口** —— 用户看到的是「莫名其妙多出来一个播放器窗口,还不受 UI 控制」,
            而不是一条能读懂的错误。Linux 上没 X11(纯 Wayland 没 XWayland)正好走这条路。 */
         if video == 0 {
-            return Err("创建视频窗口失败(Linux 上通常是连不上 X11 显示服务器)".into());
+            return Err(if cfg!(target_os = "android") {
+                /* 安卓上 0 = Surface 还没就绪(或已销毁),不是「建窗失败」。
+                   最常见的是在 surfaceCreated 之前就按了播放。 */
+                "视频渲染面未就绪(SurfaceView 的 Surface 还没创建)".into()
+            } else {
+                "创建视频窗口失败(Linux 上通常是连不上 X11 显示服务器)".to_string()
+            });
         }
         unsafe {
             let ctx = mpv_create();
@@ -474,6 +573,12 @@ impl Player {
                    「mpv_create 失败」去查播放器设置。 */
                 return Err(if cfg!(windows) {
                     "mpv_create 失败".into()
+                } else if cfg!(target_os = "android") {
+                    /* 安卓上 dlopen 失败几乎只有一个原因:APK 里没打进 libmpv.so
+                       (jniLibs 是 gitignore 的,靠 CI 拉取 —— 那一步没跑就是这个症状)。
+                       别让用户对着「没装 libmpv,请 apt install」发呆。 */
+                    "mpv_create 失败(APK 里没有 libmpv.so —— 构建时未拉取 jniLibs)"
+                        .to_string()
                 } else {
                     "mpv_create 失败(通常是没装 libmpv:Debian/Ubuntu `libmpv2`、\
                      Fedora `mpv-libs`、Arch `mpv`;或把 libmpv.so.2 放到程序同级目录)"
@@ -486,7 +591,10 @@ impl Player {
                 mpv_set_option_string(ctx, n.as_ptr(), v.as_ptr());
             };
             set("wid", &video.to_string());
-            set("vo", "gpu-next");
+            /* ★ 安卓不用 gpu-next。它要 Vulkan/更新的 libplacebo,机顶盒上的 GPU 驱动
+               参差不齐,起不来是**黑屏而不是报错**。gpu + gpu-context=android 是
+               mpv-android 多年验证过的组合,先要能出画面。 */
+            set("vo", if cfg!(target_os = "android") { "gpu" } else { "gpu-next" });
             /* gpu-context 只在 Windows 上写死 d3d11 —— 那边要它才走得通独显钉定那条链
                (见 [[hybrid-gpu-must-pin-dgpu]])。
                Linux 上**故意不设**:让 mpv 自己在 x11egl / x11vk / wayland 之间挑。
@@ -495,8 +603,27 @@ impl Player {
             if cfg!(windows) {
                 set("gpu-context", "d3d11");
             }
-            // auto-safe 两端通吃:Win 挑 d3d11va,Linux 挑 vaapi/nvdec,挑不到就软解。
-            set("hwdec", "auto-safe");
+            /* 安卓必须显式指定 —— mpv 的自动挑选在没有 X11/Wayland 的环境里挑不出东西。 */
+            if cfg!(target_os = "android") {
+                set("gpu-context", "android");
+                /* ★ 声音。安卓上不设 ao 是「有画面没声音」的经典成因:
+                   mpv 的 ao 自动列表里 pulse/alsa 全都试不通,最后落到 null,
+                   而 **null 是成功的**,所以既不报错也没声音。
+                   audiotrack 是安卓唯一真正可用的那个,写死它。 */
+                set("ao", "audiotrack");
+                /* mediacodec-copy 而不是 mediacodec:后者是直出 Surface 的零拷贝路径,
+                   和我们自己的 SurfaceView 抢同一块面,机顶盒上表现为花屏/黑屏;
+                   -copy 把帧拷回来交给 vo,慢一点但稳。先要能放,再谈零拷贝。 */
+                set("hwdec", "mediacodec-copy");
+                /* ★ 文本字幕(SRT/ASS)在安卓上不显示 = libass 找不到任何字体。
+                   安卓没有 fontconfig,不指这一条就是**静默不画字幕**。
+                   这条在旧 Flutter 版上踩过并记进了 [[android-mpv-subtitle-fonts]],
+                   换栈之后是同一个 libass,坑原样还在 —— 直接带上,别再踩一次。 */
+                set("sub-fonts-dir", "/system/fonts");
+            } else {
+                // auto-safe 两端通吃:Win 挑 d3d11va,Linux 挑 vaapi/nvdec,挑不到就软解。
+                set("hwdec", "auto-safe");
+            }
             set("keep-open", "yes");
             set("force-window", "yes");
             set("osc", "no");

@@ -17,7 +17,7 @@ target/
 packaging/
 
 # libmpv 大二进制(117MB dll):本地构建输入,不入普通库;CI 现拉(见 .github/workflows/build.yml)
-apps/desktop/libmpv/*.dll
+crates/mpv/libmpv/*.dll
 
 # 绿色包运行时数据(exe 同级 userdata/);跑 dev 构建时会出现在 target/ 下,别入库
 userdata/
@@ -110,3 +110,11 @@ apps/android/gen/android/app/src/main/jniLibs/
 **/*.aab
 **/*.keystore
 **/*.jks
+
+# apps/android 在**宿主**平台上编译时(`cargo test -p linplayer-android` 的命令对账
+# 单测就是这么跑的,CI 亦然)tauri-build 会顺手吐出宿主平台的 schema。安卓包一个字节
+# 都用不到,纯噪音 —— 只留 android/mobile 两个。
+apps/android/gen/schemas/desktop-schema.json
+apps/android/gen/schemas/windows-schema.json
+apps/android/gen/schemas/linux-schema.json
+apps/android/gen/schemas/macos-schema.json

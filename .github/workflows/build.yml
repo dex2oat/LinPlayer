@@ -143,8 +143,8 @@ jobs:
           7z x mpv-dev.7z -ompv-dev | Out-Null
           $dll = Get-ChildItem mpv-dev -Recurse -Filter libmpv-2.dll | Select-Object -First 1
           if (-not $dll) { throw "压缩包里没有 libmpv-2.dll" }
-          Copy-Item $dll.FullName apps/desktop/libmpv/libmpv-2.dll -Force
-          $size = (Get-Item apps/desktop/libmpv/libmpv-2.dll).Length
+          Copy-Item $dll.FullName crates/mpv/libmpv/libmpv-2.dll -Force
+          $size = (Get-Item crates/mpv/libmpv/libmpv-2.dll).Length
           Write-Host "libmpv-2.dll size: $size"
           if ($size -lt 60MB) { throw "libmpv-2.dll 只有 $size 字节,不是完整版" }
 
@@ -219,7 +219,7 @@ jobs:
           $rel = "target/release"
           # mainBinaryName 已让 tauri 直接产出 LinPlayer.exe(crate 名仍是 app,故 pdb 还叫 app.pdb)。
           $exe = "$rel/LinPlayer.exe"
-          $dll = "$rel/libmpv-2.dll"   # build.rs 会把它从 apps/desktop/libmpv/ 拷过来
+          $dll = "$rel/libmpv-2.dll"   # build.rs 会把它从 crates/mpv/libmpv/ 拷过来
           foreach ($f in @($exe, $dll)) {
             if (-not (Test-Path $f)) { throw "缺少产物 $f" }
           }
@@ -262,7 +262,7 @@ jobs:
 
       # Tauri v2 在 Linux 上是 GTK3 + WebKitGTK 4.1(不是 4.0,别装错包名)。
       #
-      # ★ 这里**故意不装 libmpv-dev**:libmpv 是运行时 dlopen 的(见 apps/desktop/src/mpv.rs
+      # ★ 这里**故意不装 libmpv-dev**:libmpv 是运行时 dlopen 的(见 crates/mpv/src/lib.rs
       #   的 `mod ffi`)。装了反而有害 —— 一旦哪天有人给 build.rs 加回 link-lib,
       #   构建机上有 .so 就会「碰巧编过」,而 ELF 里被钉进一条 libmpv.so.1 的 DT_NEEDED,
       #   包发到 Ubuntu 24.04(只有 libmpv.so.2)上直接起不来。让构建机没有这个库,
@@ -547,6 +547,41 @@ jobs:
             (cd apps/android && npx tauri android init --skip-targets-install)
           else
             echo "gen/android 已在仓库中,跳过 init"
+          fi
+
+      # ★ libmpv.so 不入库(仓库红线:脚本能拉的别入库),jniLibs/ 整个是 gitignore 的。
+      #   所以**这一步不跑就没有播放器** —— APK 照常构建、照常绿,装上去按播放才报
+      #   「APK 里没有 libmpv.so」。下面有校验兜底,别把它删了当优化。
+      #
+      #   来源与版本:media-kit/libmpv-android-video-build v1.1.11 的 full 变体。
+      #   * 选 full 不选 default:full 才带 PGS 图形字幕(旧 Flutter 版就是为这个换的,
+      #     见历史 commit 35a81e1e)。
+      #   * 这个 jar 里还有个 libmediakitandroidhelper.so —— 那是 media_kit(Flutter)
+      #     专用的胶水,我们不用,只取 libmpv.so。
+      - name: Fetch libmpv (arm64)
+        run: |
+          set -euo pipefail
+          VER="v1.1.11"
+          DEST="apps/android/gen/android/app/src/main/jniLibs/arm64-v8a"
+          mkdir -p "$DEST"
+          curl -fsSL -o /tmp/libmpv.jar \
+            "https://github.com/media-kit/libmpv-android-video-build/releases/download/$VER/full-arm64-v8a.jar"
+          unzip -o -j /tmp/libmpv.jar "lib/arm64-v8a/libmpv.so" -d "$DEST"
+          ls -lh "$DEST/libmpv.so"
+          # ★ 校验它确实是 arm64 ELF 而不是一张 LFS 指针/错误页。
+          #   旧仓库在这条上栽过:APK 里是文本指针,运行时 UnsatisfiedLinkError
+          #   报 "bad ELF magic 76657273"(那其实是 "vers"),构建全程是绿的。
+          head -c 4 "$DEST/libmpv.so" | od -An -tx1 | grep -q "7f 45 4c 46" \
+            || { echo "::error::libmpv.so 不是 ELF"; head -c 64 "$DEST/libmpv.so" | od -c | head; exit 1; }
+          # ★ 这个二进制没有 JNI_OnLoad,靠 av_jni_set_java_vm 登记 JavaVM
+          #   (Rust 侧 crates/mpv 的 set_android_java_vm 依赖它)。换版本时这条会先红。
+          NM=$(find "$ANDROID_NDK_ROOT" "$ANDROID_NDK_HOME" -name 'llvm-nm' -type f 2>/dev/null | head -1)
+          if [ -n "$NM" ]; then
+            "$NM" -D --defined-only "$DEST/libmpv.so" | grep -q ' av_jni_set_java_vm$' \
+              || { echo "::error::libmpv.so 没有 av_jni_set_java_vm —— 换版本了?看 crates/mpv 的 set_android_java_vm 注释"; exit 1; }
+            echo "av_jni_set_java_vm 存在 ✓"
+          else
+            echo "::warning::找不到 llvm-nm,跳过符号校验"
           fi
 
       # ⚠️ 只写 keystore.properties **还不够**:Tauri 生成的 build.gradle.kts 默认不读它,
