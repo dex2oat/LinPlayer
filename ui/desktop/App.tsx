@@ -101,11 +101,16 @@ type Panel = null | "eps" | "audio" | "sub" | "danmaku" | "super" | "line" | "ve
 /** 竖条弹出态:kind 决定调音量还是亮度,x 是按钮中心(贴着按钮弹,草稿 21)。 */
 type VBar = null | { kind: "vol" | "bright"; x: number };
 
-/** 超分滤镜家族分组(核层 family 键 → 显示标题)。用户 2026-07-16:三种滤镜,每种六档。 */
-const SHADER_FAMILIES: [string, string][] = [
-  ["Anime4K", "Anime4K · 动漫特化"],
-  ["FSR", "AMD FSR · 通用"],
-  ["NVIDIA", "NVIDIA · NIS"],
+/** 超分滤镜家族分组 `[核层 family 键, 标题, 一句话说明]`。
+ *  ★ 第一个字段必须和核层 `shaders::levels()` 的家族名**逐字一致** —— 对不上那一整族
+ *    会从面板里静默消失(核层有测试钉家族名,这边有 api_contract 测试对齐)。
+ *  用户 2026-07-20:「其实清晰最重要的是锐化」→ 锐化族排最前,它是日常首选;
+ *  放大族(Anime4K/FSR/NIS)全部要输出大于源 1.2 倍,窗口里播原生 1080p 一帧都不跑。 */
+const SHADER_FAMILIES: [string, string, string][] = [
+  ["Sharpen", "锐化 · 清晰度首选", "窗口/全屏都生效 · 开销最低"],
+  ["Anime4K", "Anime4K · 动漫特化", "去噪窗口可用 · 放大需全屏"],
+  ["FSR", "AMD FSR · 通用", "锐化窗口可用 · 放大需全屏"],
+  ["NVIDIA", "NVIDIA · NIS", "锐化窗口可用 · 放大需全屏"],
 ];
 /** 草稿倍速面板「常用」档位。 */
 const SPEEDS = [0.5, 1.0, 1.5, 2.0, 3.0];
@@ -248,6 +253,10 @@ export default function App() {
   // 超分:档位清单来自核层 shader_levels(),不再前端写死
   const [shaderList, setShaderList] = useState<ShaderLevel[]>([]);
   const [shaderLv, setShaderLv] = useState("off");
+  /* 当前展开的滤镜家族。档位从 19 涨到 26 之后平铺会把面板撑到要滚动
+     (用户 2026-07-20:「这样的话 就不能直接展示了 要叠起来 用户点击了某款超分模型再展开」)。
+     null = 全部收起;收起时家族行仍显示本族当前选中的档位,不展开也看得见。 */
+  const [shFam, setShFam] = useState<string | null>(null);
   /* 滤镜强度 0~100(核层落盘,起播后由 get_prefs 覆盖成真值)。
      用户实测「强度有点低」—— 因为此前一个参数都没设,一直在吃 shader 自带默认(CAS STR=0.5)。 */
   /* 字幕样式:核层无回读命令,故记前端态;初值必须对齐 **libmpv 的真默认**
@@ -1684,17 +1693,31 @@ export default function App() {
                           <span className="rad" /> {name}
                         </button>
                       ))}
-                      {/* 三家族各六档:Anime4K(动漫)/ FSR(通用)/ NVIDIA(NIS)。 */}
-                      {SHADER_FAMILIES.flatMap(([fam, label]) => {
+                      {/* 四家族折叠(用户 2026-07-20:「要叠起来 用户点击了某款超分模型再展开」)。
+                          家族行本身**不是**按钮:点标题右侧的「当前档 ▾」才展开,和「更多」面板里
+                          画面比例/定时播放用的是同一套 .p-li static + .rt.sel + .p-li.sub 惯例。
+                          收起状态下右侧照样显示本族已选中的档位,不用逐个展开去找。 */}
+                      {SHADER_FAMILIES.flatMap(([fam, label, hint]) => {
                         const items = shaderList.filter(([, , f]) => f === fam);
                         if (items.length === 0) return [];
+                        const cur = items.find(([id]) => id === shaderLv);
                         return [
-                          <div className="grp-lab" key={`lab-${fam}`}>{label}</div>,
-                          ...items.map(([id, name]) => (
-                            <button key={id} className={`p-li${shaderLv === id ? " on" : ""}`} onClick={() => applyShader(id)}>
-                              <span className="rad" /> {name}
-                            </button>
-                          )),
+                          <div className={`p-li static${cur ? " on" : ""}`} key={`h-${fam}`}>
+                            <span className="col">
+                              <span className="t1">{label}</span>
+                              <span className="t2">{hint}</span>
+                            </span>
+                            <span className="rt sel" onClick={() => setShFam((f) => (f === fam ? null : fam))}>
+                              {cur?.[1] ?? "未启用"} ▾
+                            </span>
+                          </div>,
+                          ...(shFam === fam
+                            ? items.map(([id, name]) => (
+                              <button key={id} className={`p-li sub${shaderLv === id ? " on" : ""}`} onClick={() => applyShader(id)}>
+                                <span className="rad" /> {name}
+                              </button>
+                            ))
+                            : []),
                         ];
                       })}
                     </>

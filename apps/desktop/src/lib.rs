@@ -4790,6 +4790,76 @@ mod api_contract_tests {
     ///
     /// 这条把占位项钉成一份白名单:接好了一个就从名单里删一个,新加占位必须显式登记。
     /// 名单和代码对不上就红,不用再靠人眼扫 UI。
+    /// 打包脚本必须是**纯 ASCII**。
+    ///
+    /// 它自己的文件头就写着 "ASCII-only on purpose",但没有任何东西拦着人违反 ——
+    /// 2026-07-19 重构时加了一行中文注释,而该文件**没有 BOM**:Windows PowerShell 5.1
+    /// 把无 BOM 的 UTF-8 当 GBK 解,中文行的字节错位后**把行尾换行一起吃掉**,
+    /// 紧跟其后的 `$root = Split-Path -Parent $PSScriptRoot` 整行被吸进注释里
+    /// → `$repoRoot` 恒为 null → `npm run pack` 一上来就死在 Join-Path。
+    ///
+    /// 为什么拖到现在才发现:CI 是**自己组包**的(df89d598),不跑这个脚本 —— CI 全绿,
+    /// 只有本地出包是坏的。所以这条守卫必须在 cargo test 里,不能指望构建流水线。
+    /// 见 [[powershell-gbk-utf8-corruption]]。
+    ///
+    /// ⚠️ 这个脚本**被 .gitignore 排除、不在仓库里**(df89d598:CI 自己组包,不依赖它)。
+    /// 所以这里**不能用 `include_str!`** —— 那是编译期读文件,在干净 clone / CI 上直接
+    /// 「file not found」把 `cargo test --workspace` 编译都跑不起来(差点这么推上去)。
+    /// 改成运行时读:本地有这个脚本的人受保护,没有的环境静默跳过。
+    #[test]
+    fn pack_script_stays_ascii_only() {
+        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/pack-portable.ps1");
+        let Ok(s) = std::fs::read_to_string(p) else {
+            return; // 脚本不在仓库里(CI/干净 clone),没什么可守的
+        };
+        if let Some((i, c)) = s.char_indices().find(|(_, c)| !c.is_ascii()) {
+            let line = s[..i].lines().count();
+            panic!(
+                "scripts/pack-portable.ps1 第 {line} 行出现非 ASCII 字符 {c:?} —— \
+                 该文件无 BOM,PS 5.1 会按 GBK 解码并吞掉紧随其后的那行代码(实测把 $root 的赋值\
+                 整行吃掉,npm run pack 直接死)。注释请写英文,或给文件加 UTF-8 BOM 后再改这条测试。"
+            );
+        }
+    }
+
+    /// 超分面板按**家族**折叠,分组表写在 App.tsx 的 `SHADER_FAMILIES` 里,而档位的家族名
+    /// 是核层 `shaders::levels()` 给的。两边对不上**不报错**:核层多一个家族而前端没登记,
+    /// 那一整族档位就从面板里静默消失(2026-07-20 加「锐化」族时正是这个风险 ——
+    /// 新族有 7 档,漏登记就等于白做)。反过来前端多写一个,则渲染出一个空标题行。
+    ///
+    /// TS 那边没有测试环境,继续让 Rust 当这份跨语言契约的守门人(同下面那条 soon() 白名单)。
+    #[test]
+    fn shader_family_groups_match_the_core_level_table() {
+        let app_tsx = include_str!("../../../ui/desktop/App.tsx");
+        let body = app_tsx
+            .split_once("const SHADER_FAMILIES")
+            .expect("App.tsx 里找不到 SHADER_FAMILIES —— 改名了就同步这条测试")
+            .1;
+        let body = body.split_once("];").expect("SHADER_FAMILIES 没有结尾 ];").0;
+        // 每行形如 ["Sharpen", "标题", "说明"],取第一个带引号的串 = 家族键
+        let mut ui: Vec<&str> = body
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("[\""))
+            .filter_map(|r| r.split('"').next())
+            .collect();
+        ui.sort_unstable();
+        assert!(!ui.is_empty(), "没从 SHADER_FAMILIES 解析出任何家族名 —— 先查它是不是换了写法");
+
+        let mut core: Vec<&str> = crate::shaders::levels()
+            .iter()
+            .map(|(_, _, f)| *f)
+            .filter(|f| !f.is_empty()) // "off" 档没有家族
+            .collect();
+        core.sort_unstable();
+        core.dedup();
+
+        assert_eq!(
+            core, ui,
+            "核层家族 {core:?} 与 App.tsx 的 SHADER_FAMILIES {ui:?} 对不上 —— \
+             核层有而前端没有的那一族,它的所有档位会从超分面板里静默消失"
+        );
+    }
+
     #[test]
     fn player_panel_placeholder_switches_are_declared() {
         let app_tsx = include_str!("../../../ui/desktop/App.tsx");

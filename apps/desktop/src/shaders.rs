@@ -53,6 +53,34 @@ const FILES: &[(&str, &str)] = &[
         "Anime4K_Denoise_Bilateral_Mode.glsl",
         include_str!("../shaders/Anime4K_Denoise_Bilateral_Mode.glsl"),
     ),
+    /* —— 锐化专精(2026-07-20 用户:「其实清晰最重要的是锐化,锐化是最能提升看起来清晰的程度的」)——
+       全部 `//!WHEN <参数>` 门槛,窗口模式照跑;全部 HOOK LUMA(只动亮度,不碰色度)= 便宜。
+       它们的**自带默认都很保守**(Adaptive STR=1.0 / FineSharp SSTR=0.5 / aWarpSharp2 STR=4.0),
+       正是「开到最大档也只有一点点变清晰」的来源 —— 强度在 preset() 里按档位拉开。 */
+    (
+        "Adaptive_sharpen_lite_luma_RT.glsl",
+        include_str!("../shaders/Adaptive_sharpen_lite_luma_RT.glsl"),
+    ),
+    (
+        "FineSharp_RT.glsl",
+        include_str!("../shaders/FineSharp_RT.glsl"),
+    ),
+    (
+        "aWarpSharp2_RT.glsl",
+        include_str!("../shaders/aWarpSharp2_RT.glsl"),
+    ),
+    // BCAS = 双边 CAS:锐化的同时按局部方差压噪点,比裸 CAS 更敢开大。HOOK MAIN。
+    (
+        "AMD_BCAS_RT.glsl",
+        include_str!("../shaders/AMD_BCAS_RT.glsl"),
+    ),
+    /* ArtCNN C4F16:luma-only 的 4 层 CNN 放大器,PlayKit 里「清晰/开销」比最好的一档之一。
+       单文件 213K(权重全写在源里),尺寸门控写法是 `OUTPUT.w LUMA.w 1.200 * >`
+       —— 和 Anime4K 的 `OUTPUT.w MAIN.w / 1.200 >` 数学等价,同为 1.2 倍闸。 */
+    (
+        "ArtCNN_C4F16.glsl",
+        include_str!("../shaders/ArtCNN_C4F16.glsl"),
+    ),
     // —— NVIDIA Image Scaling(NIS,取自 hooke007/mpv_PlayKit)——
     // NVSharpen:纯锐化,//!WHEN SHARP 是参数,窗口模式也跑;NVScaler:放大+锐化,//!WHEN OUTPUT 挑尺寸。
     (
@@ -251,6 +279,42 @@ fn preset(level: &str) -> Option<Preset> {
             opts: "SHARP=0.50",
         },
 
+        /* ═══════════ 家族四:锐化专精(2026-07-20 新增)═══════════
+           用户原话:「其实清晰最重要的是锐化 锐化是最能提升看起来清晰的程度的」
+           「参考人家的滤镜是怎么加的清晰且不吃性能的」。
+           这一族**全部窗口模式就生效**(门槛是参数不是尺寸)、**全部 luma-only**(不碰色度,便宜),
+           且强度一律开到远高于 shader 自带默认 —— 那个默认正是「开到最大也只有一点点」的病根。
+           ⚠️ 每档只挂**一个**锐化器:Adaptive / aWarpSharp2 / BCAS 都叫 `STR`,而
+           `glsl-shader-opts` 是**全局**的 —— 叠在同一档里会共用一个值、量纲还不同
+           (0~2 / -20~20 / 0~1),必然串味且不报错。有测试钉住这条。 */
+        // Adaptive_sharpen:按局部对比自适应,过冲小、不放大噪点。STR 0~2,自带默认才 1.0。
+        "sh_ada_l" => Preset { files: &["Adaptive_sharpen_lite_luma_RT.glsl"], opts: "STR=0.70" },
+        "sh_ada_m" => Preset { files: &["Adaptive_sharpen_lite_luma_RT.glsl"], opts: "STR=1.30" },
+        "sh_ada_h" => Preset { files: &["Adaptive_sharpen_lite_luma_RT.glsl"], opts: "STR=1.90" },
+        // FineSharp:RemoveGrain 系,先柔化再锐化,细节多且不易起噪。SSTR 0~8,自带默认才 0.5。
+        "sh_fine_m" => Preset { files: &["FineSharp_RT.glsl"], opts: "SSTR=2.50" },
+        "sh_fine_h" => Preset { files: &["FineSharp_RT.glsl"], opts: "SSTR=5.00" },
+        // aWarpSharp2:不加对比度,靠**把像素往边缘推**收紧线条 —— 动漫线稿提升最明显。
+        "sh_warp" => Preset { files: &["aWarpSharp2_RT.glsl"], opts: "STR=10.00" },
+        // BCAS:双边 CAS,锐化同时按局部方差压噪,比裸 CAS 敢开到顶。
+        "sh_bcas" => Preset { files: &["AMD_BCAS_RT.glsl"], opts: "STR=1.00,SIGMA=0.30" },
+
+        /* ArtCNN C4F16 放大(尺寸门控,全屏才跑)。放 Anime4K 族:同为动漫向 luma CNN,
+           但比 Upscale_CNN_x2_M 清晰、比 VL 便宜 —— 用户要的「清晰且不吃性能」就是这一档。 */
+        "ak_up_artcnn" => Preset {
+            files: &["Anime4K_Clamp_Highlights.glsl", "ArtCNN_C4F16.glsl"],
+            opts: "",
+        },
+        // 放大 + 锐化收尾:CNN 放大后再补一刀 Adaptive,全屏下最清晰的一档。
+        "ak_up_artcnn_sh" => Preset {
+            files: &[
+                "Anime4K_Clamp_Highlights.glsl",
+                "ArtCNN_C4F16.glsl",
+                "Adaptive_sharpen_lite_luma_RT.glsl",
+            ],
+            opts: "STR=1.30",
+        },
+
         _ => return None, // off / 未知 = 关
     })
 }
@@ -272,6 +336,8 @@ pub fn levels() -> Vec<(&'static str, &'static str, &'static str)> {
         ("ak_up_m", "放大 · CNN M", "Anime4K"),
         ("ak_up_dn", "放大+去噪 · CNN M", "Anime4K"),
         ("ak_up_vl", "放大去噪 · CNN VL · 壮机", "Anime4K"),
+        ("ak_up_artcnn", "放大 · ArtCNN · 清晰轻量", "Anime4K"),
+        ("ak_up_artcnn_sh", "放大+锐化 · ArtCNN · 最清晰", "Anime4K"),
         // —— AMD FSR:通用锐化 + FSR1 放大 ——
         ("fsr_sharp_l", "锐化 · 轻", "FSR"),
         ("fsr_sharp_m", "锐化 · 推荐", "FSR"),
@@ -286,6 +352,15 @@ pub fn levels() -> Vec<(&'static str, &'static str, &'static str)> {
         ("nv_up", "放大 · NIS", "NVIDIA"),
         ("nv_up_h", "放大+锐化 · NIS", "NVIDIA"),
         ("nv_up_dn", "放大+锐化+去噪 · NIS", "NVIDIA"),
+        /* —— 锐化专精:窗口/全屏都生效,开销最低,用户点名「最能提升看起来的清晰度」——
+              放最后一族但它才是日常首选,UI 分组标题里写明「窗口也生效」。 */
+        ("sh_ada_l", "自适应锐化 · 轻", "Sharpen"),
+        ("sh_ada_m", "自适应锐化 · 推荐", "Sharpen"),
+        ("sh_ada_h", "自适应锐化 · 强", "Sharpen"),
+        ("sh_fine_m", "精细锐化 · 推荐", "Sharpen"),
+        ("sh_fine_h", "精细锐化 · 强", "Sharpen"),
+        ("sh_warp", "线条锐化 · 动漫线稿", "Sharpen"),
+        ("sh_bcas", "双边锐化 BCAS · 强", "Sharpen"),
     ]
 }
 
@@ -379,23 +454,101 @@ mod tests {
         }
     }
 
-    /// 每档的参数值必须落在 shader 声明的 //!MINIMUM~//!MAXIMUM 内,且**不等于「不跑」的那个端点**。
-    /// 防的是:手滑把 modeD 写成 SHARP=4.0 → `//!WHEN SHARP 4.0 <` 为假 → 这档最猛的那个 pass
+    /// 声明了 `//!PARAM name` 的那个文件里,它的 `//!MINIMUM`/`//!MAXIMUM` 是多少。
+    /// **从源里现算** —— 各 shader 的量纲差得很远(Adaptive STR 0~2、aWarpSharp2 STR -20~20、
+    /// FineSharp SSTR 0~8),写死一个统一区间只会在加新 shader 时误伤或漏放
+    /// (这条测试原本就写死了 `0.0..=4.0`,加锐化族时当场误伤)。
+    fn param_range(file: &str, param: &str) -> Option<(f64, f64)> {
+        let mut lines = body_of(file)
+            .lines()
+            .skip_while(|l| l.trim().strip_prefix("//!PARAM ").map(str::trim) != Some(param));
+        lines.next()?; // 消费掉 //!PARAM 那行
+        let (mut min, mut max) = (None, None);
+        for l in lines {
+            let t = l.trim();
+            // 下一个 //!PARAM / //!HOOK 之前才算本参数的属性
+            if t.starts_with("//!PARAM") || t.starts_with("//!HOOK") {
+                break;
+            }
+            if let Some(v) = t.strip_prefix("//!MINIMUM ") {
+                min = v.trim().parse().ok();
+            }
+            if let Some(v) = t.strip_prefix("//!MAXIMUM ") {
+                max = v.trim().parse().ok();
+            }
+        }
+        Some((min?, max?))
+    }
+
+    /// 这个文件里,参数 `param` 取什么值会让它的 `//!WHEN` 为假(=这个 pass 一帧都不跑)。
+    /// 两种写法都认:`//!WHEN STR`(0 为假)、`//!WHEN SHARP 4.0 <`(等于 4.0 为假)。
+    /// **必须按文件算**:同名 SHARP 在 RCAS 里 4.0 是死值、在 NVSharpen 里 0 才是死值,
+    /// 原来那张全局 `[("SHARP", 4.0)]` 表在两者并存时必然判错一边。
+    fn dead_value(file: &str, param: &str) -> Option<f64> {
+        for l in body_of(file).lines().filter(|l| l.starts_with("//!WHEN ")) {
+            let t: Vec<&str> = l["//!WHEN ".len()..].split_whitespace().collect();
+            match t.as_slice() {
+                [p] if *p == param => return Some(0.0),
+                [p, n, "<"] if *p == param => return n.parse().ok(),
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// 每档的参数值必须落在**声明它的那个 shader** 的 //!MINIMUM~//!MAXIMUM 内,
+    /// 且**不等于「不跑」的那个端点**。
+    /// 防的是:手滑把某档写成 SHARP=4.0 → `//!WHEN SHARP 4.0 <` 为假 → 这档最猛的那个 pass
     /// 一帧都不跑,UI 还显示「强」。
     #[test]
     fn preset_opt_values_are_in_range_and_actually_run() {
-        let dead = [("STR", 0.0), ("SHARP", 4.0)]; // 各自 //!WHEN 为假的值
         for (id, label, _) in levels() {
             let Some(p) = preset(id) else { continue };
             for kv in p.opts.split(',').filter(|s| !s.is_empty()) {
                 let (key, val) = kv.split_once('=').expect("opts 必须是 K=V");
                 let v: f64 = val.parse().unwrap_or_else(|_| panic!("{id} 的 {kv} 不是数字"));
-                assert!((0.0..=4.0).contains(&v), "{id}({label}) 的 {kv} 超出任何已知参数范围");
-                if let Some((_, d)) = dead.iter().find(|(k, _)| *k == key) {
+                // 上一条测试已保证 key 一定属于本档某个 file,这里找出是哪个。
+                let owner = p
+                    .files
+                    .iter()
+                    .find(|f| params_of(f).contains(&key))
+                    .unwrap_or_else(|| panic!("{id} 的 {key} 没有归属文件"));
+                let (min, max) = param_range(owner, key)
+                    .unwrap_or_else(|| panic!("{owner} 的 //!PARAM {key} 没声明 MIN/MAX"));
+                assert!(
+                    (min..=max).contains(&v),
+                    "{id}({label}) 的 {kv} 超出 {owner} 声明的 {min}~{max}"
+                );
+                if let Some(d) = dead_value(owner, key) {
                     assert!(
                         (v - d).abs() > 1e-9,
-                        "{id}({label}) 把 {key} 设成了 {v} —— 那正是它 //!WHEN 为假的值,这个 pass 一帧都不会跑"
+                        "{id}({label}) 把 {key} 设成了 {v} —— 那正是 {owner} 的 //!WHEN 为假的值,\
+                         这个 pass 一帧都不会跑"
                     );
+                }
+            }
+        }
+    }
+
+    /// ★ 同一档位里**不能有两个 shader 声明同名 //!PARAM**。
+    ///
+    /// `glsl-shader-opts` 是**全局**的一张 K=V 表,不区分是给哪个 shader 的。把两个都叫 `STR`
+    /// 的锐化器叠进同一档,它们会共用同一个值,而量纲根本不同
+    /// (Adaptive 0~2 / aWarpSharp2 -20~20 / BCAS 0~1)—— 结果是其中一个被喂了荒谬的强度,
+    /// **mpv 不报错**,只是画面不对劲。这是加锐化家族时新长出来的静默失效面,钉住它。
+    #[test]
+    fn no_preset_loads_two_shaders_sharing_a_param_name() {
+        for (id, label, _) in levels() {
+            let Some(p) = preset(id) else { continue };
+            for (i, a) in p.files.iter().enumerate() {
+                for b in &p.files[i + 1..] {
+                    for pa in params_of(a) {
+                        assert!(
+                            !params_of(b).contains(&pa),
+                            "档位 {id}({label}) 同时挂了 {a} 和 {b},两者都声明 //!PARAM {pa} —— \
+                             glsl-shader-opts 是全局表,它们会共用一个值(量纲还不同),必然串味且不报错"
+                        );
+                    }
                 }
             }
         }
@@ -439,21 +592,90 @@ mod tests {
         assert!(preset("fsr_sharp_l").is_some());
     }
 
-    /// 三个家族每个都必须正好六档 —— 用户明确「三种滤镜每种六个模式」。
+    /// UI 折叠分组按家族建,这里是家族名的**单一事实源**:核层多一个家族而 UI 没加,
+    /// 那一整组就从面板里静默消失。测试同时钉住两边(前端那份有 api_contract 测试对齐)。
+    const FAMILIES: [&str; 4] = ["Anime4K", "FSR", "NVIDIA", "Sharpen"];
+
+    /// 四个家族每个至少六档 —— 用户 2026-07-16「三种滤镜每种六个模式」的底线仍在;
+    /// 2026-07-20 又要求「加多几个档位」,所以放宽成**下限**而不是等号,
+    /// 但家族本身必须一个不少。
     #[test]
-    fn three_families_six_modes_each() {
-        for fam in ["Anime4K", "FSR", "NVIDIA"] {
+    fn every_family_has_at_least_six_modes() {
+        for fam in FAMILIES {
             let n = levels().iter().filter(|(_, _, f)| *f == fam).count();
-            assert_eq!(n, 6, "家族 {fam} 应有 6 档,实际 {n}");
+            assert!(n >= 6, "家族 {fam} 至少 6 档,实际 {n}");
         }
-        // 除 off 外每档都必须能解析出 preset。
+        // 除 off 外每档都必须能解析出 preset,且家族名必须是 UI 认识的那几个之一 ——
+        // 打错一个字(比如 "Sharpen" 写成 "sharpen")这档就从面板里静默消失。
         for (id, _, fam) in levels() {
             if id == "off" {
                 continue;
             }
-            assert!(!fam.is_empty(), "档位 {id} 缺家族标记");
+            assert!(
+                FAMILIES.contains(&fam),
+                "档位 {id} 的家族 {fam:?} 不在 UI 的分组表里,它会从面板里静默消失"
+            );
             assert!(preset(id).is_some(), "档位 {id} 没有对应 preset");
         }
+        // 档位 id 不能重复:UI 的 key 撞车,且用户存的档位指向哪个全看顺序。
+        let ids: Vec<&str> = levels().iter().map(|(i, _, _)| *i).collect();
+        let mut uniq = ids.clone();
+        uniq.sort_unstable();
+        uniq.dedup();
+        assert_eq!(uniq.len(), ids.len(), "档位 id 有重复");
+    }
+
+    /// 锐化家族**必须整族都在窗口模式下就生效** —— 它存在的全部理由就是这个
+    /// (用户 2026-07-20:「其实清晰最重要的是锐化」,而放大档在窗口下一帧都不跑)。
+    /// 顺带钉强度梯度,以及「必须高于 shader 自带默认」——
+    /// 那个保守默认正是用户报「开到最大档位也只有一点点变清晰」的根因。
+    #[test]
+    fn sharpen_family_runs_windowed_and_is_stronger_than_defaults() {
+        for (id, label, fam) in levels() {
+            if fam != "Sharpen" {
+                continue;
+            }
+            assert!(works_at_any_size(id), "{id}({label}) 在锐化族里却挑尺寸");
+            assert_eq!(
+                will_run(id, Some((1920.0, 1080.0)), Some((1770.0, 1080.0))),
+                Some(true),
+                "{id}({label}) 在真机那个缩小窗口下必须有效果"
+            );
+        }
+        let opt = |id: &str, k: &str| -> f64 {
+            preset(id)
+                .unwrap()
+                .opts
+                .split(',')
+                .find_map(|kv| kv.strip_prefix(&format!("{k}=")))
+                .unwrap_or_else(|| panic!("{id} 没设 {k}"))
+                .parse()
+                .unwrap()
+        };
+        let (l, m, h) = (opt("sh_ada_l", "STR"), opt("sh_ada_m", "STR"), opt("sh_ada_h", "STR"));
+        assert!(l < m && m < h, "自适应锐化梯度必须 轻({l}) < 推荐({m}) < 强({h})");
+        assert!(opt("sh_fine_m", "SSTR") < opt("sh_fine_h", "SSTR"), "精细锐化梯度反了");
+
+        // shader 自带默认值:`//!PARAM`/`//!TYPE`/`//!MINIMUM`/`//!MAXIMUM` 之后紧跟的裸数字行。
+        // 从源里现读,别写死 —— 换个 shader 版本默认值变了,这条要自动跟着变。
+        let default_of = |file: &str, k: &str| -> f64 {
+            let mut it = body_of(file)
+                .lines()
+                .skip_while(|l| l.trim().strip_prefix("//!PARAM ").map(str::trim) != Some(k));
+            it.next().unwrap();
+            it.find(|l| !l.trim().starts_with("//!") && !l.trim().is_empty())
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap()
+        };
+        let ada_def = default_of("Adaptive_sharpen_lite_luma_RT.glsl", "STR");
+        assert!(m > ada_def, "自适应锐化推荐档 STR={m} 没超过自带默认 {ada_def},等于没调");
+        let fine_def = default_of("FineSharp_RT.glsl", "SSTR");
+        assert!(
+            opt("sh_fine_m", "SSTR") > fine_def,
+            "精细锐化推荐档没超过自带默认 {fine_def} —— 那正是「看不出来」的那个状态"
+        );
     }
 
     /// 用户 2026-07-11(a5e21885)明确否掉 Restore:动态画面边缘振铃/拖影,且最吃显卡。
