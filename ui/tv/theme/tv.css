@@ -302,11 +302,9 @@ body {
   display: flex;
   gap: 24px;
 }
-/* 焦点放大会溢出 → 行容器上下留呼吸位,否则光晕被 overflow 裁掉 */
-.track.breathe {
-  padding: 20px 0;
-  margin: -20px 0;
-}
+/* .breathe 留作语义标记,不再自带 padding/负 margin ——
+   那对值曾经写在这里,但**解决不了裁剪**(track 的 padding 区会被推到 .hscroll 盒外),
+   真正的呼吸位已经上移到 .hscroll 自己身上。留空类名是为了不改各页调用点。 */
 
 .card169 {
   width: 320px;
@@ -1089,10 +1087,41 @@ body {
   height: 40px;
 }
 
-/* ---- 横向滚动容器:靠 transform 位移,不用 scrollLeft ----
-   scrollLeft 在机顶盒 WebView 上会触发整层重绘;transform 走合成器。 */
+/* ---- 滚动容器的裁剪边距 ----
+
+   ★ 这是 TV 焦点最典型的 web 坑,我第一版栽在这里:
+     焦点态 = `scale(1.06)` + 外发光环(3px 白 + 12px 光晕),两者都**画在元素盒子之外**。
+     而滚动容器必须 `overflow:hidden` 才能藏住滚出去的卡 ——
+     于是**边缘那张卡的环和放大出来的边被裁掉三面**,看起来像被页面压住了。
+     实测(CDP):第一张卡被 .hscroll 裁左 15.1px、裁上/下各 13.6px。
+
+   ★ 我原来的补丁(.track.breathe 的 padding + 负 margin)**从一开始就无效**:
+     负 margin 把 track 拉到 .hscroll 盒子**外面**,而裁剪发生在 .hscroll
+     自己的边界上,不是 track 的边界上。加了个寂寞。
+
+   ★ 试过 `overflow: clip` + `overflow-clip-margin` —— **不行,已实测否掉**。
+     它确实让环画出来了,但**把滚出去的卡也一起放了出来**:行往右滚之后,
+     上一张卡的残影渗进左边空白,文字被切在半路(截图可证)。
+     道理上就冲突:凡是放大裁剪盒,就一定漏出该藏起来的内容,没有中间地带。
+     另外 `clip` 不建立 BFC(`hidden` 建立),换过去还会让负 margin 漏出来改变布局。
+
+   ★ 真正的解法是**换个方向**:不动裁剪盒,改成**不让焦点卡贴着裁剪边**。
+     滚动逻辑保证焦点卡距离容器边至少 PAD(见 components/Focus.tsx),
+     第一张卡聚焦时容器**允许正向位移**把它推进来一点。
+     于是环和放大量都落在盒内,而滚出去的卡照常被 hidden 干净地藏住 —— 两头都要到了。
+     PAD 取 32:12(光晕)+3(环)+ 最大卡放大溢出(330dp × 6% ÷ 2 ≈ 10)= 25,留 7px 余量。 */
 .hscroll {
   overflow: hidden;
+  /* ★ 纵向呼吸位必须加在**裁剪元素自己**身上,不能加在里面的 track 上。
+     overflow 是在 padding 边缘裁剪的,所以 padding 区在裁剪盒**之内** ——
+     卡片因此距离裁剪边 32px,环和放大量都落在盒内。
+     负 margin 抵掉外扩,行在文档流里的占位高度不变(margin 盒 = 内容+64-64)。
+
+     我原来把这对 padding/负margin 写在 .track.breathe 上,**完全无效**:
+     那样 track 的 padding 区是被推到 .hscroll 盒子外面去的,照裁不误。
+     横向不能用这招(会放出滚走的卡),横向靠 Focus.tsx 的 FOCUS_PAD 位移解决。 */
+  padding: 32px 0;
+  margin: -32px 0;
 }
 .hscroll > .track,
 .hscroll > .epstrip {
@@ -1100,9 +1129,13 @@ body {
   will-change: transform;
 }
 
-/* ---- 纵向滚动:同理 ---- */
+/* ---- 纵向滚动:同理(网格最上一行/最左一列的环同样会被裁) ---- */
 .vscroll {
   overflow: hidden;
+  /* 同上,方向相反:纵向是滚动方向(加 padding 会放出滚走的行),所以纵向靠
+     Focus.tsx 的位移;横向不滚,可以安全外扩 —— 治的是网格最左/最右一列的环。 */
+  padding: 0 32px;
+  margin: 0 -32px;
 }
 .vscroll > .inner {
   transition: transform 200ms cubic-bezier(0.22, 0.61, 0.36, 1);

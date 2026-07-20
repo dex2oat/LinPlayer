@@ -20,6 +20,19 @@ import {
 /** 子项聚焦时通知所在的滚动容器。null = 不在任何滚动容器里(比如导航轨)。 */
 const ScrollNotify = createContext<((node: HTMLElement) => void) | null>(null);
 
+/** 焦点项与滚动容器边缘的最小距离(CSS px)。
+
+    ★ 这个数不是"留白好看",是**硬约束**:焦点态会画到元素盒子外面 ——
+      外发光环 12px + 白环 3px,再加 scale(1.06) 在最大卡(330dp)上溢出约 10px,
+      合计 25px。容器是 overflow:hidden,焦点项只要贴边,这些就会被整齐切掉,
+      看起来像"卡片边缘被页面挡住了"。32 = 25 + 7px 余量。
+
+    ★ 为什么不用 overflow-clip-margin 把裁剪盒放大:试过,**放出了不该看见的东西** ——
+      行滚动后上一张卡的残影会渗进左边空白。放大裁剪盒和藏住滚出内容本质冲突。 */
+const FOCUS_PAD = 32;
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
 /* ------------------------------------------------------------
    可聚焦项
    ------------------------------------------------------------ */
@@ -124,13 +137,17 @@ export function FocusRow({
     const left = r.left - viewR.left;
     const cur = readTranslate(track, "X");
     const z = zoomOf(view); // gBCR 是设备 px,transform 是 CSS px,必须换算
-    const PAD = 24 * z; // 让下一张卡露个边,暗示"还有更多"
+    const PAD = FOCUS_PAD * z;
     let delta = 0;
     if (left < PAD) delta = left - PAD;
     else if (left + r.width > viewR.width - PAD)
       delta = left + r.width - viewR.width + PAD;
     if (delta !== 0)
-      track.style.transform = `translateX(${Math.min(0, cur - delta / z)}px)`;
+      /* ★ 上界是 +FOCUS_PAD 而不是 0 —— 这一条就是"边缘卡片被裁"的解法。
+         钳到 0 的话第一张卡永远贴着容器左边,它的焦点环和放大出来的边
+         正好落在 overflow:hidden 的边界外被切掉(实测裁左 15.1px)。
+         允许正向位移,聚焦第一张时整行右推一点点,环就完整露出来了。 */
+      track.style.transform = `translateX(${clamp(cur - delta / z, -1e7, FOCUS_PAD)}px)`;
     /* 继续往外层冒:让包着这一行的纵向列把整行滚进视野。 */
     outerNotify?.(node);
   };
@@ -185,13 +202,14 @@ export function FocusColumn({
     const top = r.top - viewR.top;
     const cur = readTranslate(inner, "Y");
     const z = zoomOf(view);
-    const PAD = 40 * z; // 焦点行上下留呼吸位,否则光晕贴边被祖先 overflow 裁掉
+    const PAD = FOCUS_PAD * z; // 焦点项上下留呼吸位,否则光晕贴边被祖先 overflow 裁掉
     let delta = 0;
     if (top < topPad * z + PAD) delta = top - topPad * z - PAD;
     else if (top + r.height > viewR.height - PAD)
       delta = top + r.height - viewR.height + PAD;
     if (delta !== 0)
-      inner.style.transform = `translateY(${Math.min(0, cur - delta / z)}px)`;
+      // 同上:上界是 +FOCUS_PAD,否则最上面一行的焦点环被 .vscroll 顶边切掉
+      inner.style.transform = `translateY(${clamp(cur - delta / z, -1e7, FOCUS_PAD)}px)`;
     /* 嵌套时(行在列里)继续往上冒 —— 否则横向行会滚,但那一整行不会被带进视野。 */
     outerNotify?.(node);
   };
