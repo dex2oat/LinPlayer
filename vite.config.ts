@@ -50,7 +50,20 @@ export default defineConfig(async () => ({
   /* 只在**要上传**时才生成 sourcemap。没 token 还生成的话,那些 .map 会被 tauri 一起
      打进 exe 的内嵌资源(frontendDist 整个塞进二进制)= 把整份前端源码发给用户。
      删除动作挂在插件的 filesToDeleteAfterUpload 上,而插件在没 token 时压根不存在。 */
-  build: { sourcemap: Boolean(sentryToken) },
+  /* 两个入口:index.html → 桌面 UI,index-tv.html → Android TV UI。
+     TV 是**另一套完整界面**(10-foot 版式 + 遥控焦点),不是桌面的响应式断点,
+     所以是独立入口独立产物,不共用一个 bundle —— 桌面用户不该下载 TV 的代码,反之亦然。
+     ★ 一旦写了 rollupOptions.input,vite 就不再默认打包 index.html,
+       两个都得列出来(只列 TV 的话桌面端会静默产不出 index.html)。 */
+  build: {
+    sourcemap: Boolean(sentryToken),
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        tv: fileURLToPath(new URL("./index-tv.html", import.meta.url)),
+      },
+    },
+  },
 
   /* ui/shared 是各端(desktop/mobile/tv)共用的那一层 —— api 桥、主题 token。
      用别名而不是 ../../shared 相对路径:mobile/tv 的目录深度和 desktop 不一样,

@@ -19,7 +19,7 @@ import {
   statusOf,
   weekOf,
   weekdayIndex,
-} from "./calendar-grouping";
+} from "@shared/calendar-grouping";
 import { SourcePicker } from "./RankingsPage";
 import "./CalendarPage.css";
 

@@ -13,6 +13,7 @@
     "pack:fast": "powershell -ExecutionPolicy Bypass -File scripts/pack-portable.ps1 -NoZip"
   },
   "dependencies": {
+    "@noriginmedia/norigin-spatial-navigation": "^3.2.1",
     "@sentry/react": "^10.66.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",

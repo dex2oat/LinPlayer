@@ -1,7 +1,7 @@
 /* 追剧日历归组逻辑的自检。跑法:
  *     node scripts/check-calendar-grouping.mjs
  *
- * ★ 它 import 的是 **ui/desktop/pages/calendar-grouping.ts 本尊**(Node 24 原生剥类型),
+ * ★ 它 import 的是 **ui/shared/calendar-grouping.ts 本尊**(Node 24 原生剥类型),
  *   不是抄一份副本进来测 —— 副本测的是副本,永远绿。本仓已经栽过两次。
  *
  * 由来:2026-07-16「切到追剧日历直接黑屏,打都打不开」。真因是日视图给 groupByWeek
@@ -14,7 +14,7 @@ import {
   statusOf,
   weekOf,
   weekdayIndex,
-} from "../ui/desktop/pages/calendar-grouping.ts";
+} from "../ui/shared/calendar-grouping.ts";
 
 const mk = (title, weekday, broadcast_at = null) => ({
   title,

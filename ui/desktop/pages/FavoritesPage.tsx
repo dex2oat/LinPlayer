@@ -13,7 +13,7 @@ type Props = {
 };
 
 // 排序逻辑单独放一个模块 —— 纯逻辑,node 可以直跑真模块做自检(见 favorites-sort.test.mjs)。
-import { SORTS, type SortId, sortItems } from "./favorites-sort";
+import { SORTS, type SortId, sortItems } from "@shared/favorites-sort";
 
 /* 视图偏好持久化。纯前端渲染参数 → localStorage,不进核层 Prefs(和主题/弹幕那几项一个口径)。
    一个 key 存三项,省得开三个。存坏了就当没存过。 */

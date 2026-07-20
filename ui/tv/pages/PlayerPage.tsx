@@ -1,0 +1,315 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  fmtTime,
+  reportProgress,
+  seek,
+  setPause,
+  setTrack,
+  status as getStatus,
+  stopPlayback,
+  tracks as getTracks,
+  type Status,
+  type Track,
+} from "@shared/api";
+import { onTvKey } from "../app/focus";
+import { Icon, type IconName } from "../app/icons";
+import { FocusBoundary, FocusColumn, FocusItem, FocusRow } from "../components/Focus";
+
+/** 播放页 OSD。
+
+    ★ 整屏是**透明**的 —— 底下是原生播放器(桌面是 mpv 顶层窗,安卓是 SurfaceView),
+      这一层只画控件,不画任何底色。
+    ★ **不用渐变**:上下栏全透明,每个控件自己是不透明块(统一 --tv-panel,与面板同色)。
+      全屏渐变每帧都要重新合成,机顶盒上是笔冤枉开销,渐变边界远看还是糊的。
+      代价是标题和时间成了裸文字 → 它们必须**自带不透明底**,不然亮场景上读不了。 */
+
+type Panel = null | "sub" | "audio" | "danmaku" | "more";
+
+export default function PlayerPage({
+  title,
+  onBack,
+}: {
+  title?: string;
+  onBack: () => void;
+}) {
+  const [st, setSt] = useState<Status | null>(null);
+  const [trk, setTrk] = useState<Track[]>([]);
+  const [panel, setPanel] = useState<Panel>(null);
+  /* OSD 默认**收起**:进来就该看见画面,不是看见一层控件。 */
+  const [osd, setOsd] = useState(false);
+  const hideAt = useRef(0);
+
+  /* 状态轮询。1s 够了 —— 进度条一秒动一格,人眼在三米外分辨不出更细的。
+     轮询而不是订阅事件:核层没有 status 推送通道,而且轮询在页面卸载时天然停掉。 */
+  useEffect(() => {
+    let alive = true;
+    const t = setInterval(async () => {
+      try {
+        const s = await getStatus();
+        if (!alive) return;
+        setSt(s);
+        /* 上报进度给 Emby。★ 必须带 PlaySessionId 且与取流会话同 id ——
+           核层已经在 play() 里处理,这里只管按节奏喂 pos。 */
+        void reportProgress(s.time, s.paused).catch(() => {});
+      } catch {
+        /* 播放器还没起来时 status 会报错,不该刷屏也不该弹错。 */
+      }
+    }, 1000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
+  useEffect(() => {
+    getTracks().then(setTrk).catch(() => {});
+  }, []);
+
+  /* OSD 自动收起。有面板开着时不收 —— 用户正在里面挑东西。 */
+  useEffect(() => {
+    if (!osd || panel) return;
+    hideAt.current = Date.now() + 5000;
+    const t = setInterval(() => {
+      if (Date.now() >= hideAt.current) setOsd(false);
+    }, 500);
+    return () => clearInterval(t);
+  }, [osd, panel]);
+
+  const bump = useCallback(() => {
+    setOsd(true);
+    hideAt.current = Date.now() + 5000;
+  }, []);
+
+  const togglePause = useCallback(async () => {
+    if (!st) return;
+    await setPause(!st.paused);
+    setSt({ ...st, paused: !st.paused });
+    bump();
+  }, [st, bump]);
+
+  const jump = useCallback(
+    async (d: number) => {
+      if (!st) return;
+      const p = Math.max(0, Math.min(st.duration || 0, st.time + d));
+      await seek(p);
+      setSt({ ...st, time: p });
+      bump();
+    },
+    [st, bump],
+  );
+
+  /* 返回键:面板开着先关面板,OSD 开着先收 OSD,都没有才退出播放。
+     ★ 一次退到底是 TV 上最容易挨骂的交互 —— 用户只想关掉字幕面板,结果整个退出了。 */
+  useEffect(
+    () =>
+      onTvKey((k) => {
+        if (k === "back") {
+          if (panel) setPanel(null);
+          else if (osd) setOsd(false);
+          else void stopPlayback(st?.time ?? 0).finally(onBack);
+          return;
+        }
+        if (k === "playpause" || k === "play" || k === "pause") void togglePause();
+        if (k === "ff") void jump(30);
+        if (k === "rew") void jump(-10);
+      }),
+    [panel, osd, st, togglePause, jump, onBack],
+  );
+
+  /* 任意方向键唤出 OSD。TV 上没有鼠标移动这种"我还在"的信号,
+     唤出的唯一途径就是按键。 */
+  useEffect(() => {
+    const h = () => bump();
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [bump]);
+
+  const dur = st?.duration ?? 0;
+  const pos = st?.time ?? 0;
+  const pct = dur > 0 ? (pos / dur) * 100 : 0;
+  const buf = dur > 0 ? ((st?.buffered ?? 0) / dur) * 100 : 0;
+
+  return (
+    <div className="osd">
+      {/* 顶栏:全透明,标题块自带不透明底 */}
+      {osd && (
+        <div className="osd-top">
+          <div className="tt">
+            <div className="t">{title ?? "正在播放"}</div>
+          </div>
+        </div>
+      )}
+
+      {osd && !panel && (
+        <FocusColumn focusKey="OSD">
+          <div className="osd-bot">
+            <ProgressBar pct={pct} buf={buf} onSeek={jump} />
+            <div className="times">
+              <span>{fmtTime(pos)}</span>
+              <span className="r">{fmtTime(dur)}</span>
+            </div>
+            <FocusRow trackClass="ctrls">
+              <CBtn icon="prev" label="上一集" />
+              <CBtn icon="rew" label="快退" onEnter={() => jump(-10)} />
+              <FocusItem className="cbtn big fx" autoFocus onEnter={togglePause}>
+                <Icon n={st?.paused ? "play" : "pause"} className="ic ic-c" />
+              </FocusItem>
+              <CBtn icon="fwd" label="快进" onEnter={() => jump(30)} />
+              <CBtn icon="next" label="下一集" />
+              <div className="spring" />
+              {/* ★ 右组必须**图标+文字** —— 裸图标用户第一反应是"那是什么"。
+                  左组(上一集/快退/播放/快进/下一集)是通用约定,可以纯图标。 */}
+              <WideBtn icon="sub" text="字幕" onEnter={() => setPanel("sub")} />
+              <WideBtn icon="audio" text="音轨" onEnter={() => setPanel("audio")} />
+              <WideBtn icon="danmaku" text="弹幕" onEnter={() => setPanel("danmaku")} />
+              <WideBtn icon="more" text="更多" onEnter={() => setPanel("more")} />
+            </FocusRow>
+          </div>
+        </FocusColumn>
+      )}
+
+      {/* 面板打开时 OSD 自动收起(上面用 !panel 控制),画面大部分露在外面,**没有黑色遮罩** */}
+      {panel && (
+        <TrackPanel
+          kind={panel}
+          tracks={trk}
+          onPick={async (t) => {
+            await setTrack(t.kind, t.id);
+            setTrk(await getTracks());
+            setPanel(null);
+          }}
+          onClose={() => setPanel(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ */
+
+function ProgressBar({
+  pct,
+  buf,
+  onSeek,
+}: {
+  pct: number;
+  buf: number;
+  onSeek: (d: number) => void;
+}) {
+  /* 进度条是一个焦点位:落上去后左右键 = 快退/快进,不是移动焦点。
+     这靠 FocusItem 拿不到方向键,所以自己听 —— 只在聚焦时生效。 */
+  const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    if (!focused) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "ArrowLeft") {
+        e.stopPropagation();
+        onSeek(-10);
+      }
+      if (e.key === "ArrowRight") {
+        e.stopPropagation();
+        onSeek(30);
+      }
+    };
+    window.addEventListener("keydown", h, true);
+    return () => window.removeEventListener("keydown", h, true);
+  }, [focused, onSeek]);
+
+  return (
+    <FocusItem
+      className="bar"
+      focusClass="foc"
+      onFocus={() => setFocused(true)}
+      onEnter={() => {}}
+    >
+      <div className="buf" style={{ width: `${buf}%` }} />
+      <div className="pl" style={{ width: `${pct}%` }} />
+      <div className="kn" style={{ left: `${pct}%` }} />
+    </FocusItem>
+  );
+}
+
+function CBtn({
+  icon,
+  label,
+  onEnter,
+}: {
+  icon: IconName;
+  label: string;
+  onEnter?: () => void;
+}) {
+  return (
+    <FocusItem className="cbtn fx" onEnter={onEnter}>
+      <Icon n={icon} className="ic ic-c" />
+      <span style={{ position: "absolute", opacity: 0 }}>{label}</span>
+    </FocusItem>
+  );
+}
+
+function WideBtn({
+  icon,
+  text,
+  onEnter,
+}: {
+  icon: IconName;
+  text: string;
+  onEnter: () => void;
+}) {
+  return (
+    <FocusItem className="cbtn wide fx" onEnter={onEnter}>
+      <Icon n={icon} className="ic ic-c" />
+      <span>{text}</span>
+    </FocusItem>
+  );
+}
+
+function TrackPanel({
+  kind,
+  tracks,
+  onPick,
+  onClose,
+}: {
+  kind: Exclude<Panel, null>;
+  tracks: Track[];
+  onPick: (t: Track) => void;
+  onClose: () => void;
+}) {
+  const TITLE: Record<string, string> = {
+    sub: "字幕",
+    audio: "音轨",
+    danmaku: "弹幕",
+    more: "更多",
+  };
+  const want = kind === "sub" ? "sub" : "audio";
+  const list = tracks.filter((t) => t.kind === want);
+
+  return (
+    <FocusBoundary focusKey="PLAYER_PANEL" className="panel">
+      <div className="ph">{TITLE[kind]}</div>
+      <FocusColumn className="scroll">
+        {kind === "sub" || kind === "audio" ? (
+          list.length === 0 ? (
+            <div className="pitem">没有可选的{TITLE[kind]}</div>
+          ) : (
+            list.map((t) => (
+              <FocusItem
+                key={t.id}
+                className={`pitem${t.selected ? " on" : ""}`}
+                onEnter={() => onPick(t)}
+              >
+                {t.title || t.lang || t.id}
+                {t.selected && <span className="r">当前</span>}
+              </FocusItem>
+            ))
+          )
+        ) : (
+          /* 弹幕 / 更多 还没接。**故意不画假开关** ——
+             画了在评审时会被当成已经能用。 */
+          <FocusItem className="pitem" onEnter={onClose}>
+            这一组还没接线
+          </FocusItem>
+        )}
+      </FocusColumn>
+    </FocusBoundary>
+  );
+}

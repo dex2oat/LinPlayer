@@ -1,0 +1,1149 @@
+/* ============================================================
+   LinPlayer TV —— 10-foot 版式样式表。
+
+   ★ 这份文件是 docs/tv-drafts.html 的**直接抬升**,不是照着草稿"重写"一遍。
+     草稿每一屏都按真实 1920x1080 dp 绘制,所以稿子里量到的数字就是这里的数字。
+     改版式时先改草稿、评审过了再抬到这里 —— 反过来做,两边立刻就对不上了。
+
+   ★ 强制深色:不 import @shared/tokens.css。那份 token 带浅色分支和
+     `--sidebar-w` 之类的桌面专属量,TV 一个都用不上,而浅色主题在客厅是灾难。
+     颜色在下面自成一套 --tv-* 命名,和桌面 token 故意不共用。
+   ============================================================ */
+
+:root {
+  color-scheme: dark;
+
+  --accent: #5b8def;
+  --accent-soft: rgba(91, 141, 239, 0.16);
+  --warn: #e0a95b;
+  --good: #54c08a;
+  --danger: #e5726b;
+  --ph: #1e2530;
+  --ph-2: #161b24;
+  --line-strong: #323b4a;
+
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+
+  /* ---- TV 真实版式 token ---- */
+  --tv-bg: #101317; /* 比桌面那套窗口底更亮一点点:OLED 上纯黑会跟letterbox黑边分不清,整屏失去版式边界 */
+  --tv-rail: #08090b; /* 导航轨。比内容区更深 → 不用画边框 */
+  --tv-panel: #181c22; /* 悬浮面板 / 不透明控件,全站同一个底色 */
+  --tv-line: #262b33;
+  --tv-ink: #ffffff;
+  --tv-ink-2: #a8b0bd;
+  --tv-ink-3: #6b7280;
+  --tv-focus: #ffffff;
+  --tv-glow: rgba(91, 141, 239, 0.34);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden; /* TV 没有滚动条,一切滚动由焦点驱动 */
+  background: #000;
+}
+
+body {
+  font-family: var(--sans);
+  color: var(--tv-ink);
+  /* 机顶盒 WebView 在 D-pad 移动时会误报 hover;所有 hover 样式都必须包在
+     @media (hover:hover) 里。这里再兜一层:全局禁用点选高亮和长按菜单。 */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ---- 应用根:恒定 1920x1080,由 JS 设 zoom 等比缩放到实际屏幕 ----
+   ★ 为什么用 zoom 不用 transform:scale ——
+     transform 会让元素成为后代 fixed 定位的**包含块**,整棵树里所有
+     position:fixed 都会以它为参照而不是视口(PC 端右键菜单/toast 偏位就是栽在这)。
+     zoom 只影响布局尺寸,不建立包含块。Android WebView 是 Chromium,支持 zoom。
+     且 getBoundingClientRect 在 zoom 下返回的是缩放后的真实坐标,
+     与焦点库的 useGetBoundingClientRect 天然一致。 */
+.tv-app {
+  width: 1920px;
+  height: 1080px;
+  background: var(--tv-bg);
+  color: var(--tv-ink);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  font-size: 16px;
+}
+
+/* ---- 左侧导航轨 ----
+   图标在上、文字在下。横排图标+文字是 PC 侧栏的做法,TV 上远看会糊成一片;
+   竖排让图标先被识别、文字只作确认。轨宽因此从 240 收到 168dp。 */
+.rail {
+  width: 168px;
+  flex: none;
+  background: var(--tv-rail);
+  border-right: 1px solid var(--tv-line);
+  padding: 40px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rail .brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 0 0 26px;
+}
+.rail .brand .lg {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  background: linear-gradient(140deg, var(--accent), #3f73d6);
+  flex: none;
+}
+.rail .brand .nm {
+  font-size: 15px;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+  color: var(--tv-ink-2);
+}
+.ritem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 96px;
+  border-radius: 14px;
+  color: var(--tv-ink-3);
+  font-size: 18px;
+  position: relative;
+  text-align: center;
+  padding: 0 4px;
+}
+/* 选中态用整块填充,不用左侧竖条 —— 竖条是给横排项设计的,竖排上会切在图标旁边很怪 */
+.ritem.on {
+  color: var(--tv-ink);
+  background: var(--accent-soft);
+}
+/* 轨内焦点:不放大(放大会撑破轨宽),只填充 + 白描边 */
+.ritem.foc {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  box-shadow: inset 0 0 0 3px var(--tv-focus);
+}
+.rail .spring {
+  flex: 1;
+}
+.rail .sep {
+  height: 1px;
+  background: var(--tv-line);
+  margin: 10px 14px;
+}
+
+/* ---- 内容区 ---- */
+.body {
+  flex: 1;
+  min-width: 0;
+  padding: 48px 64px 0;
+  overflow: hidden;
+  position: relative;
+}
+.body.flush {
+  padding: 0;
+}
+.ptitle {
+  font-size: 40px;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+  margin: 0 0 6px;
+}
+.psub {
+  font-size: 20px;
+  color: var(--tv-ink-2);
+  margin: 0 0 34px;
+}
+
+/* ---- 焦点态:全站唯一一套 ----
+   只动 transform 和 opacity + box-shadow 的静态值;不做动画阴影(弱机上很贵)。 */
+.foc {
+  box-shadow: 0 0 0 3px var(--tv-focus), 0 0 0 12px var(--tv-glow);
+}
+.dim {
+  opacity: 0.82;
+}
+
+/* ---- Hero ----
+   ★ 不画渐变也不画半透明底:文字直接落在封面上。规则见下方「不用渐变」注释。 */
+.hero {
+  height: 486px;
+  border-radius: 20px;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(115deg, #1d2a3f 0%, #2b3550 42%, #141922 100%);
+}
+.hero .bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.hero .info {
+  position: absolute;
+  left: 44px;
+  bottom: 38px;
+  z-index: 2;
+  max-width: 600px;
+}
+.hero h3 {
+  font-size: 36px;
+  line-height: 1.1;
+  font-weight: 700;
+  margin: 0 0 10px;
+  letter-spacing: -0.02em;
+}
+.hero .meta {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  font-size: 16px;
+  color: var(--tv-ink-2);
+  margin-bottom: 12px;
+}
+.hero .meta .score {
+  color: var(--accent);
+  font-weight: 640;
+}
+.hero .desc {
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--tv-ink-2);
+  margin: 0 0 18px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.hero .dots {
+  position: absolute;
+  right: 44px;
+  bottom: 40px;
+  display: flex;
+  gap: 10px;
+  z-index: 2;
+}
+.hero .dots i {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.28);
+}
+.hero .dots i.on {
+  background: var(--accent);
+  width: 32px;
+  border-radius: 6px;
+}
+
+.btnrow {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+/* ★ 按钮一律不透明 —— Hero / 详情 / 播放页的按钮全都压在图片或视频上,
+   半透明白在亮画面上会淡到看不见。规则:要么全透明,要么不透明块。
+   ★ 按钮不做大:1920 屏在 3 米外的视角大小和笔记本在臂展距离差不多,
+   需要放大的只是「必须读的字」,不是所有元素。封面是主角,控件让位。 */
+.btn {
+  height: 52px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 24px;
+  font-size: 17px;
+  font-weight: 620;
+  background: var(--tv-panel);
+  border: 1px solid var(--line-strong);
+  color: var(--tv-ink);
+  white-space: nowrap;
+}
+.btn.pri {
+  border-color: transparent;
+  background: var(--accent);
+  color: #08101f;
+}
+.btn.ico {
+  width: 52px;
+  padding: 0;
+  justify-content: center;
+}
+
+/* ---- 内容行 ---- */
+.row {
+  margin-top: 40px;
+}
+.rowhead {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.rowhead .t {
+  font-size: 26px;
+  font-weight: 640;
+}
+.track {
+  display: flex;
+  gap: 24px;
+}
+/* 焦点放大会溢出 → 行容器上下留呼吸位,否则光晕被 overflow 裁掉 */
+.track.breathe {
+  padding: 20px 0;
+  margin: -20px 0;
+}
+
+.card169 {
+  width: 320px;
+  flex: none;
+}
+.card169 .th {
+  height: 180px;
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--ph), var(--ph-2));
+}
+.card169 .nm {
+  font-size: 18px;
+  margin-top: 12px;
+  font-weight: 560;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card169 .sub {
+  font-size: 15px;
+  color: var(--tv-ink-3);
+  margin-top: 4px;
+}
+.prog {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 6px;
+  background: rgba(0, 0, 0, 0.55);
+}
+.prog i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  font-size: 14px;
+  font-weight: 640;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #08101f;
+}
+.badge.n {
+  background: var(--danger);
+  color: #fff;
+}
+
+.card23 {
+  width: 220px;
+  flex: none;
+}
+.card23 .th {
+  height: 330px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--ph), var(--ph-2));
+  position: relative;
+  overflow: hidden;
+}
+.card23 .nm {
+  font-size: 17px;
+  margin-top: 12px;
+  font-weight: 540;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card23 .sub {
+  font-size: 14px;
+  color: var(--tv-ink-3);
+  margin-top: 3px;
+}
+
+/* 卡片封面统一:图片铺满,失败/未加载时露出底下的占位渐变 */
+.th > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* ---- 网格 ---- */
+.grid {
+  display: grid;
+  gap: 32px 28px;
+}
+.grid.c6 {
+  grid-template-columns: repeat(6, 1fr);
+}
+.grid.c5 {
+  grid-template-columns: repeat(5, 1fr);
+}
+.grid.c4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+.grid .cell .th {
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--ph), var(--ph-2));
+  position: relative;
+  overflow: hidden;
+}
+.grid.poster .cell .th {
+  aspect-ratio: 2/3;
+}
+.grid.wide .cell .th {
+  aspect-ratio: 16/9;
+}
+.grid .cell .nm {
+  font-size: 17px;
+  margin-top: 11px;
+  font-weight: 540;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.grid .cell .sub {
+  font-size: 14px;
+  color: var(--tv-ink-3);
+  margin-top: 3px;
+}
+
+/* ---- 筛选条 ---- */
+.filters {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 30px;
+}
+.fchip {
+  height: 56px;
+  padding: 0 26px;
+  border-radius: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--tv-ink-2);
+}
+.fchip.on {
+  background: var(--accent-soft);
+  color: #fff;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* ---- 右侧悬浮面板 ----
+   ★ 对齐 PC 的 .p-slide:不是贴右满高一整列,而是「悬浮在右侧中部的圆角区块」——
+     top:50% + translateY(-50%),max-height 夹住、内部滚动,四周留白 + 圆角 + 描边。
+     视频画面绝大部分露出来。**没有黑色遮罩**,面板打开时 OSD 自动收起。
+   ★ 唯一不照抄 PC 的:PC 用 backdrop-filter: blur(12px),
+     机顶盒上开毛玻璃直接掉帧,TV 改用不透明底 + 大柔和阴影。 */
+.panel {
+  position: absolute;
+  right: 64px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 460px;
+  max-height: 820px;
+  background: var(--tv-panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 40px 90px -30px rgba(0, 0, 0, 0.75);
+  z-index: 41;
+  padding: 24px 0;
+  display: flex;
+  flex-direction: column;
+}
+.panel .ph {
+  font-size: 26px;
+  font-weight: 660;
+  padding: 0 28px 18px;
+}
+.panel .scroll {
+  overflow: hidden;
+  flex: 1;
+}
+.panel .grp {
+  font-size: 14px;
+  letter-spacing: 0.14em;
+  color: var(--tv-ink-3);
+  font-weight: 640;
+  padding: 18px 28px 8px;
+}
+.pitem {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 28px;
+  font-size: 18px;
+  color: var(--tv-ink-2);
+  position: relative;
+}
+.pitem .r {
+  margin-left: auto;
+  color: var(--tv-ink-3);
+  font-size: 17px;
+}
+.pitem.on {
+  color: #fff;
+}
+.pitem.on::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 4px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.pitem.foc {
+  background: rgba(255, 255, 255, 0.13);
+  color: #fff;
+  box-shadow: inset 0 0 0 3px var(--tv-focus);
+}
+
+/* ---- 播放页 ----
+   ★ 不用渐变:全屏渐变每帧都要重新合成,机顶盒上是笔冤枉开销,
+     且渐变边界在远处看是糊的。改成「栏全透明 + 控件全不透明」。
+   ★ 代价:标题和时间是裸文字,没有渐变兜底会糊在亮场景上,
+     所以它们也必须自带不透明底 —— 只把按钮做成不透明是不够的。 */
+.osd {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+}
+.osd-top {
+  position: absolute;
+  left: 64px;
+  right: 64px;
+  top: 48px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  z-index: 2;
+}
+.osd-top .tt {
+  background: var(--tv-panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  padding: 12px 22px;
+  min-width: 0;
+}
+.osd-top .t {
+  font-size: 26px;
+  font-weight: 620;
+}
+.osd-top .s {
+  font-size: 18px;
+  color: var(--tv-ink-2);
+  margin-top: 4px;
+}
+.osd-bot {
+  position: absolute;
+  left: 64px;
+  right: 64px;
+  bottom: 56px;
+  z-index: 2;
+}
+.bar {
+  height: 8px;
+  border-radius: 4px;
+  background: #2b3139;
+  position: relative;
+  margin-bottom: 18px;
+}
+.bar .buf {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: #59626f;
+  border-radius: 4px;
+}
+.bar .pl {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--accent);
+  border-radius: 4px;
+}
+.bar .kn {
+  position: absolute;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #fff;
+  transform: translate(-50%, -50%);
+}
+.bar .ch {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 3px;
+  background: rgba(255, 255, 255, 0.55);
+}
+.bar.foc {
+  height: 14px;
+  border-radius: 7px;
+  box-shadow: 0 0 0 3px var(--tv-focus), 0 0 0 12px var(--tv-glow);
+}
+/* 焦点态旋钮放大到 40dp 并加深色环 —— 常态 26dp 白点会跟白色缓冲段糊在一起,
+   而「当前位置在哪」正是焦点落在进度条时唯一要传达的信息。 */
+.bar.foc .kn {
+  width: 40px;
+  height: 40px;
+  box-shadow: 0 0 0 5px #0a0c10;
+}
+.times {
+  display: flex;
+  font-size: 19px;
+  margin-bottom: 26px;
+}
+.times span {
+  background: var(--tv-panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 6px 14px;
+  font-family: var(--mono);
+}
+.times .r {
+  margin-left: auto;
+}
+.ctrls {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.cbtn {
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  background: var(--tv-panel);
+  border: 1px solid var(--line-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.cbtn.big {
+  width: 88px;
+  height: 88px;
+  background: var(--accent);
+  color: #08101f;
+}
+/* 右组带文字:字幕/音轨/弹幕/更多 光看图标认不出,TV 上必须写字。
+   左组(上一集/快退/播放/快进/下一集)是通用约定,可纯图标。 */
+.cbtn.wide {
+  width: auto;
+  padding: 0 22px;
+  gap: 12px;
+  font-size: 19px;
+}
+.cbtn.wide span {
+  white-space: nowrap;
+}
+.ctrls .spring {
+  flex: 1;
+}
+
+/* ---- 搜索:历史整行可聚焦,确认即以该词重新搜索 ---- */
+.hist {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.hitem {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 22px;
+  border-radius: 12px;
+  font-size: 20px;
+  color: var(--tv-ink-2);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sres {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 14px;
+}
+.sres .th {
+  width: 76px;
+  height: 114px;
+  border-radius: 10px;
+  flex: none;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--ph), var(--ph-2));
+}
+.sres .t {
+  font-size: 21px;
+  font-weight: 580;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sres .m {
+  font-size: 16px;
+  color: var(--tv-ink-3);
+  margin-top: 6px;
+}
+.sres .from {
+  font-size: 16px;
+  color: var(--tv-ink-3);
+  flex: none;
+  padding-left: 20px;
+}
+.sres.foc {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* ---- 表单 ----
+   不自建虚拟键盘:Android TV 有系统输入法(Leanback IME),输入框聚焦按确认即升起,
+   还白拿语音输入和外接键盘。但**系统键盘会盖住下半屏**,要输入的内容必须放上半屏。 */
+.field {
+  margin-bottom: 26px;
+  max-width: 760px;
+}
+.field .lb {
+  font-size: 17px;
+  color: var(--tv-ink-2);
+  margin-bottom: 10px;
+}
+.field .in {
+  height: 72px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--tv-line);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  font-size: 21px;
+  color: var(--tv-ink);
+  width: 100%;
+  font-family: inherit;
+  outline: none;
+}
+.field .in::placeholder {
+  color: var(--tv-ink-3);
+}
+
+/* ---- 设置双栏 ---- */
+.master {
+  width: 400px;
+  flex: none;
+}
+.mitem {
+  height: 72px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 22px;
+  border-radius: 12px;
+  font-size: 20px;
+  color: var(--tv-ink-2);
+}
+.mitem.on {
+  background: var(--accent-soft);
+  color: #fff;
+}
+.detail {
+  flex: 1;
+  min-width: 0;
+  padding-left: 44px;
+  border-left: 1px solid var(--tv-line);
+}
+.srow {
+  height: 88px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  border-bottom: 1px solid var(--tv-line);
+  padding: 0 20px;
+  border-radius: 12px;
+}
+.srow .tx .t {
+  font-size: 20px;
+}
+.srow .tx .d {
+  font-size: 15px;
+  color: var(--tv-ink-3);
+  margin-top: 3px;
+}
+.srow .val {
+  margin-left: auto;
+  font-size: 19px;
+  color: var(--tv-ink-2);
+}
+.sw {
+  width: 64px;
+  height: 36px;
+  border-radius: 18px;
+  background: #2a3038;
+  position: relative;
+  flex: none;
+}
+.sw i {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #6b7280;
+}
+.sw.on {
+  background: var(--accent);
+}
+.sw.on i {
+  left: 32px;
+  background: #fff;
+}
+
+/* ---- 集详情:版本聚合卡 ----
+   分辨率字号最大(30sp),因为它是三米外唯一一眼可辨的字段。
+   只聚合 Emby;网盘/OpenList/飞牛没有 MediaSource 概念,要聚合就得逐个探测文件。 */
+.vcard {
+  width: 380px;
+  height: 212px;
+  flex: none;
+  border-radius: 16px;
+  background: #161a20;
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+}
+.vcard .src {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  color: var(--tv-ink-2);
+  margin-bottom: 14px;
+}
+.vcard .src .d {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--accent);
+  flex: none;
+}
+.vcard .src .tag {
+  margin-left: auto;
+  font-size: 15px;
+  color: var(--accent);
+  font-weight: 640;
+}
+.vcard .res {
+  font-size: 30px;
+  font-weight: 680;
+  letter-spacing: -0.01em;
+  margin-bottom: 10px;
+}
+.vcard .spec {
+  font-size: 17px;
+  color: var(--tv-ink-2);
+  margin-bottom: 7px;
+}
+.vcard .trk {
+  font-size: 16px;
+  color: var(--tv-ink-3);
+}
+.vcard.on {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+/* 不可用来源保留但不可聚焦 —— 消失会让用户以为片源丢了,占焦点位又浪费按键 */
+.vcard.off {
+  opacity: 0.45;
+}
+.vcard .warn {
+  font-size: 15px;
+  color: var(--warn);
+}
+
+/* ---- 集数栏:选中集恒居中 ----
+   TV 上「上一集/下一集」两个按钮一次只能挪一格,24 集的番要按 18 次;
+   集数栏一次可见 9 集,横向直达。 */
+.epsw {
+  display: flex;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 4px;
+}
+.epsw > div {
+  height: 44px;
+  padding: 0 20px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  font-size: 17px;
+  color: var(--tv-ink-3);
+}
+.epsw > div.on {
+  background: var(--accent);
+  color: #08101f;
+  font-weight: 620;
+}
+
+.epwrap {
+  position: relative;
+  overflow: hidden;
+}
+/* 两端渐隐 = 这是个滚动容器,还有更多集。没有它就看不出「居中」是怎么实现的。
+   (这是**容器边缘**的提示,不是压在图上的遮罩 —— 不违反「不用渐变」那条。) */
+.epwrap::before,
+.epwrap::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 120px;
+  z-index: 2;
+  pointer-events: none;
+}
+.epwrap::before {
+  left: 0;
+  background: linear-gradient(90deg, #101317, transparent);
+}
+.epwrap::after {
+  right: 0;
+  background: linear-gradient(270deg, #101317, transparent);
+}
+.epstrip {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 6px 0;
+  transition: transform 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.ep {
+  min-width: 104px;
+  height: 72px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.07);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--tv-ink-2);
+  flex: none;
+  position: relative;
+}
+.ep.done {
+  color: var(--tv-ink-3);
+}
+.ep.done::after {
+  content: "";
+  position: absolute;
+  left: 22px;
+  right: 22px;
+  bottom: 12px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--tv-ink-3);
+  opacity: 0.55;
+}
+.ep.on {
+  background: var(--accent);
+  color: #08101f;
+}
+
+/* 详细视图:带封面和简介的卡片条。每张卡自带简介 → 顶部那段简介就重复了,
+   所以选详细时顶部要同步隐藏简介,不然同一段话一屏出现两次。 */
+.epcard {
+  width: 285px;
+  flex: none;
+}
+.epcard .th {
+  height: 160px;
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--ph), var(--ph-2));
+}
+.epcard .no {
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  font-size: 16px;
+  font-weight: 640;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(8, 12, 18, 0.72);
+}
+.epcard .nm {
+  font-size: 19px;
+  font-weight: 580;
+  margin-top: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.epcard .du {
+  font-size: 15px;
+  color: var(--tv-ink-3);
+  margin-top: 5px;
+}
+.epcard .ds {
+  font-size: 15px;
+  color: var(--tv-ink-3);
+  margin-top: 7px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.epcard.on .nm {
+  color: var(--accent);
+}
+
+/* ---- 骨架屏:静态占位,不做 shimmer 动画(弱机上 shimmer 是纯浪费) ---- */
+.sk {
+  background: #1a1f27;
+  border-radius: 12px;
+}
+
+/* ---- Toast:中央偏下,不抢焦点 ---- */
+.toast {
+  position: absolute;
+  left: 50%;
+  bottom: 140px;
+  transform: translateX(-50%);
+  background: rgba(24, 28, 34, 0.96);
+  border: 1px solid var(--tv-line);
+  border-radius: 16px;
+  padding: 22px 40px;
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  z-index: 60;
+}
+
+/* ---- 图标:全站唯一一套 stroke 线性图标,24 视野,粗细 2,跟随 currentColor ----
+   ★ 图标按钮必须带文字 —— 裸图标方块用户第一反应是"那是什么"。 */
+.ic {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ic-rail {
+  width: 34px;
+  height: 34px;
+  stroke-width: 1.8;
+}
+.ic-btn {
+  width: 22px;
+  height: 22px;
+}
+.ic-c {
+  width: 32px;
+  height: 32px;
+  stroke-width: 1.9;
+}
+.ic-lg {
+  width: 40px;
+  height: 40px;
+}
+
+/* ---- 横向滚动容器:靠 transform 位移,不用 scrollLeft ----
+   scrollLeft 在机顶盒 WebView 上会触发整层重绘;transform 走合成器。 */
+.hscroll {
+  overflow: hidden;
+}
+.hscroll > .track,
+.hscroll > .epstrip {
+  transition: transform 200ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  will-change: transform;
+}
+
+/* ---- 纵向滚动:同理 ---- */
+.vscroll {
+  overflow: hidden;
+}
+.vscroll > .inner {
+  transition: transform 200ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  will-change: transform;
+}
+
+/* ---- 焦点缩放:唯一允许的变换 ----
+   ★ 用了 scale 就**必须**给焦点库开 useGetBoundingClientRect:true,
+     否则库读到的是变换前的矩形,方向判定算错邻居。 */
+.fx {
+  transition: transform 160ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.fx.foc {
+  transform: scale(1.06);
+}
+
+/* ★ 卡片的焦点环画在**封面**上,不是整张卡上。
+   整张卡的盒子含底下的标题文字,环会紧贴文字底边压在字上 ——
+   实测把「华语剧集」的下半截切掉了,而这在缩略图里几乎看不出来。
+
+   ★ 这条**草稿里没有**:22 屏稿子里 .foc 只画在按钮 / 面板项 / chip / 列表行上,
+     卡片焦点态一次都没画过。所以它是实现阶段才暴露的,不是抬升时抄漏了。
+     补进草稿之前,这里是唯一的真相。 */
+.card169.foc,
+.card23.foc,
+.epcard.foc,
+.grid .cell.foc {
+  box-shadow: none;
+}
+.card169.foc .th,
+.card23.foc .th,
+.epcard.foc .th,
+.grid .cell.foc .th {
+  box-shadow: 0 0 0 3px var(--tv-focus), 0 0 0 12px var(--tv-glow);
+}
+
+/* ---- hover 一律包起来 ----
+   机顶盒 WebView 在 D-pad 移动时会误报 hover,不包住就会出现"焦点在 A、高亮在 B"。 */
+@media (hover: hover) {
+  .ritem:hover,
+  .pitem:hover {
+    color: var(--tv-ink);
+  }
+}
