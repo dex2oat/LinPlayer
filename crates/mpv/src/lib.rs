@@ -471,10 +471,28 @@ mod overlay {
     use std::sync::atomic::{AtomicIsize, Ordering};
 
     static SURFACE: AtomicIsize = AtomicIsize::new(0);
+    /// 高 32 位宽、低 32 位高。0 = 壳还没报过尺寸。
+    static SIZE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     /// 由壳在 surfaceCreated / surfaceDestroyed 时调用。传 0 表示 Surface 没了。
     pub fn set_surface(ptr: isize) {
         SURFACE.store(ptr, Ordering::SeqCst);
+    }
+
+    /// 由壳在 surfaceChanged 里报当前 Surface 的像素尺寸。
+    pub fn set_size(w: i32, h: i32) {
+        if w > 0 && h > 0 {
+            SIZE.store(((w as u64) << 32) | h as u64, Ordering::SeqCst);
+        }
+    }
+
+    /// `"1920x1080"`,壳还没报过则 None。
+    pub fn size_str() -> Option<String> {
+        let v = SIZE.load(Ordering::SeqCst);
+        if v == 0 {
+            return None;
+        }
+        Some(format!("{}x{}", v >> 32, v & 0xffff_ffff))
     }
 
     pub fn create() -> isize {
@@ -489,6 +507,36 @@ mod overlay {
 #[cfg(target_os = "android")]
 pub fn set_android_surface(ptr: isize) {
     overlay::set_surface(ptr);
+}
+
+/// 安卓壳报 Surface 的实际像素尺寸(surfaceChanged)。
+///
+/// ★ 必须报,而且只能靠壳报。mpv 的 android gpu-context 取视口是
+///   `vo_android_surface_size()`(video/out/android_common.c):**先读 `android-surface-size`
+///   选项,没设才回退 `ANativeWindow_getWidth/Height`**,而它只在 `android_reconfig()`
+///   里被调一次 —— 安卓没有窗口 resize 事件通道,mpv 自己永远不知道面变大了。
+///   于是视口被冻在 EGL 初始化那一刻的尺寸:那时布局还没定稿(edge-to-edge 生效前
+///   SurfaceView 是带 inset 的小尺寸),画面就渲染在一个比屏幕小的矩形里,
+///   **四周留下一圈没画到的边** —— 用户报的「播放页有一圈白边、画面没铺满」就是它。
+///   mpv-android 官方的 BaseMPVView.kt 在 surfaceChanged 里做的正是这一件事。
+///
+/// ponytail: 只在起播时读一次(见 Player::new)。SurfaceView 在开机时就建好、
+/// 起播远在其后,所以起播时拿到的已是定稿尺寸。播放**中途**改面(分屏/画中画)
+/// 才需要把它推给活着的 mpv 实例 —— TV 上没有这些入口,真要支持再加。
+#[cfg(target_os = "android")]
+pub fn set_android_surface_size(w: i32, h: i32) {
+    overlay::set_size(w, h);
+}
+
+/* 起播时读一次。上面那些 `set(...)` 走的是运行时 `cfg!()`(不是 `#[cfg]`),
+   整段在三端都要编译得过 —— 桌面的 overlay 里没有 size_str,所以在这里分岔。 */
+#[cfg(target_os = "android")]
+fn android_surface_size() -> Option<String> {
+    overlay::size_str()
+}
+#[cfg(not(target_os = "android"))]
+fn android_surface_size() -> Option<String> {
+    None
 }
 
 /// 安卓壳把 JavaVM 指针交进来。**必须在起播前调一次**,否则视频起不来。
@@ -637,6 +685,12 @@ impl Player {
             /* 安卓必须显式指定 —— mpv 的自动挑选在没有 X11/Wayland 的环境里挑不出东西。 */
             if cfg!(target_os = "android") {
                 set("gpu-context", "android");
+                /* ★ 视口尺寸。不给这一条,mpv 只能在 reconfig 时问一次 ANativeWindow,
+                   之后再也不会更新 —— 画面被冻在一个比屏幕小的矩形里,四周一圈没画到。
+                   理由和出处见上面 set_android_surface_size 的注释。 */
+                if let Some(sz) = android_surface_size() {
+                    set("android-surface-size", &sz);
+                }
                 /* ★ 声音。安卓上不设 ao 是「有画面没声音」的经典成因:
                    mpv 的 ao 自动列表里 pulse/alsa 全都试不通,最后落到 null,
                    而 **null 是成功的**,所以既不报错也没声音。

@@ -2040,6 +2040,42 @@ mod tests {
         }
     }
 
+    /// Surface 尺寸必须一路从 surfaceChanged 报到 mpv 的 `android-surface-size`。
+    ///
+    /// ★ 这条挡的是 2026-07-22 那个「播放页四周一圈没画到」的 bug:
+    ///   mpv 的 android gpu-context 只在 reconfig 时取一次视口,安卓又没有
+    ///   resize 事件通道 —— 断了这条链,画面就冻在 EGL 初始化那一刻的小尺寸,
+    ///   **不报错、不崩,只是画面比屏幕小一圈**。
+    ///   三段任缺一段都是同样的静默失效,所以三段一起钉。
+    ///   反向验证:删掉 MainActivity 里的 `nativeSetSurfaceSize(w, ht)` → 本测试立刻红。
+    #[test]
+    fn surface_size_reaches_mpv() {
+        let cases: [(&str, &str, &str); 3] = [
+            (
+                "壳在 surfaceChanged 里报尺寸",
+                include_str!("../gen/android/app/src/main/java/xyz/linplayer/tv/MainActivity.kt"),
+                "nativeSetSurfaceSize(w, ht)",
+            ),
+            (
+                "JNI 导出接住它",
+                include_str!("lib.rs"),
+                "Java_xyz_linplayer_tv_MainActivity_nativeSetSurfaceSize",
+            ),
+            (
+                "mpv 起播时读进去",
+                include_str!("../../../crates/mpv/src/lib.rs"),
+                "set(\"android-surface-size\"",
+            ),
+        ];
+        for (seg, src, needle) in cases {
+            assert!(
+                src.contains(needle),
+                "Surface 尺寸链断在「{seg}」:找不到 {needle:?}。\
+                 断了的表现是画面渲染在一个比屏幕小的矩形里,四周一圈没画到,且毫无日志。"
+            );
+        }
+    }
+
     /// 壳往前端喊的每一个按键名,前端必须**真的有人处理**。
     ///
     /// ★ 这条挡的是 2026-07-22 那个 bug:`menu` 在 focus.ts 的 TvKey 里定义了、
@@ -2224,6 +2260,20 @@ pub extern "system" fn Java_xyz_linplayer_tv_MainActivity_nativeSetSurface(
     // 先把新的存住再交给 mpv;旧的在这一行被 drop → 自动 DeleteGlobalRef。
     *CUR.lock().unwrap() = g;
     linplayer_mpv::set_android_surface(ptr);
+}
+
+/* 由 surfaceChanged 报 Surface 的实际像素尺寸。
+   不报的表现不是崩,是**画面渲染在一个比屏幕小的矩形里、四周一圈没画到**。
+   理由和出处全在 linplayer_mpv::set_android_surface_size 的注释里。 */
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_xyz_linplayer_tv_MainActivity_nativeSetSurfaceSize(
+    _env: jni::JNIEnv,
+    _this: jni::objects::JObject,
+    w: jni::sys::jint,
+    h: jni::sys::jint,
+) {
+    linplayer_mpv::set_android_surface_size(w, h);
 }
 
 /* ============================================================

@@ -7,7 +7,11 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewGroup
 import android.webkit.WebView
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 /**
  * TV 宿主 Activity。除了 Tauri 自带的那点事,这里还担三件**缺一不可**的活:
@@ -48,8 +52,23 @@ class MainActivity : TauriActivity() {
   override val handleBackNavigation: Boolean = false
 
   override fun onCreate(savedInstanceState: Bundle?) {
-    enableEdgeToEdge()
+    /* ★ 不能用无参的 enableEdgeToEdge()。它的默认导航栏样式是
+       `SystemBarStyle.auto(DefaultLightScrim, DefaultDarkScrim)`,而
+       `DefaultLightScrim = Color.argb(0xe6, 0xFF, 0xFF, 0xFF)` —— **九成不透明的白**
+       (androidx/activity/EdgeToEdge.kt)。非深色模式下它会在屏幕边缘刷出一条白带,
+       正是用户报的「播放页有一圈白边」的成分之一。两条都钉成透明。 */
+    enableEdgeToEdge(
+      SystemBarStyle.dark(Color.TRANSPARENT),
+      SystemBarStyle.dark(Color.TRANSPARENT),
+    )
     super.onCreate(savedInstanceState)
+    /* 播放器全屏:把状态栏/导航栏藏起来,并让它们只在划出时短暂出现。
+       TV 上本来多半没有这两条,但盒子形态千奇百怪 —— 藏掉是零成本的保险,
+       而留着就是「屏幕多大画面就该多大」之外多出来的那一截。 */
+    WindowCompat.getInsetsController(window, window.decorView).apply {
+      systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+      hide(WindowInsetsCompat.Type.systemBars())
+    }
   }
 
   override fun onWebViewCreate(webView: WebView) {
@@ -78,8 +97,16 @@ class MainActivity : TauriActivity() {
          设成 OnTop 会让它盖在 WebView 之上,表现是有画面但所有 UI 都点不到也看不见。 */
       sv.holder.addCallback(object : SurfaceHolder.Callback {
         override fun surfaceCreated(h: SurfaceHolder) = nativeSetSurface(h.surface)
-        override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) =
+        override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) {
           nativeSetSurface(h.surface)
+          /* ★ 必须把尺寸单独报一遍。mpv 的 android gpu-context 只在 reconfig 时
+             取一次视口大小,安卓又没有 resize 事件通道 —— 不报的话视口就冻在
+             EGL 初始化那一刻(edge-to-edge 生效前的带 inset 小尺寸),
+             画面渲染在一个比屏幕小的矩形里,**四周留一圈没画到的边**。
+             mpv-android 的 BaseMPVView.kt 在这里做的也正是这一件事。
+             理由和 mpv 源码出处见 crates/mpv 的 set_android_surface_size。 */
+          nativeSetSurfaceSize(w, ht)
+        }
         /* 传 null 让 Rust 侧释放全局引用。不清的话 mpv 会继续往一块已经销毁的
            Surface 上画 —— 那是原生崩溃,不是黑屏。 */
         override fun surfaceDestroyed(h: SurfaceHolder) = nativeSetSurface(null)
@@ -157,4 +184,7 @@ class MainActivity : TauriActivity() {
 
   /** 见 apps/android/src/lib.rs 的同名 JNI 导出。传 null = Surface 没了。 */
   private external fun nativeSetSurface(surface: android.view.Surface?)
+
+  /** 见 apps/android/src/lib.rs 的同名 JNI 导出。单位是像素。 */
+  private external fun nativeSetSurfaceSize(width: Int, height: Int)
 }

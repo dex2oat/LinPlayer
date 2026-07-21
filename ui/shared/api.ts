@@ -1359,12 +1359,22 @@ export const setThemePref = (theme: string) => invoke<void>("set_theme_pref", { 
    (tauri 注入的 core.js 里就是这么分的)。写死任何一个,另一个平台上全站图片挂掉。
    ★ 只拿它取**前缀**:convertFileSrc 会对入参做 encodeURIComponent,
      把整个路径压成一个段(`/Items/1/x` → `%2FItems%2F1%2Fx`),路径得自己拼。 */
-const IMG_BASE = convertFileSrc("", "lpimg");
+/* ★ 惰性求值,不能在模块顶层直接算。convertFileSrc 读的是 Tauri 注入的
+   `window.__TAURI_INTERNALS__`,它一旦缺席(壳还没注入完、或者拿这个模块跑测试/
+   在浏览器里开发)这一行就抛在**模块加载期** —— React 连挂载都轮不到,
+   PageBoundary 也接不住(它只吃渲染期的错),结果是 `#root` 空着、整屏纯黑、
+   遥控器毫无反应,和 [[transparent-window-crash-looks-like-blackscreen]] 是同一个病。
+   一个取前缀的常量不值得赌上整个应用起不起得来。 */
+let imgBase: string | null = null;
+function IMG_BASE(): string {
+  if (imgBase === null) imgBase = convertFileSrc("", "lpimg");
+  return imgBase;
+}
 
 /** session 形参保留:换服务器/重登时 session 变 → React 会重算 src → 图片跟着换。
  *  真去掉它,调用点就没有依赖能触发重渲染了(而且不报错,只是图不刷新)。 */
 function imgUrl(_session: LoginResult, itemId: string, kind: string, q: string): string {
-  return `${IMG_BASE}i/${itemId}/${kind}?${q}`;
+  return `${IMG_BASE()}i/${itemId}/${kind}?${q}`;
 }
 
 export function posterUrl(session: LoginResult, itemId: string, maxHeight = 480): string {

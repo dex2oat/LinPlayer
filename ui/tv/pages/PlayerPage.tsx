@@ -221,9 +221,19 @@ export default function PlayerPage({
         </div>
       )}
 
+      {/* ★ `.osd-bot` 必须在 FocusColumn **外面**,不能包在里面。
+          它是 `position:absolute; bottom:56px`,而 FocusColumn 的滚动层 `.inner`
+          带 `will-change:transform` + 内联 translateY —— 那让 `.inner` 成了
+          绝对定位的**包含块**,而它唯一的子元素又正是这个 out-of-flow 的 `.osd-bot`,
+          于是 `.inner` 高度塌成 0,`bottom:56px` 解析成 `top:-232px`。
+          实测(无头 Edge 量真 DOM):整条底栏落在 y=-200,**在屏幕上方 200px 外** ——
+          这就是用户报的「上下底栏根本没出现」。顺带 `.vscroll` 还有一对
+          `padding:0 32px / margin:0 -32px` 的横向外扩,包在里面时底栏也会跟着偏。
+          现在 `.osd-bot` 直接对着 `.osd` 定位,焦点列只在它内部管上下走位。 */}
       {osd && !panel && (
-        <FocusColumn focusKey="OSD">
-          <div className="osd-bot">
+        <div className="osd-bot">
+          {/* scroll={false}:底栏内容本来就装得下,上滚动层只会出事 —— 见 FocusColumn 那边的注释。 */}
+          <FocusColumn focusKey="OSD" scroll={false}>
             <ProgressBar pct={pct} buf={buf} onSeek={jump} />
             <div className="times">
               <span>{fmtTime(pos)}</span>
@@ -245,8 +255,8 @@ export default function PlayerPage({
               <WideBtn icon="danmaku" text="弹幕" onEnter={() => setPanel("danmaku")} />
               <WideBtn icon="more" text="更多" onEnter={() => setPanel("more")} />
             </FocusRow>
-          </div>
-        </FocusColumn>
+          </FocusColumn>
+        </div>
       )}
 
       {/* 面板打开时 OSD 自动收起(上面用 !panel 控制),画面大部分露在外面,**没有黑色遮罩** */}

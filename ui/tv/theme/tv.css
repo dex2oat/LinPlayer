@@ -809,6 +809,13 @@ body {
   align-items: center;
   gap: 20px;
 }
+/* ★ 底栏这一行永不滚动(FocusColumn 传了 scroll={false},外层没有 .vscroll),
+   所以 .hscroll 那层 overflow:hidden 在这里没有任何要藏的东西,只会切焦点态:
+   最右的「更多」被 scale(1.06) 撑到超出 3.8px,连同 3px 焦点环 + 12px 光晕一起被切平。
+   整页网格靠 .vscroll 的 ±32dp 横向外扩留呼吸位,这里没有那一层,只能直接放开裁剪。 */
+.osd-bot .hscroll {
+  overflow: visible;
+}
 .cbtn {
   width: 72px;
   height: 72px;

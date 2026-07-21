@@ -275,6 +275,15 @@ export function FocusRow({
     const view = viewRef.current;
     if (!track || !view) return;
     const viewR = view.getBoundingClientRect();
+    /* ★ 整行装得下就一步都别挪。
+       下面那条"聚焦第一项时整行右推 FOCUS_PAD 露出焦点环"只对**滚得动**的行成立;
+       行宽正好等于视口时(播放页底栏有 .spring 撑满,正是这种),右推 32px 就把
+       最右那个按钮(「更多」)顶出 .hscroll 的 overflow:hidden —— 实测切掉 32px。
+       装得下 = 没有滚动这回事,焦点环的空间由 .vscroll 的横向外扩负责。 */
+    if (track.getBoundingClientRect().width <= viewR.width) {
+      outerNotify?.(node);
+      return;
+    }
     const r = node.getBoundingClientRect();
     const left = r.left - viewR.left;
     const cur = readTranslate(track, "X");
@@ -319,11 +328,22 @@ export function FocusColumn({
   focusKey,
   /** 顶部固定区高度(页标题不跟着滚)。 */
   topPad = 0,
+  /** 关掉滚动层,只保留焦点分组。
+   *
+   *  ★ 为什么需要:滚动层是 `.vscroll`(overflow:hidden) + `.inner`(位移 + will-change),
+   *    对**内容本来就装得下**的地方是纯粹的负担,而且会静默出两种事故:
+   *      1. `.inner` 带 will-change 就成了绝对定位后代的**包含块**,子元素若是
+   *         out-of-flow,`.inner` 还会塌成 0 高 —— 播放页底栏因此被算到屏幕上方 200px。
+   *      2. 行里那对 `.hscroll{padding:32px 0;margin:-32px 0}` 让 `.inner` 比 `.vscroll`
+   *         凭空高 32px,于是"滚"了一下,把上面的进度条顶出裁剪盒(实测 9 个焦点位全没)。
+   *    两条都表现为"东西不见了"且毫无报错。装得下的地方就别上滚动层。 */
+  scroll = true,
 }: {
   children: ReactNode;
   className?: string;
   focusKey?: string;
   topPad?: number;
+  scroll?: boolean;
 }) {
   const innerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLDivElement>(null);
@@ -370,6 +390,18 @@ export function FocusColumn({
     /* 嵌套时(行在列里)继续往上冒 —— 否则横向行会滚,但那一整行不会被带进视野。 */
     outerNotify?.(node);
   };
+
+  if (!scroll)
+    return (
+      <FocusContext.Provider value={fk}>
+        {/* 通知直接往外层传:自己不滚,但套在别人里面时那一层还得能滚。 */}
+        <ScrollNotify.Provider value={outerNotify}>
+          <div ref={ref} className={className}>
+            {children}
+          </div>
+        </ScrollNotify.Provider>
+      </FocusContext.Provider>
+    );
 
   return (
     <FocusContext.Provider value={fk}>
