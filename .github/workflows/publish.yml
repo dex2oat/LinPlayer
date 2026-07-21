@@ -25,10 +25,25 @@ jobs:
           set -euo pipefail
           VER="${{ inputs.version }}"
           if [ -z "$VER" ]; then
-            echo "未指定版本，自动选取最新预发布(*-pre)…"
-            TAG=$(gh release list --repo "${{ github.repository }}" --limit 50 \
+            echo "未指定版本，自动选取版本号最大的预发布(*-pre)…"
+            # ★ 不能用 `.[0].tagName` —— GitHub 返回的顺序**不可依赖**,没写进文档也不自洽。
+            #   2026-07-19 实测反证:v1.0.0-build557-pre 排第 1,而 v0.1.0-build566-pre
+            #   的 id / created_at / published_at 三个键都更大更晚,却排在后面。
+            #   照抄顺序 = 把更旧的包提升成正式版,**降级伪装成升级**,而且一发就是全量用户。
+            #   crates/core/src/update.rs 里的 pick_newest_release 早就因为同一个坑改成
+            #   「按版本号取最大」了,这里是同一条链路上漏掉的另一半。
+            #   排序键:major/minor/patch/build 各补零到 10 位后字典序倒排。
+            TAG=$(gh release list --repo "${{ github.repository }}" --limit 100 \
               --json tagName,isPrerelease \
-              --jq 'map(select(.isPrerelease)) | .[0].tagName // empty')
+              --jq 'map(select(.isPrerelease))|.[].tagName' \
+              | awk '{
+                  t=$0; v=t; sub(/^v/,"",v); sub(/-pre$/,"",v);
+                  b=0;
+                  if (match(v,/-build[0-9]+$/)) { b=substr(v,RSTART+6); sub(/-build[0-9]+$/,"",v) }
+                  split(v,a,".");
+                  printf "%010d%010d%010d%010d %s\n", a[1], a[2], a[3], b, t
+                }' \
+              | sort -r | head -1 | cut -d" " -f2)
             if [ -z "$TAG" ]; then
               echo "未找到任何预发布版本，无法发布"; exit 1
             fi

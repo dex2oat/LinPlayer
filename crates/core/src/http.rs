@@ -24,6 +24,17 @@ pub fn preload_user_agent() -> String {
     format!("{CLIENT_NAME}Preload/{APP_VERSION}")
 }
 
+/// 第三方公开 API(Bangumi/Trakt/弹弹Play/翻译/排行)用的 User-Agent。
+///
+/// ★ 这条原本是「不设」。但 reqwest 不设 = **一个 UA 头都不发**,
+///   带 WAF 的公开 API 会直接判成脚本流量:2026-07-21 实测 `api.bgm.tv/v0/me`
+///   同一个 Access Token,带 UA → 200,不带 → **403(Cloudflare)**。
+///   仍然和 Emby / 预加载两条道**互相可区分**(三份日志分得开,这是原口径的目的),
+///   并按 bgm.tv 开发指引在 UA 里带上项目地址,方便对方风控找到人。
+pub fn api_user_agent() -> String {
+    format!("{CLIENT_NAME}/{APP_VERSION} (+https://github.com/zzzwannasleep/LinPlayer)")
+}
+
 /// 本机设备名(Emby X-Emby-Authorization 的 Device 字段用)。
 pub fn device_name() -> String {
     std::env::var("COMPUTERNAME")
@@ -203,10 +214,19 @@ static CLIENT: std::sync::RwLock<Option<reqwest::Client>> = std::sync::RwLock::n
 static EMBY_CLIENT: std::sync::RwLock<Option<reqwest::Client>> = std::sync::RwLock::new(None);
 static PRELOAD_CLIENT: std::sync::RwLock<Option<reqwest::Client>> = std::sync::RwLock::new(None);
 
-/// 通用 HTTP 客户端(**不设 UA**,走 reqwest 默认;带全局代理、按 host 的自签名白名单)。
+/// 通用 HTTP 客户端(UA = `LinPlayer/{版本}`;带全局代理、按 host 的自签名白名单)。
 /// 弹幕/Bangumi/Trakt/翻译/排行等第三方一律用它。
+///
+/// ★ 这里原来是 `None` —— 而 reqwest 不设 UA 就是**一个 User-Agent 头都不发**,
+///   不是"发个默认的"。多数带 WAF 的公开 API 把无 UA 直接判成脚本流量:
+///   2026-07-21 实测 `api.bgm.tv/v0/me` 同一个 Access Token,
+///   带 UA → 200,不带 UA → **403(Cloudflare)**。
+///   现象是「Bangumi Access Token 明明有效却提示无效或已过期」,
+///   而 curl 手测永远复现不出来 —— curl 自己会发 `curl/8.x`。
+///   Emby 用 [`emby_client`]、预取用 [`preload_client`],三条口径仍然分开(见上面注释),
+///   这里只是把"第三方"这条从"无名氏"改成"报上名号"。
 pub fn client() -> reqwest::Client {
-    cached(&CLIENT, None)
+    cached(&CLIENT, Some(api_user_agent()))
 }
 
 /// 访问 Emby 的客户端(UA = `LinPlayer/{版本}`)。
@@ -379,10 +399,16 @@ Content-Length: 5
         assert!(!proxy_hit.load(Ordering::SeqCst), "用户代理不该被连");
     }
 
-    /* UA 口径(用户 2026-07-19 定):Emby=LinPlayer/版本,多线程加载/预加载=LinPlayerPreload/版本,
-       其它=默认(不设)。**真起一个服务器读实际发出的请求头**,不比对字符串常量 ——
-       比对常量只能证明 format! 没写错,证明不了 .user_agent() 真的挂到了那个 client 上。
-       反向验证:把 preload_client() 改成 cached(&PRELOAD_CLIENT, Some(user_agent())),此测试立刻红。 */
+    /* UA 口径:Emby=LinPlayer/版本,多线程加载/预加载=LinPlayerPreload/版本,
+       第三方公开 API=LinPlayer/版本 (+项目地址)。**真起一个服务器读实际发出的请求头**,
+       不比对字符串常量 —— 比对常量只能证明 format! 没写错,证明不了 .user_agent()
+       真的挂到了那个 client 上。
+       反向验证:把 preload_client() 改成 cached(&PRELOAD_CLIENT, Some(user_agent())),此测试立刻红。
+
+       ★ 第三方那条 2026-07-19 原定"不设 UA",2026-07-21 改掉了:reqwest 的"不设"
+         是**一个 UA 头都不发**,Bangumi 的 Cloudflare 直接 403(同一个有效 Access Token,
+         带 UA 200 / 不带 403),表现成"Access Token 明明有效却提示无效或已过期"。
+         原口径的目的是"三条流量在服务端日志里分得开",现在依然分得开,只是不再匿名。 */
     #[tokio::test]
     async fn each_client_sends_its_own_user_agent() {
         let _g = lock_globals();
@@ -411,7 +437,7 @@ Content-Length: 5
         for (who, cli) in [
             ("emby", emby_client()),
             ("preload", preload_client()),
-            ("默认", client()),
+            ("第三方", client()),
         ] {
             let _ = cli.get(&url).send().await;
             let got = rx.recv().await.expect("服务端没收到请求");
@@ -422,10 +448,14 @@ Content-Length: 5
                     format!("LinPlayerPreload/{APP_VERSION}"),
                     "多线程加载/预加载的 UA 不对 —— 服主没法把预取旁路和真人观看分开"
                 ),
-                _ => assert!(
-                    !got.starts_with("LinPlayer"),
-                    "其它请求不该带我们的 UA(用户要求走默认),实际发出: {got:?}"
-                ),
+                // 第三方那条:**必须真的发出一个非空 UA**(这正是 Bangumi 403 的根因),
+                // 且要和另外两条区分得开。
+                _ => {
+                    assert_eq!(got, api_user_agent(), "第三方 API 的 UA 不对");
+                    assert!(!got.is_empty(), "第三方请求一个 UA 头都没发 —— Bangumi 会 403");
+                    assert_ne!(got, user_agent(), "第三方和 Emby 的 UA 撞了,服务端日志分不开");
+                    assert_ne!(got, preload_user_agent(), "第三方和预加载的 UA 撞了");
+                }
             }
         }
     }
