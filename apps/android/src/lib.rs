@@ -1346,7 +1346,7 @@ async fn ranking_fetch(
     category_id: String,
     force_refresh: Option<bool>,
 ) -> Result<Vec<linplayer_core::ranking::RankingEntry>, String> {
-    Ok(linplayer_core::ranking::fetch(&category_id, force_refresh.unwrap_or(false)).await)
+    linplayer_core::ranking::fetch(&category_id, force_refresh.unwrap_or(false)).await
 }
 
 /// 当前已连接的 Trakt 账号(None=未连接)。

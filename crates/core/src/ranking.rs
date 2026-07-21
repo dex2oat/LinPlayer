@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum RankingSource {
     Dandan,
@@ -24,7 +24,7 @@ pub enum RankingGroup {
     Tv,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RankingEntry {
     pub source: RankingSource,
     pub id: String,
@@ -105,9 +105,17 @@ fn category_by_id(id: &str) -> Option<&'static RankingCategory> {
 }
 
 // ---------- 拉取 ----------
-async fn fetch_dandan(cat: &RankingCategory) -> Vec<RankingEntry> {
-    let (Some(seg), Some((app_id, secret))) = (cat.dandan_path, dandan_creds()) else {
-        return vec![];
+/* ★ 这里的每一条错误都必须**说人话地冒出去**,不许再吞成空数组。
+   2026-07-21 用户报「榜单没数据」,而当时 fetch_dandan 有 6 条 `return vec![]`:
+   缺凭据、请求失败、非 JSON、success=false、无 bangumiList —— 全部长得一模一样(空榜)。
+   排查时根本分不清是「构建没注入密钥」还是「服务端拒签」,只能靠猜。
+   现在一律 Err(原因),UI 的 catch 分支会把它显示出来(RankingsPage 早就写好了 setErr)。 */
+async fn fetch_dandan(cat: &RankingCategory) -> Result<Vec<RankingEntry>, String> {
+    let Some(seg) = cat.dandan_path else {
+        return Err(format!("分类 {} 没有弹弹Play 路径", cat.id));
+    };
+    let Some((app_id, secret)) = dandan_creds() else {
+        return Err("此构建未注入弹弹Play 凭据(DANDANPLAY_APP_ID/APP_SECRET)".into());
     };
     let path = format!("/api/v2/trending/{seg}");
     let ts = SystemTime::now()
@@ -125,15 +133,20 @@ async fn fetch_dandan(cat: &RankingCategory) -> Vec<RankingEntry> {
         .header("Accept", "application/json")
         .send()
         .await;
-    let Ok(v) = resp else { return vec![] };
-    let Ok(j) = v.json::<serde_json::Value>().await else {
-        return vec![];
-    };
+    let v = resp.map_err(|e| format!("请求弹弹Play 失败: {e}"))?;
+    let status = v.status();
+    let j = v
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("弹弹Play 返回不是 JSON(HTTP {status}): {e}"))?;
     if j.get("success").and_then(|s| s.as_bool()) != Some(true) {
-        return vec![];
+        // errorCode/errorMessage 是官方 ResponseBase 的字段,签名错/无权限都在这儿说明原因。
+        let code = j.get("errorCode").and_then(|c| c.as_i64()).unwrap_or(-1);
+        let msg = j.get("errorMessage").and_then(|m| m.as_str()).unwrap_or("(无错误信息)");
+        return Err(format!("弹弹Play 拒绝请求(HTTP {status} / errorCode {code}): {msg}"));
     }
     let Some(list) = j.get("bangumiList").and_then(|l| l.as_array()) else {
-        return vec![];
+        return Err(format!("弹弹Play 响应缺少 bangumiList 字段(HTTP {status})"));
     };
     let mut out = Vec::new();
     let mut rank = 0;
@@ -155,14 +168,16 @@ async fn fetch_dandan(cat: &RankingCategory) -> Vec<RankingEntry> {
             media_type: None,
         });
     }
-    out
+    Ok(out)
 }
 
-async fn fetch_tmdb(cat: &RankingCategory) -> Vec<RankingEntry> {
-    let Some(path) = cat.tmdb_path else { return vec![] };
+async fn fetch_tmdb(cat: &RankingCategory) -> Result<Vec<RankingEntry>, String> {
+    let Some(path) = cat.tmdb_path else {
+        return Err(format!("分类 {} 没有 TMDB 路径", cat.id));
+    };
     let key = tmdb_key();
     if key.is_empty() {
-        return vec![];
+        return Err("此构建未注入 TMDB 密钥(TMDB_API_KEY)".into());
     }
     let use_bearer = key.contains('.'); // v4 JWT 含点;v3 为 32 位十六进制
     let media_type = if path.contains("/tv") { "tv" } else { "movie" };
@@ -176,10 +191,16 @@ async fn fetch_tmdb(cat: &RankingCategory) -> Vec<RankingEntry> {
     } else {
         req = req.query(&[("api_key", key.as_str())]);
     }
-    let Ok(v) = req.send().await else { return vec![] };
-    let Ok(j) = v.json::<serde_json::Value>().await else { return vec![] };
+    let v = req.send().await.map_err(|e| format!("请求 TMDB 失败: {e}"))?;
+    let status = v.status();
+    let j = v
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("TMDB 返回不是 JSON(HTTP {status}): {e}"))?;
     let Some(list) = j.get("results").and_then(|l| l.as_array()) else {
-        return vec![];
+        // TMDB 用 status_message 说明密钥无效/超配额。
+        let msg = j.get("status_message").and_then(|m| m.as_str()).unwrap_or("响应缺少 results 字段");
+        return Err(format!("TMDB 拒绝请求(HTTP {status}): {msg}"));
     };
     const IMG: &str = "https://image.tmdb.org/t/p/w342";
     let mut out = Vec::new();
@@ -214,7 +235,7 @@ async fn fetch_tmdb(cat: &RankingCategory) -> Vec<RankingEntry> {
             media_type: Some(media_type.to_string()),
         });
     }
-    out
+    Ok(out)
 }
 
 fn val_to_str(v: &serde_json::Value) -> String {
@@ -263,23 +284,23 @@ fn cache_put(id: &str, entries: &[RankingEntry]) {
 }
 
 /// 拉取某分类榜单。默认命中 6h 缓存;force_refresh 绕过。
-pub async fn fetch(category_id: &str, force_refresh: bool) -> Vec<RankingEntry> {
+pub async fn fetch(category_id: &str, force_refresh: bool) -> Result<Vec<RankingEntry>, String> {
     let Some(cat) = category_by_id(category_id) else {
-        return vec![];
+        return Err(format!("未知榜单分类: {category_id}"));
     };
     if !force_refresh {
         if let Some(c) = cache_get(category_id) {
-            return c;
+            return Ok(c);
         }
     }
     let list = match cat.source {
         Dandan => fetch_dandan(cat).await,
         Tmdb => fetch_tmdb(cat).await,
-    };
+    }?;
     if !list.is_empty() {
         cache_put(category_id, &list);
     }
-    list
+    Ok(list)
 }
 
 #[cfg(test)]
@@ -301,6 +322,54 @@ mod tests {
         let n = ids.len();
         ids.dedup();
         assert_eq!(ids.len(), n, "分类 id 有重复");
+    }
+
+    /* 回归:榜单失败必须**说出原因**,不许再退化成「空数组 = 没数据」。
+       2026-07-21 用户报「弹弹榜单没数据」,而当时 fetch_dandan 把缺凭据 / 请求失败 /
+       非 JSON / success=false / 缺字段 全部 `return vec![]` —— 五种成因长得一模一样,
+       排查只能靠猜(实际根因之一是安卓 CI 压根没传 DANDANPLAY_*)。
+       反向验证:把 fetch_dandan 的 Err 改回 Ok(vec![]),本测试立刻红。 */
+    #[tokio::test]
+    async fn missing_creds_reports_why_instead_of_empty_list() {
+        // 未知分类:必须点名分类 id,而不是静默空榜。
+        let e = fetch("no-such-category", true).await.expect_err("未知分类应当报错");
+        assert!(e.contains("no-such-category"), "错误信息没点名分类: {e}");
+
+        // 本地/PoC 构建没有编译期凭据 —— 此时必须明说「没注入凭据」,
+        // 并且把变量名写进去,让人一眼知道去 CI 里补哪个。
+        if !anime_configured() {
+            let e = fetch("anime_hot_week", true).await.expect_err("无凭据应当报错");
+            assert!(e.contains("DANDANPLAY_APP_ID"), "没指明缺哪个变量: {e}");
+        }
+        if !video_configured() {
+            let e = fetch("movie_popular", true).await.expect_err("无 TMDB 密钥应当报错");
+            assert!(e.contains("TMDB_API_KEY"), "没指明缺哪个变量: {e}");
+        }
+    }
+
+    /* 联网冒烟:拿**真凭据**打一次弹弹Play 排行榜,把服务端的真实回答打出来。
+       默认 #[ignore] —— 它要网络 + 编译期凭据,本地/PR 都不该因为弹弹抽风而红。
+       CI 里由 build-linux 的「Dandanplay 排行榜连通性」步骤显式 --ignored 跑,
+       且不阻断构建:它是**诊断**,不是闸门。
+
+       为什么值得留着:2026-07-21 排查「弹弹榜单没数据」时,凭据有效(弹幕搜索同款
+       签名同套凭据能出结果)、TMDB 榜正常、分类也全亮 —— 唯独 trending 一族空。
+       当时手上没有凭据可以本地复现,只能靠 CI 里这一步把 errorCode/errorMessage 吐出来。
+       以后凭据过期、接口改版、签名口径变了,这一步都会第一时间说清楚是哪种。 */
+    #[tokio::test]
+    #[ignore = "需要网络 + 编译期注入的弹弹Play 凭据;CI 显式 --ignored 跑"]
+    async fn dandan_trending_smoke() {
+        assert!(anime_configured(), "这个构建没有弹弹Play 凭据,冒烟测试无从谈起");
+        match fetch("anime_hot_week", true).await {
+            Ok(v) => {
+                println!("弹弹Play 排行榜返回 {} 条", v.len());
+                for e in v.iter().take(3) {
+                    println!("  #{} {}", e.rank, e.title);
+                }
+                assert!(!v.is_empty(), "弹弹Play 榜单返回空列表(success=true 但 bangumiList 是空的)");
+            }
+            Err(e) => panic!("弹弹Play 排行榜失败: {e}"),
+        }
     }
 
     #[test]

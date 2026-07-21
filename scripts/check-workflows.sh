@@ -87,3 +87,40 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 echo "全部通过($i 块)"
+
+# ★★ 编译期凭据闸门。2026-07-21 事故:安卓 job 从建起来就没传 DANDANPLAY_*/TMDB_API_KEY,
+#   于是 TV 端排行榜整页空白 —— 而 CI 全绿、APK 正常出包、装得上跑得起来。
+#   这类漏配**没有任何运行时信号**:crates/core/build.rs 读不到就静默不注入,
+#   前端只好诚实显示「未注入凭据」,看着像功能没做。
+#   凡是跑 `tauri build` / `tauri android build` 的步骤,三个变量一个都不能少。
+"$PY_BIN" - <<'PY'
+import yaml, glob, sys
+
+NEED = ['DANDANPLAY_APP_ID', 'DANDANPLAY_APP_SECRET', 'TMDB_API_KEY']
+bad = []
+checked = 0
+for f in sorted(glob.glob('.github/workflows/*.yml')):
+    d = yaml.safe_load(open(f, encoding='utf-8'))
+    for jname, job in (d.get('jobs') or {}).items():
+        for i, step in enumerate(job.get('steps') or []):
+            run = step.get('run') or ''
+            if 'tauri build' not in run and 'tauri android build' not in run:
+                continue
+            checked += 1
+            label = '%s | %s | %s' % (f, jname, step.get('name') or ('#%d' % i))
+            # 变量可以挂在 step 或 job 上,两处都算。
+            env = dict((job.get('env') or {}), **(step.get('env') or {}))
+            miss = [k for k in NEED if not str(env.get(k, '')).strip()]
+            if miss:
+                bad.append('%s  缺少: %s' % (label, ', '.join(miss)))
+
+if checked == 0:
+    print('凭据闸门:没找到任何 tauri build 步骤 —— 闸门本身失效了,当作失败')
+    sys.exit(1)
+for b in bad:
+    print('  FAIL  ' + b)
+if bad:
+    print('构建步骤漏了编译期凭据 —— 出来的包功能会静默残废(排行榜空白)')
+    sys.exit(1)
+print('凭据闸门通过(%d 个构建步骤)' % checked)
+PY

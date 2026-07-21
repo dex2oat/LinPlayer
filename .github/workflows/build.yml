@@ -316,6 +316,17 @@ jobs:
       - name: Rust tests
         run: cargo test --workspace
 
+      # 诊断步骤,**不是闸门**(continue-on-error):拿真凭据打一次弹弹Play 排行榜,
+      # 把服务端原话打进日志。2026-07-21「弹弹榜单没数据」就是卡在本地没凭据、
+      # 而线上又把错误吞成空数组,只能靠这一步看清是签名被拒、限流、还是接口改版。
+      # 弹弹抽风不该拦发版,所以失败只留日志。
+      - name: Dandanplay 排行榜连通性(诊断)
+        continue-on-error: true
+        env:
+          DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
+          DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
+        run: cargo test -p linplayer-core --lib ranking::tests::dandan_trending_smoke -- --ignored --nocapture
+
       - name: Build
         env:
           DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
@@ -662,6 +673,15 @@ jobs:
           #   崩溃报告打回「只知道在哪个函数」。cargo profile 没有 per-target 覆盖,
           #   只能在调用侧按住 —— scripts/build-android-apk.sh 里是同一条,改要一起改。
           CARGO_PROFILE_RELEASE_DEBUG: "false"
+          # ★★ 榜单凭据。**漏了这三行 = TV 端排行榜整页空白,而构建全程绿灯。**
+          #   crates/core/build.rs 在编译期读这三个环境变量、把密钥加密进二进制;
+          #   读不到就不注入,运行时 available_categories() 返回空数组 —— 前端诚实显示
+          #   「未注入凭据」,看起来像功能没做,实际是打包时把密钥落下了。
+          #   Windows / Linux 两个 job 早就有这段(见各自的 Build 步骤),
+          #   安卓 job 从建起来那天就漏了。三个 job 必须**一起**改。
+          DANDANPLAY_APP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
+          DANDANPLAY_APP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
           # ★ rquickjs-sys 在安卓要现跑 bindgen 生成 FFI —— 必须显式给 NDK sysroot,
           #   否则 bindgen 拿**宿主的 /usr/include** 去编安卓目标,报

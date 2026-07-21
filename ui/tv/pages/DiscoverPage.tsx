@@ -121,7 +121,11 @@ export default function DiscoverPage({
           cats.err ? (
             <div style={NOTE}>拉不到榜单分类:{cats.err.message}</div>
           ) : cats.data?.length === 0 ? (
-            <div style={NOTE}>没有可用的榜单。排行榜默认是关的,去设置里打开。</div>
+            /* ★ 这里**不存在**什么「排行榜开关」—— 原文写着「默认是关的,去设置里打开」,
+               那是 Flutter 时代留下来的说法,Rust 栈里根本没有这个设置项,
+               用户照着找只会在设置页里翻个空。分类为空的唯一原因是打包时没注入凭据
+               (ranking::available_categories 按 dandan_creds/tmdb_key 过滤)。 */
+            <div style={NOTE}>这个安装包没有内置榜单凭据,所以没有可用的榜单。</div>
           ) : curCat ? (
             <RankGrid key={curCat.id} cat={curCat} onOpen={open} />
           ) : (

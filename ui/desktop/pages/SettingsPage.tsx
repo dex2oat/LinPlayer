@@ -29,6 +29,7 @@ import {
   bangumiAccount,
   bangumiAuthorizeUrl,
   bangumiExchange,
+  bangumiLoginToken,
   bangumiLogout,
   configExportQr,
   configImportQr,
@@ -1807,11 +1808,34 @@ function BangumiBlock() {
   const [acct, setAcct] = useState<SyncAccount | null>(null);
   const [authUrl, setAuthUrl] = useState("");
   const [code, setCode] = useState("");
+  const [token, setToken] = useState("");
+  const [tokenMode, setTokenMode] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     bangumiAccount().then(setAcct).catch(f.err);
   }, []);
+
+  /* Access Token 直连。OAuth 那条要复制地址→浏览器授权→回粘 code,三步;
+     Bangumi 官方提供了自助生成长期 token 的页面(next.bgm.tv/demo/access-token),
+     粘一次就完事。核层 bangumi_login_token 会立刻打一次 /v0/me 验真伪,
+     废 token 存不进配置。TV 端早就有这个入口,桌面这边一直漏着。 */
+  async function submitToken() {
+    if (busy || !token.trim()) return;
+    setBusy(true);
+    try {
+      await bangumiLoginToken(token.trim());
+      setAcct(await bangumiAccount());
+      setToken("");
+      setTokenMode(false);
+      setAuthUrl("");
+      f.ok("Bangumi 已连接");
+    } catch (e) {
+      f.err(e);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function begin() {
     if (busy) return;
@@ -1859,11 +1883,44 @@ function BangumiBlock() {
             断开
           </button>
         ) : (
-          <button className="btn primary" disabled={busy || !!authUrl} onClick={begin}>
-            {busy ? "获取中…" : "连接"}
-          </button>
+          <>
+            <button
+              className="btn"
+              disabled={busy}
+              onClick={() => {
+                setTokenMode((v) => !v);
+                setAuthUrl("");
+              }}
+            >
+              用 Token
+            </button>
+            <button className="btn primary" disabled={busy || !!authUrl} onClick={begin}>
+              {busy ? "获取中…" : "连接"}
+            </button>
+          </>
         )}
       </Row>
+      {tokenMode && !acct && (
+        <div className="st-auth">
+          <p className="hint" style={{ margin: "0 0 10px" }}>
+            在 next.bgm.tv/demo/access-token 生成一个 Access Token,粘到下方即可(不必走 OAuth):
+          </p>
+          <div className="st-copyrow">
+            <input
+              className="field"
+              placeholder="粘贴 Access Token"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submitToken();
+              }}
+            />
+            <button className="btn primary" disabled={busy || !token.trim()} onClick={submitToken}>
+              {busy ? "校验中…" : "连接"}
+            </button>
+          </div>
+        </div>
+      )}
       {authUrl && (
         <div className="st-auth">
           <p className="hint" style={{ margin: "0 0 10px" }}>
