@@ -35,7 +35,7 @@ val hasReleaseKeystore = keystoreProperties.getProperty("storeFile")?.isNotBlank
 
 android {
     compileSdk = 36
-    namespace = "xyz.linplayer.app"
+    namespace = "xyz.linplayer.tv"
 
     signingConfigs {
         if (hasReleaseKeystore) {
@@ -49,14 +49,19 @@ android {
     }
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
-        /* ★ 用回旧安卓端的包名(删 Flutter 之前 android/app/build.gradle.kts 里就是它),
-           不用 Tauri 按 TV 配置生成的 xyz.linplayer.tv ——
-           换包名 = 在用户设备上变成另一个 App,老版本收不到覆盖升级。
+        /* ★ 设备上的身份用回旧安卓端的包名(删 Flutter 之前 android/app/build.gradle.kts
+           里就是它)。换包名 = 变成另一个 App,老版本收不到覆盖升级。
 
-           namespace / Kotlin 源码目录 / tauri.conf.json 的 identifier 三处必须**同时**
-           是这个值:Tauri 的 android build 会按 identifier 去找
-           app/src/main/java/<identifier 路径>,对不上就直接报
-           "Project directory ... does not exist"(2026-07-21 实测撞过)。 */
+           ⚠️ 只改 applicationId,**不要**顺手把 namespace / Kotlin 源码目录 /
+           tauri.conf.json 的 identifier 也改成 xyz.linplayer.app。我 2026-07-21 试过,
+           CI 当场炸在 `Unresolved reference: TauriActivity`:
+             - identifier 决定 Tauri 找 app 的 src/main/java 下哪个包路径,
+               改了就得连 Kotlin 源码目录一起搬;
+             - 但那个包路径下的 generated 那批 kt(TauriActivity/Logger/Rust…)
+               是 **wry 的 build script 产物**,且是 gitignore 的 —— CI 上 Rust
+               命中缓存时(实测 0 个 crate 重编)build script 根本不跑,新路径下就是空的。
+           applicationId 是 Gradle 层的,和源码包路径无关,单独改零风险 ——
+           而 namespace 只是 R 类/MainActivity 的包名,用户看不见,改它收益为零。 */
         applicationId = "xyz.linplayer.app"
         minSdk = 24
         targetSdk = 36
