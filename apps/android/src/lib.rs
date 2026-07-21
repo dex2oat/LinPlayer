@@ -889,18 +889,75 @@ async fn probe_line(
    ★ 遥控按键不能在这里"执行",它要落到 WebView 里的焦点库上 ——
      所以按键只是 `emit` 给前端,由 ui/tv/app/remote.ts 转成真实键事件。 */
 
-/// 手机页当前可扫的地址。null = 没开或起服失败(没连局域网)。
+/// 手机控制台的真实状态。**不再只返回一个 Option<String>** ——
+/// 上一版就是这么写的,界面拿到 null 只能猜"没开或没联网",用户看到的提示和真实原因
+/// 无关,连往下查都没法查(2026-07-21 的现场:真因是默认值 false,提示却说没联网)。
+#[derive(serde::Serialize)]
+struct CompanionStatus {
+    /// 用户开关。false = 用户自己在设置里关的。
+    enabled: bool,
+    /// 服务是否真的在监听。
+    running: bool,
+    /// 可扫地址;None = 服务在跑但探不到本机 IP。
+    url: Option<String>,
+    /// 监听端口(探不到 IP 时给用户一条能自查的线索)。
+    port: Option<u16>,
+    /// 说人话的失败原因;None = 一切正常。
+    error: Option<String>,
+}
+
+/// 查状态。**顺带自愈**:开关是开的却没在跑(开机时网卡还没就绪等),就地重试起服 ——
+/// 否则用户得重启 App 才能好,而他根本不知道该重启。
 #[tauri::command]
-fn companion_url(state: State<'_, AppState>) -> Option<String> {
-    state.companion.lock().unwrap().as_ref().map(|c| c.url.clone())
+async fn companion_url(app: tauri::AppHandle) -> CompanionStatus {
+    let enabled = app.state::<AppState>().config.lock().unwrap().companion_enabled;
+    if !enabled {
+        return CompanionStatus {
+            enabled: false,
+            running: false,
+            url: None,
+            port: None,
+            error: Some("手机遥控被关掉了,把上面的开关打开".into()),
+        };
+    }
+
+    let running = app.state::<AppState>().companion.lock().unwrap().is_some();
+    if !running {
+        // 自愈一次。失败原因原样带回界面,不再糊成"没联网"。
+        if let Err(e) = try_start_companion(app.clone()).await {
+            return CompanionStatus {
+                enabled: true,
+                running: false,
+                url: None,
+                port: None,
+                error: Some(e),
+            };
+        }
+    }
+
+    let st = app.state::<AppState>();
+    let g = st.companion.lock().unwrap();
+    match g.as_ref() {
+        Some(c) => CompanionStatus {
+            enabled: true,
+            running: true,
+            url: c.url.clone(),
+            port: Some(c.port),
+            error: c.ip_error.clone(),
+        },
+        None => CompanionStatus {
+            enabled: true,
+            running: false,
+            url: None,
+            port: None,
+            error: Some("服务没能起来(日志里搜 companion)".into()),
+        },
+    }
 }
 
 /// 开关手机控制台。关掉即停服(Companion 的 Drop 干这件事),再开会换一个新 token。
 #[tauri::command]
-async fn companion_set_enabled(
-    app: tauri::AppHandle,
-    enabled: bool,
-) -> Result<Option<String>, String> {
+async fn companion_set_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     {
         let st = app.state::<AppState>();
         let mut cfg = st.config.lock().unwrap();
@@ -909,13 +966,33 @@ async fn companion_set_enabled(
     }
     if !enabled {
         *app.state::<AppState>().companion.lock().unwrap() = None;
-        return Ok(None);
+        return Ok(());
     }
-    Ok(start_companion(app.clone()).await)
+    /* 开启失败要**报给界面**:静默返回 None 的话,用户拨了开关什么也没发生,
+       还以为是自己没拨到位。 */
+    try_start_companion(app.clone()).await.map(|_| ())
 }
 
-/// 起服并存进 AppState。失败(没局域网)只记日志:这不该拦住 App 启动。
+/// 起服;失败把原因**原样返回**(给界面用)。
+async fn try_start_companion(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    match start_companion_inner(app).await {
+        Ok(url) => Ok(url),
+        Err(e) => Err(e),
+    }
+}
+
+/// 开机路径:失败只记日志,不拦启动。
 async fn start_companion(app: tauri::AppHandle) -> Option<String> {
+    match start_companion_inner(app).await {
+        Ok(url) => url,
+        Err(e) => {
+            log::warn!("[companion] 起服失败(不影响其它功能): {e}");
+            None
+        }
+    }
+}
+
+async fn start_companion_inner(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let h = app.clone();
     let handler: linplayer_core::companion::Handler = std::sync::Arc::new(move |name, body| {
         let app = h.clone();
@@ -926,18 +1003,15 @@ async fn start_companion(app: tauri::AppHandle) -> Option<String> {
             }
         })
     });
-    match linplayer_core::companion::start(handler).await {
-        Ok(c) => {
-            let url = c.url.clone();
-            log::info!("[companion] 手机控制台已开: {url}");
-            *app.state::<AppState>().companion.lock().unwrap() = Some(c);
-            Some(url)
-        }
-        Err(e) => {
-            log::warn!("[companion] 起服失败(不影响其它功能): {e}");
-            None
-        }
-    }
+    let c = linplayer_core::companion::start(handler).await?;
+    let url = c.url.clone();
+    log::info!(
+        "[companion] 手机控制台已开: 端口 {} 地址 {}",
+        c.port,
+        url.clone().unwrap_or_else(|| "(探不到本机 IP)".into())
+    );
+    *app.state::<AppState>().companion.lock().unwrap() = Some(c);
+    Ok(url)
 }
 
 /// 手机页的动作 → 电视上的真实行为。返回的 Value 原样发回手机。

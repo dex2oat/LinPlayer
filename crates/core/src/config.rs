@@ -403,12 +403,29 @@ impl ProxyConfig {
     }
 }
 
-#[derive(Serialize, Deserialize, Default)]
+/* ★ Default **不能 derive**。derive 出来的是「每个字段各自的 Default」,
+     而 `bool::default()` 是 false —— 于是所有 `#[serde(default = "…")]` 写的默认值
+     在「没有配置文件」这条路径上**全部失效**(load() 那里是 unwrap_or_default())。
+
+     2026-07-21 真栽过:companion_enabled 标了 `default = "yes"`,老用户升级(配置文件
+     存在、只是缺这个字段)一切正常,**全新安装/卸载重装的人手机遥控永远打不开** ——
+     而且不报错,界面只说"未开启",查都没处查。
+
+     改成走 serde 反序列化一个空对象:这样**只有一个真相来源**,以后谁再加
+     `#[serde(default = ...)]` 字段都自动对齐,不必记得同步第二处。 */
+#[derive(Serialize, Deserialize)]
 pub struct AppConfig {
+    /* ★ 这三个原本**没标 default**,是个埋着的雷:配置文件里少了任意一个,
+       整份 JSON 就反序列化失败 → load() 的 `.ok()` 吞掉 → `unwrap_or_default()`
+       退回空配置 → **用户所有服务器账号一次性消失,且不报错**。
+       标上 default 之后,缺字段只丢那一个字段(device_id 空了 load() 会重新生成)。 */
     /// 每安装稳定不变的设备 ID(Emby DeviceId 用,影响会话/上报归属)。
+    #[serde(default)]
     pub device_id: String,
+    #[serde(default)]
     pub accounts: Vec<Account>,
     /// 当前活跃账号在 accounts 中的下标。
+    #[serde(default)]
     pub active: Option<usize>,
     /// 播放偏好;serde(default) 兼容旧配置文件。
     #[serde(default)]
@@ -440,6 +457,16 @@ pub struct AppConfig {
 
 fn yes() -> bool {
     true
+}
+
+impl Default for AppConfig {
+    /// 走 serde 反序列化一个空对象 —— 保证「没有配置文件」和「配置文件里缺字段」
+    /// 拿到的是**同一份**默认值(每个字段的 `#[serde(default)]`)。
+    /// 空对象一定能反序列化成功(所有字段都有 default),真炸了也宁可 panic:
+    /// 那说明有字段漏标 default,是编码错误,不该悄悄退回一份半残配置。
+    fn default() -> Self {
+        serde_json::from_str("{}").expect("AppConfig 有字段没标 #[serde(default)]")
+    }
 }
 
 fn config_path() -> PathBuf {
@@ -600,6 +627,35 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /* 「没有配置文件」和「配置文件里缺字段」必须拿到**同一份**默认值。
+
+       这条测试是 2026-07-21 那个线上事故的直接产物:companion_enabled 标了
+       `#[serde(default = "yes")]`,但 AppConfig 当时是 `#[derive(Default)]`,
+       而 load() 在没有配置文件时走 `unwrap_or_default()` —— 那条路径根本不经过
+       serde,于是**全新安装的人手机遥控永远是关的**,界面还说"没连上局域网",
+       用户照着提示去查网线。老用户升级反而正常(配置文件在,只是缺字段),
+       所以本地和 CI 都测不出来。
+
+       反向验证:把 AppConfig 改回 #[derive(Default)],本测试立刻红。 */
+    #[test]
+    fn default_equals_deserializing_an_empty_object() {
+        let from_default = AppConfig::default();
+        let from_empty: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            serde_json::to_value(&from_default).unwrap(),
+            serde_json::to_value(&from_empty).unwrap(),
+            "AppConfig::default() 和「反序列化空对象」结果不一致 ——              多半是 derive(Default) 把某个 #[serde(default = \"…\")] 架空了"
+        );
+    }
+
+    /// 手机遥控**默认开**。关着的话"遥控器"每次要先去电视上打开,等于没有。
+    #[test]
+    fn companion_is_on_by_default() {
+        assert!(AppConfig::default().companion_enabled, "手机遥控默认必须是开的");
+    }
+
     use super::*;
 
     fn acc(server: &str) -> Account {

@@ -14,6 +14,7 @@ import {
   getPlaybackPrefs,
   getPrefs,
   companionSetEnabled,
+  companionUrl,
   getProxy,
   getUpdateSettings,
   setCrossServerResume,
@@ -163,8 +164,9 @@ export default function SettingsPage(_props: { go: (r: Route) => void }) {
   /* Bangumi 授权链接。★ 不能用 toast 显示:那是条几十上百字符的 URL,
      3 秒就没了,用户拿手机根本抄不完。要常驻在行下面。 */
   const [bgmUrl, setBgmUrl] = useState<string | null>(null);
-  /* 手机控制台开关。true=开着(核层默认开);切换后重挂二维码组件让它重新取地址。 */
-  const [remoteOn, setRemoteOn] = useState(true);
+  /* 手机控制台开关。**初值必须问核层**,不能写死 true —— 写死的话用户自己关掉之后
+     进设置页看到的还是"开",拨一下反而变成关,和他看到的状态正好差一拍。 */
+  const [remoteOn, setRemoteOn] = useState<boolean | null>(null);
   const [remoteNonce, setRemoteNonce] = useState(0);
 
   const { theme, setTheme } = useTheme();
@@ -177,6 +179,7 @@ export default function SettingsPage(_props: { go: (r: Route) => void }) {
     cacheSize().then(setCache).catch(() => {});
     dataPaths().then(setPaths).catch(() => {});
     getProxy().then(setProxyState).catch(() => {});
+    companionUrl().then((c) => setRemoteOn(c.enabled)).catch(() => setRemoteOn(false));
     traktAccount().then(setTrakt).catch(() => setTrakt(null));
     bangumiAccount().then(setBgm).catch(() => setBgm(null));
   }, []);
@@ -444,7 +447,7 @@ export default function SettingsPage(_props: { go: (r: Route) => void }) {
                   <SwRow
                     t="手机扫码遥控"
                     d="电视在局域网开一个小网页,手机扫码即可遥控、搜片、改设置、加服务器"
-                    on={remoteOn}
+                    on={remoteOn ?? false}
                     onToggle={() => {
                       const v = !remoteOn;
                       setRemoteOn(v);
@@ -452,7 +455,7 @@ export default function SettingsPage(_props: { go: (r: Route) => void }) {
                         .then(() => setRemoteNonce((n) => n + 1))
                         .catch((e) => {
                           setRemoteOn(!v);
-                          say(String(e));
+                          say(String(e)); // 起服失败要说出来,别让开关悄悄弹回去
                         });
                     }}
                   />

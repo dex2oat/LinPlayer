@@ -43,7 +43,12 @@ pub type Handler = Arc<
 /// 运行中的控制台服务。Drop 即停服。
 pub struct Companion {
     /// 二维码里要编的地址,形如 `http://192.168.1.7:53211/c/1a2b3c4d5e6f`。
-    pub url: String,
+    /// None = 服务在跑,但探测不到本机地址(见 [`Companion::ip_error`])。
+    pub url: Option<String>,
+    /// 实际监听端口。IP 探不到时界面靠它给用户一条可自查的线索。
+    pub port: u16,
+    /// IP 探测失败的原因;None = 一切正常。**别把它和"服务没起来"混为一谈**。
+    pub ip_error: Option<String>,
     task: JoinHandle<()>,
 }
 
@@ -54,14 +59,25 @@ impl Drop for Companion {
 }
 
 /// 起服。绑 0.0.0.0 随机端口,返回带 token 的可扫地址。
+///
+/// ★ **拿不到局域网 IP 不算失败**。服务照起(0.0.0.0 上谁都能连),只是二维码里
+///   写不出地址 —— 这时 `url` 为 None、`ip_error` 说明原因,界面照样能显示端口和
+///   排查提示。上一版把这两件事捆在一起:IP 探测一失手,整个手机遥控直接不存在,
+///   而界面只会说"未开启",完全查不下去。
 pub async fn start(handler: Handler) -> Result<Companion, String> {
-    let ip = lan_ip().ok_or("拿不到本机局域网地址(没连网?)")?;
     let listener = TcpListener::bind(("0.0.0.0", 0))
         .await
         .map_err(|e| format!("监听失败: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let base = format!("/c/{}", one_time_token());
-    let url = format!("http://{ip}:{port}{base}");
+    let (ip, ip_error) = match lan_ip() {
+        Some(ip) => (Some(ip), None),
+        None => (
+            None,
+            Some("探测不到本机局域网地址(所有出口都不通?)".to_string()),
+        ),
+    };
+    let url = ip.as_ref().map(|ip| format!("http://{ip}:{port}{base}"));
 
     let task = tokio::spawn(async move {
         loop {
@@ -74,7 +90,7 @@ pub async fn start(handler: Handler) -> Result<Companion, String> {
         }
     });
 
-    Ok(Companion { url, task })
+    Ok(Companion { url, port, ip_error, task })
 }
 
 /// 一个连接一次请求(手机浏览器发完就等回,不复用也没关系)。
@@ -152,13 +168,30 @@ fn content_length(head: &str) -> Option<usize> {
 /// 不需要枚举网卡(那要么加依赖,要么各平台各写一套)。目标用公网 DNS 只是当"方向",
 /// 断外网也照样能得到网卡地址。
 fn lan_ip() -> Option<String> {
-    let s = UdpSocket::bind("0.0.0.0:0").ok()?;
-    s.connect("223.5.5.5:80").ok()?;
-    let ip = s.local_addr().ok()?.ip();
-    if ip.is_loopback() || ip.is_unspecified() {
-        return None;
+    /* ★ 试**多个**目标,不是一个。connect 只是让内核挑一条路由,而"哪条路由存在"
+       各家网络不一样:没有外网的内网只有私网路由,DNS 被墙的环境到 8.8.8.8 可能
+       无路由,有的盒子还挂着 VPN。任一目标能选出路由就够了。
+       (上一版只打 223.5.5.5 一个目标,一失手整个功能就消失。) */
+    const PROBES: [&str; 5] = [
+        "223.5.5.5:80",    // 阿里 DNS:国内一般通
+        "114.114.114.114:80",
+        "8.8.8.8:80",
+        "192.168.1.1:80",  // 纯内网(没外网也有路由)最常见的两个网关段
+        "10.0.0.1:80",
+    ];
+    for target in PROBES {
+        let Ok(s) = UdpSocket::bind("0.0.0.0:0") else { continue };
+        if s.connect(target).is_err() {
+            continue;
+        }
+        let Ok(addr) = s.local_addr() else { continue };
+        let ip = addr.ip();
+        if ip.is_loopback() || ip.is_unspecified() {
+            continue;
+        }
+        return Some(ip.to_string());
     }
-    Some(ip.to_string())
+    None
 }
 
 /// 一次性路径 token。不是密钥,只是让同局域网的别人猜不中这个路径。
@@ -216,19 +249,20 @@ mod tests {
         };
         let http = reqwest::Client::new();
 
-        let html = http.get(&srv.url).send().await.unwrap().text().await.unwrap();
+        let base = srv.url.clone().expect("本机应当探得到局域网地址");
+        let html = http.get(&base).send().await.unwrap().text().await.unwrap();
         assert!(html.contains("<html"), "根路径没返回页面");
 
         // 猜错 token:必须 404,且业务处理器一次都不能被调用
         let wrong = format!(
             "{}/deadbeefdead/api/state",
-            srv.url.rsplit_once("/c/").unwrap().0
+            base.rsplit_once("/c/").unwrap().0
         );
         let r = http.post(&wrong).body("{}").send().await.unwrap();
         assert_eq!(r.status(), 404, "错 token 竟然没被挡住");
 
         let r = http
-            .post(format!("{}/api/key", srv.url))
+            .post(format!("{base}/api/key"))
             .body(r#"{"k":"up"}"#)
             .send()
             .await

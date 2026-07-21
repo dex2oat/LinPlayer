@@ -1293,11 +1293,22 @@ export const configImportQr = (payload: string) =>
      少了它,要么桌面 CI 因为查不到这几条而红(就是 2026-07-21 那次),
      要么把区块整个豁免掉、这几条从此没人把门。移动绑定时连标记一起移。 */
 
-/** 当前可扫的地址。null = 用户关了,或没连上局域网。 */
-export const companionUrl = () => invoke<string | null>("companion_url");
-/** 开/关手机控制台。开启返回新地址(每次开都换一个 token)。 */
+/** 手机控制台的真实状态。**别再回到只返回一个 url 的老形态** ——
+ *  界面拿到 null 只能瞎猜原因,而 2026-07-21 的真因(开关默认值 false)
+ *  和界面猜的"没连上局域网"毫无关系,用户照着提示查了半天网线。
+ *  查状态时核层顺带自愈:开关开着却没在跑就重试起服。 */
+export type CompanionStatus = {
+  enabled: boolean;
+  running: boolean;
+  url: string | null;
+  port: number | null;
+  /** 说人话的失败原因;null = 一切正常。**界面直接显示它,不要自己编。** */
+  error: string | null;
+};
+export const companionUrl = () => invoke<CompanionStatus>("companion_url");
+/** 开/关手机控制台。开启失败会抛,别吞掉 —— 用户拨了开关得知道成没成。 */
 export const companionSetEnabled = (enabled: boolean) =>
-  invoke<string | null>("companion_set_enabled", { enabled });
+  invoke<void>("companion_set_enabled", { enabled });
 /** 播放页把"现在放的是什么"报给核层 —— 手机控制台要显示片名,mpv 的状态里没有。 */
 export const setNowPlaying = (title: string | null, sub?: string | null) =>
   invoke<void>("set_now_playing", { title, sub: sub ?? null });
