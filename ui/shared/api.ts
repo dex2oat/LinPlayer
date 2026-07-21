@@ -1282,10 +1282,16 @@ export const configExportQr = () => invoke<string>("config_export_qr");
 export const configImportQr = (payload: string) =>
   invoke<number>("config_import_qr", { payload });
 
-/* ---------- 手机控制台(电视出码,手机扫码当遥控器) ----------
-   ★ 只有安卓壳实现(见 apps/android/src/lib.rs 的 companion_*)。电视没摄像头,
-     方向只能是**电视出码、手机扫**:核层在局域网起一个小网页,这里拿到它的地址去编二维码。
-     手机上那一页能遥控、控播放、搜索、改设置、加/切服务器 —— 不只是登录。 */
+/* ==== @shell-only:android 开始 ====================================
+   手机控制台(电视出码,手机扫码当遥控器)。**只有安卓壳注册这几条命令**
+   (见 apps/android/src/lib.rs 的 companion_*)。电视没摄像头,方向只能是
+   电视出码、手机扫:核层在局域网起一个小网页,这里拿到它的地址去编二维码。
+   手机上那一页能遥控、控播放、搜索、改设置、加/切服务器 —— 不只是登录。
+
+   ★ 这对标记**不是注释,是契约**:两端的契约测试都按它切分 ——
+     桌面壳那条("每个 invoke 都注册过")跳过本区块,安卓壳那条**只查**本区块。
+     少了它,要么桌面 CI 因为查不到这几条而红(就是 2026-07-21 那次),
+     要么把区块整个豁免掉、这几条从此没人把门。移动绑定时连标记一起移。 */
 
 /** 当前可扫的地址。null = 用户关了,或没连上局域网。 */
 export const companionUrl = () => invoke<string | null>("companion_url");
@@ -1297,6 +1303,7 @@ export const setNowPlaying = (title: string | null, sub?: string | null) =>
   invoke<void>("set_now_playing", { title, sub: sub ?? null });
 /** 把当前主题镜像到核层,好让手机控制台显示对的当前值。 */
 export const setThemePref = (theme: string) => invoke<void>("set_theme_pref", { theme });
+/* ==== @shell-only:android 结束 ==================================== */
 
 /* ---------- 图片 URL ----------
    走 `lpimg` 自定义协议(见 src-tauri/src/imgcache.rs):字节由 Rust 给,

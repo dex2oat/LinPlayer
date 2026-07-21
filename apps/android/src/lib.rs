@@ -2027,3 +2027,74 @@ pub extern "system" fn Java_xyz_linplayer_tv_MainActivity_nativeSetSurface(
     *CUR.lock().unwrap() = g;
     linplayer_mpv::set_android_surface(ptr);
 }
+
+/* ============================================================
+   契约测试:api.ts 里标了「只有安卓壳有」的命令,安卓壳必须真的注册过。
+
+   ★ 为什么需要这一条:桌面壳那条同名守门人(apps/desktop 的
+     `every_frontend_invoke_names_a_registered_command`)会**跳过**这个区块 ——
+     不在这边补一条对称的,那几条命令就成了两边都不查的盲区,
+     漏注册不会编译报错,只在用户按到遥控器时抛「command not found」。
+   ★ 反向验证:把下面 generate_handler! 里的 companion_url 注释掉,本测试立刻红。
+   ============================================================ */
+#[cfg(test)]
+mod api_contract_tests {
+    /// 取 api.ts 里 `@shell-only:android` 标记之间那一段。
+    /// 标记的解析规则必须和桌面那边**逐字一致**,否则一边剪多了、一边查漏了。
+    fn android_only_block(src: &str) -> String {
+        let i = src
+            .find("@shell-only:android 开始")
+            .expect("api.ts 里没有 @shell-only:android 区块 —— 标记被删了?");
+        let after = &src[i..];
+        let j = after
+            .find("@shell-only:android 结束")
+            .expect("@shell-only:android 只有开始没有结束 —— 标记必须成对");
+        after[..j].to_string()
+    }
+
+    #[test]
+    fn android_only_commands_are_registered() {
+        let block = android_only_block(include_str!("../../../ui/shared/api.ts"));
+        let me = include_str!("lib.rs");
+
+        let handlers = me
+            .split_once("generate_handler![")
+            .expect("找不到 generate_handler!")
+            .1
+            .split_once("])")
+            .expect("generate_handler! 没有收尾")
+            .0;
+        let registered: Vec<&str> = handlers
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty() && !s.starts_with("//"))
+            .collect();
+
+        // 抠 invoke<...>("cmd") / invoke("cmd") 里的命令名(与桌面那条同一套解析)
+        let mut names: Vec<&str> = Vec::new();
+        for (i, _) in block.match_indices("invoke") {
+            let rest = &block[i + "invoke".len()..];
+            let Some(lp) = rest.find('(') else { continue };
+            if rest[..lp].contains(';') || rest[..lp].contains('\n') {
+                continue;
+            }
+            let after = rest[lp + 1..].trim_start();
+            let Some(q) = after.strip_prefix('"') else { continue };
+            let Some(end) = q.find('"') else { continue };
+            names.push(&q[..end]);
+        }
+        names.sort_unstable();
+        names.dedup();
+        assert!(
+            names.len() >= 4,
+            "只从安卓专属区块抠出 {} 个命令,解析多半坏了(或区块被搬空了)",
+            names.len()
+        );
+
+        let missing: Vec<&&str> = names.iter().filter(|n| !registered.contains(*n)).collect();
+        assert!(
+            missing.is_empty(),
+            "api.ts 标了「只有安卓壳有」,但安卓壳没注册:{missing:?}"
+        );
+    }
+}

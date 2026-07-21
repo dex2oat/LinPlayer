@@ -4854,6 +4854,29 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+/// 去掉 api.ts 里 `@shell-only:android` 标记之间的内容(含标记行本身)。
+/// 桌面测试用它剪枝,安卓测试用同一对标记取出那一段 —— 解析规则必须一致,
+/// 所以两边都只认这一对字符串。
+#[cfg(test)]
+fn strip_android_only(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut rest = src;
+    while let Some(i) = rest.find("@shell-only:android 开始") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i..];
+        match after.find("@shell-only:android 结束") {
+            Some(j) => {
+                // 跳过结束标记那一行的剩余部分
+                let tail = &after[j..];
+                rest = tail.find('\n').map(|k| &tail[k..]).unwrap_or("");
+            }
+            None => panic!("api.ts 里 @shell-only:android 只有开始没有结束 —— 标记必须成对"),
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod api_contract_tests {
     /// 前端 src/lib/api.ts 里 ACCOUNT_MUTATIONS 这个集合决定「改完账号表要不要广播给侧栏」。
@@ -5159,7 +5182,11 @@ mod api_contract_tests {
        反向验证:把 generate_handler! 里任意一行注释掉,此测试立刻红。 */
     #[test]
     fn every_frontend_invoke_names_a_registered_command() {
-        let api_ts = include_str!("../../../ui/shared/api.ts");
+        /* ★ 先剪掉 `@shell-only:android` 区块:那几条命令**只有安卓壳注册**
+           (手机控制台/遥控),桌面壳没有也不该有。它们不是没人把门 ——
+           apps/android 里有一条对称的测试**只查**这个区块。
+           两条测试合起来才覆盖全 api.ts,谁也别单独放宽。 */
+        let api_ts = &crate::strip_android_only(include_str!("../../../ui/shared/api.ts"));
         let me = include_str!("lib.rs");
 
         let handlers = me
