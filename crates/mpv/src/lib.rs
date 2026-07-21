@@ -926,6 +926,29 @@ impl Player {
                事件那条线仍保留(reason=EOF 时会置位),两者取或,谁先到算谁。 */
             eof: self.get_str("eof-reached").as_deref() == Some("yes")
                 || self.eof.load(Ordering::Relaxed),
+            video: self.video_diag(),
+        }
+    }
+
+    /* ★ 「有声音没画面」的自诊断。
+       这类故障在安卓上**一声不吭**:mpv 起得来、文件也加载了、音频照放,只是
+       vo 那条链没出画面。日志默认关着(见 LP_MPV_LOG 那段的理由),机顶盒上又没有终端,
+       于是唯一能拿到的信息就是用户一句"黑屏" —— 我已经因此猜了两轮。
+       现在把 mpv 自己知道的三件事读回来交给界面:有没有视频轨、vo 有没有起来、
+       解出来的尺寸是多少。三者一比就能分清是"片子本来就没视频轨"、"vo 没起来"
+       还是"起来了但没帧",而不必再猜。
+
+       用 get_str 读现成属性,不额外引 mpv_request_log_messages —— 那要在两套 ffi
+       (Windows 链接期 + Linux/安卓 dlopen)里各加一份声明,为一条诊断不值当。 */
+    fn video_diag(&self) -> VideoDiag {
+        let n = |k: &str| self.get_str(k).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        VideoDiag {
+            // 空字符串 = vo 没配置起来(而不是"没有这个属性")
+            vo: self.get_str("current-vo").unwrap_or_default(),
+            width: n("dwidth"),
+            height: n("dheight"),
+            has_video_track: self.get_str("video-codec").is_some_and(|s| !s.is_empty()),
+            hwdec: self.get_str("hwdec-current").unwrap_or_default(),
         }
     }
     pub fn tracks(&self) -> Vec<Track> {
@@ -1167,12 +1190,88 @@ pub struct Status {
     pub buffered: f64,
     /// 本片是否已正常播放到结尾(keep-open=yes 时画面停在最后一帧,时间不再前进)。
     pub eof: bool,
+    /// 画面这条链的自检结果。见 [`Player::video_diag`]。
+    pub video: VideoDiag,
+}
+
+/// 视频输出的实况。**给"有声音没画面"用** —— 界面拿它说出具体是哪一环断了,
+/// 而不是让用户对着一块黑屏猜。
+#[derive(serde::Serialize, Clone, Default)]
+pub struct VideoDiag {
+    /// 实际生效的 vo。空 = 视频输出根本没起来。
+    pub vo: String,
+    pub width: i64,
+    pub height: i64,
+    /// 当前文件里有没有视频轨(纯音频文件是正常的,不该报错)。
+    pub has_video_track: bool,
+    /// 实际生效的硬解。安卓上期望是 mediacodec-copy;空 = 退回软解。
+    pub hwdec: String,
+}
+
+impl VideoDiag {
+    /// 说人话的故障描述;None = 没毛病(或本来就是纯音频)。
+    pub fn problem(&self) -> Option<String> {
+        if !self.has_video_track {
+            return None; // 纯音频文件,黑屏是对的
+        }
+        if self.vo.is_empty() {
+            return Some(format!(
+                "有视频轨但视频输出没起来(current-vo 是空的,hwdec={})。\
+                 多半是渲染面没接上或 GPU 上下文初始化失败。",
+                if self.hwdec.is_empty() { "无" } else { &self.hwdec }
+            ));
+        }
+        if self.width <= 0 || self.height <= 0 {
+            return Some(format!(
+                "视频输出({})起来了,但解不出画面尺寸 —— 解码器没吐帧。",
+                self.vo
+            ));
+        }
+        None
+    }
 }
 
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /* 「有声音没画面」的自诊断必须分得清三种情况 —— 分不清就等于没有诊断,
+       用户看到的还是一句放之四海而皆准的废话,而我又得靠猜。
+
+       反向验证(2026-07-21 实跑):把 problem() 里 `if !self.has_video_track` 那条
+       提前 return 删掉 → 「纯音频」这条立刻红(纯音频文件被当成故障报出去,
+       用户放一首歌就会看到"视频输出没起来"的吓人提示)。 */
+    #[test]
+    fn video_diag_tells_the_three_failures_apart() {
+        let ok = VideoDiag {
+            vo: "gpu".into(), width: 1920, height: 1080,
+            has_video_track: true, hwdec: "mediacodec-copy".into(),
+        };
+        assert_eq!(ok.problem(), None, "一切正常时不该报任何问题");
+
+        /* 纯音频:黑屏是对的,绝不能报错。
+           ★ 这里必须照**真实**的纯音频状态构造 —— vo 空、尺寸 0,而不是只把
+             has_video_track 翻成 false 却留着 vo=gpu/1920x1080。
+             照后者写出来的是一条**假绿**测试:把 has_video_track 那道守卫整个删掉
+             它也照样过(实测过),等于什么都没守住。 */
+        let audio_only = VideoDiag {
+            vo: String::new(), width: 0, height: 0,
+            has_video_track: false, hwdec: String::new(),
+        };
+        assert_eq!(audio_only.problem(), None, "纯音频文件不是故障");
+
+        // vo 没起来 —— 安卓上「有声音没画面」最可能的那一种。
+        let no_vo = VideoDiag { vo: String::new(), ..ok.clone() };
+        let m = no_vo.problem().expect("vo 空必须报出来");
+        assert!(m.contains("视频输出没起来"), "说法要具体,实际是:{m}");
+        assert!(m.contains("mediacodec-copy"), "得带上 hwdec,否则没法判断是哪一层断的");
+
+        // vo 起来了但没帧。
+        let no_frame = VideoDiag { width: 0, height: 0, ..ok.clone() };
+        let m = no_frame.problem().expect("尺寸为 0 必须报出来");
+        assert!(m.contains("没吐帧"), "要和 vo 没起来区分开,实际是:{m}");
+    }
 
     /* 回归:起播路径上的外挂字幕必须真的挂上。
 

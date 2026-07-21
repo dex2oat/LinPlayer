@@ -394,6 +394,33 @@ body {
   font-size: 26px;
   font-weight: 640;
 }
+/* ---- 可进入的行标题(媒体库行)----
+   ★ 焦点态**不放大**:标题在行的左上角,scale 会把它顶出 .vscroll 的裁剪边,
+     而且整行卡片会跟着"看起来动了一下"。改用底色 + 尖角位移,安静但看得出来。 */
+.rowhead .rowlink {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 14px 4px;
+  margin: -2px -14px -4px; /* 抵掉 padding,标题在版式里的位置不因为可聚焦而偏移 */
+  border-radius: 12px;
+  transition: background 160ms ease, color 160ms ease;
+}
+.rowhead .rowlink .chev {
+  font-size: 30px;
+  line-height: 1;
+  opacity: 0.45;
+  transform: translateX(-4px);
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+.rowhead .rowlink.foc {
+  background: var(--accent-soft);
+  color: var(--tv-ink);
+}
+.rowhead .rowlink.foc .chev {
+  opacity: 1;
+  transform: translateX(0);
+}
 .track {
   display: flex;
   gap: 24px;
@@ -646,6 +673,38 @@ body {
   inset: 0;
   z-index: 10;
 }
+/* ---- 「有声音没画面」的故障牌 ----
+   ★ 自带不透明底:播放时整条渲染链是透明的,裸文字会糊在画面上读不了 ——
+     而这块偏偏是画面**没出来**时才显示的,底下多半是纯黑,更要靠自己的底把它托出来。
+   ★ 不跟 OSD 一起自动收起:这是故障说明,收起来用户就再也看不到原因了。 */
+.osd-fault {
+  position: absolute;
+  left: 50%;
+  top: 44%;
+  transform: translate(-50%, -50%);
+  max-width: 1080px;
+  padding: 30px 40px;
+  border-radius: 18px;
+  background: var(--tv-panel);
+  border: 2px solid var(--danger);
+  z-index: 3;
+  text-align: center;
+}
+.osd-fault .h {
+  font-size: 32px;
+  font-weight: 680;
+  margin-bottom: 12px;
+}
+.osd-fault .d {
+  font-size: 20px;
+  line-height: 1.6;
+  color: var(--tv-ink-2);
+}
+.osd-fault .d.dim {
+  color: var(--tv-ink-3);
+  margin-top: 10px;
+}
+
 .osd-top {
   position: absolute;
   left: 64px;
@@ -1281,6 +1340,21 @@ body {
 .epcard.foc .th,
 .grid .cell.foc .th {
   box-shadow: 0 0 0 3px var(--tv-focus), 0 0 0 12px var(--tv-glow);
+}
+
+/* ---- 纯展示区块的焦点态(详情页/集详情页的媒体信息、演职人员)----
+
+   ★ 这两块本来不可聚焦,于是遥控器↓走到最后一个按钮就停住了 —— 而 FocusColumn 的滚动是
+     **焦点驱动**的,滚不到就等于这段内容不存在(用户:「详情页下方的媒体信息,我根本无法
+     往下点,完全看不了」)。可聚焦只是为了**能走到**,不是为了能按,所以焦点态必须一眼看出
+     "这不是按钮":不放大(不上 .fx)、不用那套 3px 环 + 12px 光晕。
+
+   ★ 用 outline 而不是 box-shadow/border:outline 不参与布局也不吃 border-radius 之外的空间,
+     加 offset 就能离开正文一圈,不会把下面的内容推走(推走 = 焦点一进来整页跳一下)。 */
+.infoblock.focsoft {
+  outline: 2px solid var(--tv-focus);
+  outline-offset: 14px;
+  border-radius: 8px;
 }
 
 /* ---- hover 一律包起来 ----

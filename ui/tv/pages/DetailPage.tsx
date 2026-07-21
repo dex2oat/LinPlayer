@@ -24,6 +24,7 @@ import { CardPoster } from "../components/Cards";
 import { FocusColumn, FocusItem, FocusRow } from "../components/Focus";
 import { useAsync } from "../lib/useAsync";
 import {
+  InfoBlock,
   MediaInfo,
   NO_PICKS,
   PickBar,
@@ -162,7 +163,12 @@ function Series({
       />
 
       {seasons.length > 1 && (
-        <div className="filters" style={{ marginBottom: 22 }}>
+        /* ★ 这个下边距**必须 > 32px**,不是留白好看:下面的分集条是 `.hscroll`,
+             它用 padding:32 + 负 margin 给焦点环留呼吸位(见 tv.css),而那对负 margin
+             会穿过 FocusRow 的外层 div 合并 —— 分集条**登记给焦点库的矩形比它看上去的顶高 32px**,
+             正好盖住这排季度 chip。库筛候选要求「兄弟的上边 ≥ 自己的下边」,
+             原来的 22px 让分集条被整个筛掉:站在季度 chip 上按↓**原地不动**,选完季进不去分集。 */
+        <div className="filters" style={{ marginBottom: 40 }}>
           {/* 季度切换做成 chip 而不是下拉 —— 下拉在遥控器上要多按两次。
               切季只换下面的分集条,Hero 不动(整页重渲染会把焦点丢掉)。 */}
           {seasons.map((s) => (
@@ -282,12 +288,14 @@ function Movie({
       />
 
       {d.people.length > 0 && (
-        <>
+        /* ★ 整块包成一个可聚焦项(理由见 InfoBlock):它下面还有相似推荐那一行,
+             不包的话按↓会**从版本行一步跨到相似推荐**,中间的演职人员和媒体信息
+             连滚都不会滚过去。包的是整块,**不是每个头像** —— 头像仍然不可聚焦,
+             因为没有"该演员的作品列表"这一页,能聚焦就是按下去没反应。 */
+        <InfoBlock>
           <div className="rowhead">
             <div className="t">演职人员</div>
           </div>
-          {/* 头像**不可聚焦**:没有"该演员的作品列表"这个页面,能聚焦就是按下去没反应,
-              比不能聚焦更糟。等那一页落地了再把它换成 FocusItem。 */}
           <div className="track">
             {d.people.slice(0, 12).map((p) => (
               <div key={p.id} style={{ width: 150, textAlign: "center", flex: "none" }}>
@@ -316,11 +324,15 @@ function Movie({
               </div>
             ))}
           </div>
-        </>
+        </InfoBlock>
       )}
 
       {/* 页面下部原来是空的。放当前版本的规格。 */}
-      <MediaInfo v={cur} />
+      {cur && (
+        <InfoBlock>
+          <MediaInfo v={cur} />
+        </InfoBlock>
+      )}
 
       <Similar id={d.id} session={session} go={go} />
     </FocusColumn>
@@ -406,7 +418,10 @@ function Buttons({
 
   return (
     <>
-      <div className="btnrow" style={{ marginBottom: 34 }}>
+      {/* 34 → 44:剧只有一季时,按钮行下面**直接就是分集条**(`.hscroll` 的焦点矩形比
+          视觉顶高 32px),34 只剩 2px 余量,而聚焦的按钮 scale(1.06) 自己就吃掉 1.6px ——
+          等于「按↓能不能进分集条」全看四舍五入。同一条 32px 规则见 EpisodePage 里的注释。 */}
+      <div className="btnrow" style={{ marginBottom: 44 }}>
         <FocusItem className="btn pri fx" autoFocus onEnter={() => void start(resume > 1 ? resume : 0)}>
           <Icon n="play" className="ic ic-btn" />
           {label}

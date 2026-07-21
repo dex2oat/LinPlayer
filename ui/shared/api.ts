@@ -179,7 +179,35 @@ export type Status = {
    *  ★ 播放器页必须监听它:不监听 = 看完不退出 = stop_playback 永远不触发 =
    *  Trakt/Bangumi 的「看完」一次都不会上报(用户报的正是这个)。 */
   eof: boolean;
+  /** 画面这条链的实况。**给"有声音没画面"用** —— 播放页据此把具体断在哪一环
+   *  说出来,而不是让用户对着一块黑屏猜(2026-07-21 真栽过一轮)。
+   *  可选是因为各端还有几处"空状态"字面量(播放器没起来时的占位),它们没有诊断可言;
+   *  核层返回的 Status **一定**带这个字段。 */
+  video?: VideoDiag;
 };
+
+export type VideoDiag = {
+  /** 实际生效的 vo;空 = 视频输出根本没起来。 */
+  vo: string;
+  width: number;
+  height: number;
+  /** 当前文件有没有视频轨。false 且黑屏 = 纯音频,正常。 */
+  has_video_track: boolean;
+  /** 实际生效的硬解;空 = 退回软解。 */
+  hwdec: string;
+};
+
+/** 说人话的画面故障描述;null = 没毛病(或本来就是纯音频)。
+ *  ★ 与 crates/mpv 的 `VideoDiag::problem()` 同一套判据 —— 那边给核层日志用,
+ *    这边给界面用。改判据时两边一起改。 */
+export function videoProblem(v: VideoDiag | undefined): string | null {
+  if (!v || !v.has_video_track) return null;
+  if (!v.vo)
+    return `有视频轨,但视频输出没起来(hwdec=${v.hwdec || "无"})。多半是渲染面没接上或 GPU 上下文初始化失败。`;
+  if (v.width <= 0 || v.height <= 0)
+    return `视频输出(${v.vo})起来了,但解不出画面尺寸 —— 解码器没吐帧。`;
+  return null;
+}
 
 export type Track = {
   kind: string;

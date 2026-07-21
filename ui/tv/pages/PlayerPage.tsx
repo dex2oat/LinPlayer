@@ -9,6 +9,7 @@ import {
   setNowPlaying,
   stopPlayback,
   tracks as getTracks,
+  videoProblem,
   type Status,
   type Track,
 } from "@shared/api";
@@ -37,8 +38,12 @@ export default function PlayerPage({
   const [st, setSt] = useState<Status | null>(null);
   const [trk, setTrk] = useState<Track[]>([]);
   const [panel, setPanel] = useState<Panel>(null);
-  /* OSD 默认**收起**:进来就该看见画面,不是看见一层控件。 */
-  const [osd, setOsd] = useState(false);
+  /* ★ 进来先**亮一下** OSD,5 秒后自己收起(下面那个 effect 负责)。
+     原来默认收起,理由是"进来就该看见画面"—— 听着对,真机上却是灾难:
+     画面一旦没出来(见下面的 videoProblem),整屏就是纯黑且**没有任何东西证明
+     软件还活着**,用户只会以为应用卡死了。而且 TV 播放器进来亮一下控制条本来就是
+     通行做法(用户能立刻知道有哪些键可按),不是我们特有的补丁。 */
+  const [osd, setOsd] = useState(true);
   const hideAt = useRef(0);
   /* ★ eof 收尾只许跑一次。轮询每秒一发,而 eof 一旦为 true 就**一直**为 true
      (mpv keep-open=yes 停在最后一帧),不加锁就是每秒一发 stop_playback ——
@@ -174,8 +179,20 @@ export default function PlayerPage({
   const pct = dur > 0 ? (pos / dur) * 100 : 0;
   const buf = dur > 0 ? ((st?.buffered ?? 0) / dur) * 100 : 0;
 
+  /* 画面没出来时**把原因写在脸上**,而且不跟着 OSD 一起收起 ——
+     这是一条故障提示,不是控件。它自己带不透明底(整条渲染链在播放时是透明的)。 */
+  const vproblem = videoProblem(st?.video);
+
   return (
     <div className="osd">
+      {vproblem && (
+        <div className="osd-fault">
+          <div className="h">只有声音,没有画面</div>
+          <div className="d">{vproblem}</div>
+          <div className="d dim">按返回键退出播放。把这段话报给开发者。</div>
+        </div>
+      )}
+
       {/* 顶栏:全透明,标题块自带不透明底 */}
       {osd && (
         <div className="osd-top">

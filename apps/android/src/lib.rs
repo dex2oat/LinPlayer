@@ -1994,6 +1994,52 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    /// 「视频透出」这条链上的四层,一层都不能少。
+    ///
+    /// 视频是垫在 WebView 底下的 SurfaceView,画面从窗口下面透上来。任何一层不透明
+    /// 都是**有声音没画面、且完全不报错**的黑屏 —— 2026-07-21 就栽在第 3 层
+    /// (Activity 窗口背景跟着 DayNight 走,浅色白屏/深色黑屏),而前三层当时看着都对,
+    /// 于是只能靠猜。这条测试把四层钉住,以后谁删掉哪一层都会在 CI 上当场红。
+    ///
+    /// 反向验证:把 values/themes.xml 里的 windowBackground 那行删掉 → 本测试立刻红。
+    #[test]
+    fn video_transparency_chain_is_intact() {
+        let cases: [(&str, &str, &str); 5] = [
+            (
+                "Activity 窗口(浅色)",
+                include_str!("../gen/android/app/src/main/res/values/themes.xml"),
+                "@android:color/transparent",
+            ),
+            (
+                "Activity 窗口(深色)",
+                include_str!("../gen/android/app/src/main/res/values-night/themes.xml"),
+                "@android:color/transparent",
+            ),
+            (
+                "Tauri 窗口配置",
+                include_str!("../tauri.conf.json"),
+                "\"transparent\": true",
+            ),
+            (
+                "WebView 背景",
+                include_str!("../gen/android/app/src/main/java/xyz/linplayer/tv/MainActivity.kt"),
+                "setBackgroundColor(Color.TRANSPARENT)",
+            ),
+            (
+                "前端渲染链",
+                include_str!("../../../ui/tv/theme/tv.css"),
+                "html.playing",
+            ),
+        ];
+        for (layer, src, needle) in cases {
+            assert!(
+                src.contains(needle),
+                "视频透出链断了一层「{layer}」:找不到 {needle:?}。\
+                 少这一层的表现是有声音没画面,而且一句日志都没有。"
+            );
+        }
+    }
+
     /// TV 前端 `ui/tv` 会调的命令,一个都不能漏注册 —— 漏了**不会编译报错**,
     /// 只在用户走到那个页面时抛 "command not found"。这条把 ui/tv(含它 import 的
     /// ui/shared/api.ts)里出现的 invoke 名和本文件的注册表对一遍。

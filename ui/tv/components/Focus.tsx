@@ -12,6 +12,7 @@
 
 import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
 import { pushBackHandler } from "../app/focus";
+import { scrollDeltaY } from "../app/scroll";
 import {
   FocusContext,
   useFocusable,
@@ -47,6 +48,11 @@ type ItemProps = {
   /** 本项获得焦点时。给「焦点走到倒数第二行就预取下一页」这类无限加载用 ——
    *  没有它就只能拿 IntersectionObserver + 一个量出来的魔数当近似。 */
   onFocus?: () => void;
+  /** 本项**失去**焦点时。
+   *  ★ 缺了它会写出「一次性开关」:首页 Hero 原来只在 onFocus 里 setHeld(true) 停掉轮播,
+   *    而焦点离开 Hero 后没有任何人把它放回去 —— 自动轮播从此**永久停摆**,
+   *    表现正是用户报的「随机推荐根本不会自动切换」。 */
+  onBlur?: () => void;
   focusKey?: string;
   /** 不可聚焦(如不可用的版本卡):保留显示,但跳过焦点位。 */
   disabled?: boolean;
@@ -61,6 +67,7 @@ export function FocusItem({
   focusClass = "foc",
   onEnter,
   onFocus,
+  onBlur,
   focusKey,
   disabled,
   style,
@@ -68,11 +75,16 @@ export function FocusItem({
 }: ItemProps) {
   const notify = useContext(ScrollNotify);
   const host = useRef<HTMLDivElement | null>(null);
+  /* 存进 ref 再用:调用方几乎都传的是内联箭头函数,每次渲染换个身份。
+     直接交给库的 onBlur 会让它反复注销重注册,快速重渲染时会漏掉一次回调。 */
+  const blurRef = useRef(onBlur);
+  blurRef.current = onBlur;
 
   const { ref, focused, focusSelf } = useFocusable<object, HTMLDivElement>({
     focusable: !disabled,
     focusKey,
     onEnterPress: onEnter,
+    onBlur: () => blurRef.current?.(),
     onFocus: (layout: FocusableComponentLayout) => {
       notify?.(layout.node as HTMLElement);
       onFocus?.();
@@ -329,14 +341,29 @@ export function FocusColumn({
     if (!inner || !view) return;
     const viewR = view.getBoundingClientRect();
     const r = node.getBoundingClientRect();
-    const top = r.top - viewR.top;
     const cur = readTranslate(inner, "Y");
     const z = zoomOf(view);
     const PAD = FOCUS_PAD * z; // 焦点项上下留呼吸位,否则光晕贴边被祖先 overflow 裁掉
-    let delta = 0;
-    if (top < topPad * z + PAD) delta = top - topPad * z - PAD;
-    else if (top + r.height > viewR.height - PAD)
-      delta = top + r.height - viewR.height + PAD;
+
+    /* ★ 往上走时对齐的是**整段**,不是那一个焦点项。
+
+       原来两个方向都只保证「焦点项自己露出来」,于是从下面的行往上回到 Hero 时,
+       滚动停在「播放按钮顶端 + 32px」—— 按钮上方那 400 多 px 的封面全在视野外。
+       用户的原话是「从下往上一滑就缺失内容」:内容没丢,是滚过头了。行也一样,
+       停在卡片顶端就把行标题(「继续观看」)切在外面,整页看着像少了一截。
+
+       段 = `.inner` 的直接子元素(一个 Hero / 一行 / 详情页的一块)。往上对齐它的顶,
+       往下仍按焦点项的底 —— 段可能比整屏还高(Hero 486px),往下也按段底会直接翻过头。 */
+    const sec = sectionOf(node, inner);
+    const delta = scrollDeltaY({
+      top: r.top - viewR.top,
+      height: r.height,
+      secTop: (sec ?? node).getBoundingClientRect().top - viewR.top,
+      firstSection: !!sec && sec === inner.firstElementChild,
+      viewH: viewR.height,
+      topPad: topPad * z,
+      pad: PAD,
+    });
     if (delta !== 0)
       // 同上:上界是 +FOCUS_PAD,否则最上面一行的焦点环被 .vscroll 顶边切掉
       inner.style.transform = `translateY(${clamp(cur - delta / z, -1e7, FOCUS_PAD)}px)`;
@@ -419,6 +446,14 @@ export function FocusBoundary({
 }
 
 /* ---- 小工具 ---- */
+
+/** 焦点项所属的「段」= 滚动内容 `inner` 的那个直接子元素。
+ *  焦点项不在 inner 里(理论上不该发生)时返回 null,调用方退回按焦点项自己算。 */
+export function sectionOf(node: HTMLElement, inner: HTMLElement): HTMLElement | null {
+  let cur: HTMLElement | null = node;
+  while (cur && cur.parentElement !== inner) cur = cur.parentElement;
+  return cur;
+}
 
 function readTranslate(el: HTMLElement, axis: "X" | "Y"): number {
   const m = new RegExp(`translate${axis}\\((-?[\\d.]+)px\\)`).exec(el.style.transform);

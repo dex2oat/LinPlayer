@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { setFocus } from "@noriginmedia/norigin-spatial-navigation";
 import {
   aggregateSearch,
@@ -95,6 +95,36 @@ export default function EpisodePage({
 
   useEffect(() => setFav(d?.is_favorite ?? null), [d?.is_favorite]);
   useEffect(() => setPlayedLocal(cur?.played ?? null), [cur?.played]);
+
+  /* ★ 「选完版本(用户口中的『播放记录』)之后按↓进不了集数栏」的解法。
+     根因是几何,不是这一页写错了,两条叠在一起:
+       ① 集数栏是 `.hscroll`,它的负 margin 让登记给焦点库的矩形**比看上去的顶高 32px**,
+          正好盖住上面那排「紧凑 / 详细」。库筛候选要求「兄弟的上边 ≥ 自己的下边」,
+          于是站在「紧凑/详细」上按↓,集数栏被整个筛掉 —— 原地不动,死胡同。
+       ② 版本卡按↓时库先在本行找不到人,回退到整行再找;而「详细」按钮的右边缘和
+          版本行的右边缘几乎齐平(实测角距 4px),库的斜向惩罚(5 倍)也压不过这 4px
+          → 焦点被吸到右上角那个小按钮上,而不是正下方的集数栏。
+     ①已经靠把空隙加到 > 32px 解决(见下面两处 marginBottom 的注释),
+     ②没法靠布局绕开(要么把版本行做窄、要么把视图切换挪走,都是改版式),
+     所以只有版本行这一处走显式跳转。
+     ★ **别把 data-eps-jump 也打到选集表头上**:那样「紧凑/详细」按↓永远被送去集数栏,
+       而它自己下面就是集数栏 —— 看着没坏,实际是把切换钮变成了只进不出的死路。
+     ★ 必须**捕获阶段**拦:库自己是在 window 冒泡阶段监听的(BaseWebAdapter),
+       capture 先到,stopPropagation 才顶得掉它的默认判定。 */
+  useEffect(() => {
+    if (episodes.length === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowDown" && !DOWN_KEYCODES.has(e.keyCode)) return;
+      /* 焦点项是普通 div(不是原生可聚焦元素),document.activeElement 认不出来;
+         库开了 shouldFocusDOMNode,会把 data-focused 打在当前焦点节点上,认它。 */
+      if (!document.querySelector("[data-focused]")?.closest("[data-eps-jump]")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void setFocus(EPISODES_FK);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [episodes.length]);
 
   if (!itemId) return <Empty text="没有指定要播放的分集。" />;
   if (ep.err) return <Empty text={ep.err.message} />;
@@ -223,23 +253,32 @@ export default function EpisodePage({
 
         {msg && <div style={{ color: "var(--tv-ink-2)", fontSize: 19, marginBottom: 18 }}>{msg}</div>}
 
-        <VersionRow
-          itemId={curId}
-          matchTitle={d.series_name ?? series.data?.name ?? null}
-          /* ★ 「系列名」是跨来源认定同一集的唯一依据,而**有服务端不给**
-             (Episode.SeriesName 缺失)。这时只能拿上层剧条目的名字顶上,
-             置信度不足 → 卡片打「可能匹配」黄标,不假装是精确匹配。 */
-          titleConfident={d.series_name != null}
-          /* 版本行和 PickBar 的「版本」选的是同一件事,共用同一份状态 ——
-             两个各记各的,用户在一处换了版本、另一处显示的还是旧的。 */
-          onSelect={(v) => setPicks((p) => ({ ...p, ver: v }))}
-        />
+        {/* data-eps-jump = 「在这里按↓直接进集数栏」。顺带把版本行的标题和卡片包成
+            **同一段**(FocusColumn 的 sectionOf 认 .inner 的直接子元素)——
+            从卡片往上回时会连「版本」标题一起对齐,不再把标题切在视野外。 */}
+        <div data-eps-jump="">
+          <VersionRow
+            itemId={curId}
+            matchTitle={d.series_name ?? series.data?.name ?? null}
+            /* ★ 「系列名」是跨来源认定同一集的唯一依据,而**有服务端不给**
+               (Episode.SeriesName 缺失)。这时只能拿上层剧条目的名字顶上,
+               置信度不足 → 卡片打「可能匹配」黄标,不假装是精确匹配。 */
+            titleConfident={d.series_name != null}
+            /* 版本行和 PickBar 的「版本」选的是同一件事,共用同一份状态 ——
+               两个各记各的,用户在一处换了版本、另一处显示的还是旧的。 */
+            onSelect={(v) => setPicks((p) => ({ ...p, ver: v }))}
+          />
+        </div>
 
         {/* 集数栏紧跟版本行,**不用 margin-top:auto 贴底** ——
             贴底会在版本行和集数栏之间留一大块空,焦点从版本走到集数要跨过一段虚无。 */}
         {episodes.length > 0 && (
           <>
-            <div className="rowhead" style={{ marginBottom: 14 }}>
+            {/* 14 → 40:同一条 32px 规则(见上面版本行那段)。原来的 14px 让集数栏的焦点矩形
+                盖住这排「紧凑 / 详细」,两个方向都断:站在切换钮上按↓跳过集数栏,
+                站在集数栏上按↑又跳过切换钮 —— **视图切换实际上根本走不到**(单版本的剧
+                连那个几何巧合都没有)。这是修版本行时顺出来的同源 bug,不是新加的间距。 */}
+            <div className="rowhead" style={{ marginBottom: 40 }}>
               <div className="t">选集</div>
               <div style={{ fontSize: 17, color: "var(--tv-ink-3)" }}>
                 {[d.season_no != null ? `第 ${d.season_no} 季` : null, `共 ${episodes.length} 集`]
@@ -264,7 +303,7 @@ export default function EpisodePage({
             {view === "compact" ? (
               <CompactStrip eps={episodes} curId={curId} onPick={setCurId} />
             ) : (
-              <FocusRow className="epwrap" trackClass="track">
+              <FocusRow className="epwrap" trackClass="track" focusKey={EPISODES_FK}>
                 {episodes.map((e) => (
                   <EpisodeCard
                     key={e.id}
@@ -279,8 +318,13 @@ export default function EpisodePage({
           </>
         )}
 
-        {/* 页面下部原来是空的。放当前版本的规格,不重复顶部已有的时长/剩余。 */}
-        <MediaInfo v={curVer} />
+        {/* 页面下部原来是空的。放当前版本的规格,不重复顶部已有的时长/剩余。
+            ★ 包成可聚焦块的原因见 InfoBlock 自己的注释(不然这一段永远滚不到)。 */}
+        {curVer && (
+          <InfoBlock>
+            <MediaInfo v={curVer} />
+          </InfoBlock>
+        )}
       </FocusColumn>
     </div>
   );
@@ -420,7 +464,13 @@ export function VersionRow({
           />
         ))}
       </FocusRow>
-      <div style={{ height: 30 }} />
+      {/* ★ 这个空隙**必须 > 32px**,不是留白好看:`.hscroll` 用 padding:32 + 负 margin
+          给焦点环留呼吸位(见 tv.css),而那对负 margin 会**穿过 FocusRow 的外层 div 合并**
+          —— 于是这一行登记给焦点库的矩形比它看上去的底部还低 32px。
+          焦点库筛下一个候选的条件是「兄弟的上边 ≥ 自己的下边」,空隙不到 32 的话,
+          紧跟在版本行后面的那一块**会被整个筛掉**:表现是按↓直接跳过它(甚至原地不动),
+          而截图上一点都看不出来。实测(headless + 真 CSS):卡片 469..681,行矩形 437..713。 */}
+      <div style={{ height: 40 }} />
     </>
   );
 }
@@ -526,7 +576,7 @@ function CompactStrip({
 
   return (
     <div ref={wrap}>
-      <FocusRow className="epwrap" trackClass="epstrip">
+      <FocusRow className="epwrap" trackClass="epstrip" focusKey={EPISODES_FK}>
         {eps.map((e) => (
           <FocusItem
             key={e.id}
@@ -597,6 +647,31 @@ function useEpView(): ["compact" | "detail", (v: "compact" | "detail") => void] 
   return [v, set];
 }
 const EP_VIEW_KEY = "lp.tv.epview";
+
+/** 集数栏的焦点键。显式给是因为要从版本行/选集表头**跳**过来(见上面那段注释)。 */
+const EPISODES_FK = "EP_EPISODES";
+
+/** 「下」键的 keyCode。★ 和 app/focus.ts 的 setKeyMap 保持一致 —— 库没把 keyMap 导出来,
+ *  只能抄一份;那边补了新机型的 keyCode,这里要跟着补(不跟的表现是某些盒子上跳转失灵)。 */
+const DOWN_KEYCODES = new Set([40, 212, 204, 216, 29461]);
+
+/** 纯展示区块的「可走到」包装。
+ *
+ *  ★ 为什么要让一段不能按的内容可聚焦:FocusColumn 的滚动是**焦点驱动**的
+ *    (只把拿到焦点的元素滚进视野)。所以位于最后一个可聚焦项**下面**的展示区块
+ *    ——媒体信息、演职人员——遥控器的↓走到最后一个按钮就停住了,那块内容
+ *    **永远滚不到,等于不存在**(用户原话:「我根本无法往下点,完全看不了」)。
+ *
+ *  ★ 焦点态刻意不用全站那套(`.fx` 放大 + 3px 环 + 12px 光晕):这是一整块正文,
+ *    放大整块字会抖,重环看着像个巨大的按钮 —— 它不能按。改成一圈克制的描边,
+ *    且用 outline + offset(不占布局,不会把下面的内容推走)。 */
+export function InfoBlock({ children }: { children: ReactNode }) {
+  return (
+    <FocusItem className="infoblock" focusClass="focsoft">
+      {children}
+    </FocusItem>
+  );
+}
 
 function Empty({ text }: { text: string }) {
   return (

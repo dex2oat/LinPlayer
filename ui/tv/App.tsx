@@ -49,8 +49,12 @@ export default function App() {
     const next: Route = typeof r === "string" ? { page: r } : r;
     /* 导航轨上的页是**平级**的,互相跳不叠栈;其余(详情/播放/线路管理…)才入栈。
        ★ 判据是「在不在导航轨上」,不是「全不全屏」—— 线路管理有导航轨但必须叠栈,
-         否则从服务器页进去后按返回会直接退出应用,而不是退回服务器页。 */
-    setStack((s) => (RAIL_PAGES.has(next.page) ? [next] : [...s, next]));
+         否则从服务器页进去后按返回会直接退出应用,而不是退回服务器页。
+       ★ 带 parentId 的媒体库是**下钻**,不是轨上那个平级入口:首页的媒体库行标题
+         能直接进某个库,那条路进来必须能按返回回到首页 —— 当平级处理会把栈清空,
+         用户按一下返回就直接退出应用了。 */
+    const drill = next.parentId != null;
+    setStack((s) => (RAIL_PAGES.has(next.page) && !drill ? [next] : [...s, next]));
   }, []);
 
   const back = useCallback(() => {

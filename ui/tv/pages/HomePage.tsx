@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   backdropUrl,
   listLatest,
@@ -70,20 +70,52 @@ function Hero({
   go: (r: Route) => void;
 }) {
   const [i, setI] = useState(0);
-  /* 焦点在 Hero 上时**暂停自动轮播** —— 用户正瞄着「播放」按下去,片子却换了,
-     等于点了个自己没看见的东西。这是 Hero 轮播最容易挨骂的地方。 */
-  const [held, setHeld] = useState(false);
+  /* 焦点在 Hero 的**哪个**按钮上(null = 焦点不在 Hero)。
+     ★ 原来这里是个 `held` 布尔,只在 onFocus 里置 true,**没有任何地方置回 false** ——
+       首页一进来 autoFocus 就落在「播放」上,于是轮播从第一秒起就永久停摆。
+       用户报的「不能自动切换」是这个,不是定时器时长的问题。
+     ★ 记「第几个」而不是「在不在」,是因为下面的右键循环要知道焦点是否已经在最后一个上。 */
+  const [focusIdx, setFocusIdx] = useState<number | null>(null);
   const it = items[i];
 
+  const step = useCallback(
+    (d: number) => setI((v) => (v + d + items.length) % items.length),
+    [items.length],
+  );
+
   useEffect(() => {
-    if (items.length < 2 || held) return;
-    const t = setInterval(() => setI((v) => (v + 1) % items.length), 12000);
+    /* 焦点在 Hero 上时不自动切:用户正瞄着「播放」按下去,片子却换了,
+       等于点了个自己没看见的东西。这是 Hero 轮播最容易挨骂的地方。
+       8s 而不是原来的 12s —— 12s 在电视上是"看着像坏了"的量级。 */
+    if (items.length < 2 || focusIdx !== null) return;
+    const t = setInterval(() => step(1), 8000);
     return () => clearInterval(t);
-  }, [items.length, held]);
+  }, [items.length, focusIdx, step]);
+
+  /* ★ 一直往右按 = 循环换片。
+     Hero 这一行右边再没有别的功能页了,方向键在那儿是**死键** —— 按下去毫无反应,
+     用户不知道是没做还是坏了。既然是死键,就把它接到最需要的动作上。
+     只在焦点已经落在**最后一个**按钮上时才拦:在此之前右键仍然是正常的移动焦点,
+     整页手感不会因为 Hero 特殊而割裂。
+     capture 阶段 + stopPropagation:焦点库是在 window 冒泡阶段监听的,
+     不在 capture 拦就已经晚了(同 ProgressBar 里那条快进快退的做法)。 */
+  /* 按钮:播放 / 详情 / 换一片(最后那个只有多于一部时才在)。
+     写成"数出来"而不是硬编 2 —— 以后往这一行加按钮时,忘了同步这个数的表现是
+     右键循环挪到了倒数第二个按钮上,而那是个**看不出来**的错。 */
+  const lastIdx = (items.length > 1 ? 3 : 2) - 1;
+  useEffect(() => {
+    if (focusIdx === null || items.length < 2) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowRight" || focusIdx !== lastIdx) return;
+      e.stopPropagation();
+      e.preventDefault();
+      step(1);
+    };
+    window.addEventListener("keydown", h, true);
+    return () => window.removeEventListener("keydown", h, true);
+  }, [focusIdx, lastIdx, items.length, step]);
 
   if (!it) return <div className="hero sk" />;
-
-  const step = (d: number) => setI((v) => (v + d + items.length) % items.length);
 
   return (
     <div className="hero">
@@ -113,7 +145,8 @@ function Hero({
           <FocusItem
             className="btn pri fx"
             autoFocus
-            onFocus={() => setHeld(true)}
+            onFocus={() => setFocusIdx(0)}
+            onBlur={() => setFocusIdx((v) => (v === 0 ? null : v))}
             onEnter={() => go({ page: "detail", itemId: it.id })}
           >
             <Icon n="play" className="ic ic-btn" />
@@ -121,20 +154,20 @@ function Hero({
           </FocusItem>
           <FocusItem
             className="btn fx"
-            onFocus={() => setHeld(true)}
+            onFocus={() => setFocusIdx(1)}
+            onBlur={() => setFocusIdx((v) => (v === 1 ? null : v))}
             onEnter={() => go({ page: "detail", itemId: it.id })}
           >
             <Icon n="info" className="ic ic-btn" />
             详情
           </FocusItem>
-          {/* ★ 明确的「换一片」入口。
-              原来只有 12 秒自动轮播,用户想看下一部只能干等 —— 而遥控器上
-              没有任何一个键在这里是有意义的。做成按钮而不是劫持左右方向键:
-              方向键在按钮行里的语义是移动焦点,抢过来当轮播会让整页的手感不一致。 */}
+          {/* 「换一片」按钮保留:右键循环是给会摸索的人的快捷方式,
+              但一个看得见的入口才是所有人都能发现的那条路。 */}
           {items.length > 1 && (
             <FocusItem
               className="btn ico fx"
-              onFocus={() => setHeld(true)}
+              onFocus={() => setFocusIdx(2)}
+              onBlur={() => setFocusIdx((v) => (v === 2 ? null : v))}
               onEnter={() => step(1)}
             >
               <Icon n="refresh" className="ic ic-btn" />
@@ -159,6 +192,7 @@ function Row({
   progress,
   poster,
   err,
+  onOpen,
 }: {
   title: string;
   items: Item[] | null;
@@ -169,6 +203,8 @@ function Row({
   poster?: boolean;
   /** 这一行自己的加载错误。**必须传** —— 见下面为什么。 */
   err?: Error | null;
+  /** 行标题可进入(媒体库行)。传了标题就变成一个焦点位,确认键进那个库。 */
+  onOpen?: () => void;
 }) {
   /* 加载中给骨架,**空数组整行不渲染** ——
      "继续观看(空)"这种标题只是占位噪音,新用户首页会挂三个空标题。 */
@@ -182,9 +218,7 @@ function Row({
   if (err) {
     return (
       <div className="row">
-        <div className="rowhead">
-          <div className="t">{title}</div>
-        </div>
+        <RowHead title={title} onOpen={onOpen} />
         <div style={{ fontSize: 17, color: "var(--tv-ink-3)", padding: "12px 0" }}>
           没加载出来:{err.message}
         </div>
@@ -194,9 +228,7 @@ function Row({
 
   return (
     <div className="row">
-      <div className="rowhead">
-        <div className="t">{title}</div>
-      </div>
+      <RowHead title={title} onOpen={onOpen} />
       {!items ? (
         <div className="track">
           {[0, 1, 2, 3, 4, 5].map((k) => (
@@ -231,6 +263,35 @@ function Row({
   );
 }
 
+/** 行标题。媒体库行的标题是**可以按进去的** ——
+ *
+ *  ★ 在此之前,首页上看得到「某个库最近加了什么」,却没有任何办法从这里进那个库:
+ *    只能退到导航轨、进媒体库页、再挑一次库。用户的原话是「这非常不合理」,是对的。
+ *  ★ 为什么做成标题本身而不是行尾加一个「查看全部」:行尾要按过整行卡片才够得着
+ *    (一行 20 张),而标题就在焦点从上面下来的必经之路上,零额外按键。
+ *  ★ 非媒体库行(继续观看/接下来看)没有"库"这个概念,不给焦点位 ——
+ *    多一个按不出东西的焦点位,只是让每一行都多挡一下。 */
+function RowHead({ title, onOpen }: { title: string; onOpen?: () => void }) {
+  if (!onOpen) {
+    return (
+      <div className="rowhead">
+        <div className="t">{title}</div>
+      </div>
+    );
+  }
+  return (
+    <div className="rowhead">
+      {/* 箭头用字形不用图标:图标集里没有 chevron,为一个装饰性尖角去扩 sprite 不划算。 */}
+      <FocusItem className="t rowlink" onEnter={onOpen}>
+        {title}
+        <span className="chev" aria-hidden>
+          ›
+        </span>
+      </FocusItem>
+    </div>
+  );
+}
+
 function LatestRow({
   lib,
   session,
@@ -249,5 +310,15 @@ function LatestRow({
   /* ★ 标题不写「· 最近添加」:首页各媒体库行默认就是按最新排,是常识,
      写出来只是把每一行的标题都拉长一截,远看还更难扫。
      ★ 用竖版海报:这些行里装的是剧和电影,人家的封面本来就是竖的。 */
-  return <Row title={lib.name} items={data} err={err} session={session} go={go} poster />;
+  return (
+    <Row
+      title={lib.name}
+      items={data}
+      err={err}
+      session={session}
+      go={go}
+      poster
+      onOpen={() => go({ page: "library", parentId: lib.id })}
+    />
+  );
 }

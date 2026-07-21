@@ -59,6 +59,14 @@ class MainActivity : TauriActivity() {
     /* ★ post 而不是直接做:onWebViewCreate 触发时 WebView 还没 attach 到父容器,
        这时 webView.parent 是 null,加不进去(而且不会报错,只是静默什么都没发生)。 */
     webView.post {
+      /* ★ 再刷一遍透明。
+         上面那次跑在 Wry 建 WebView 的**中途**,它之后还会按 tauri.conf.json 里的
+         窗口配置回头设一次背景色 —— 我们这次就被它覆盖掉了,表现正是用户报的
+         「深色模式黑屏 / 浅色模式白屏」:那是 WebView 自己的不透明底,
+         跟着系统深浅色走,所以看着像"主题色铺满了整屏"。
+         配置里已经补上 "transparent": true(那才是根治),这一行是保险 ——
+         这条链上任何一环失手都是**静默黑屏**,不值得只留一道防线。 */
+      webView.setBackgroundColor(Color.TRANSPARENT)
       val parent = webView.parent as? ViewGroup ?: run {
         Logger.error("WebView 没有父容器,无法插入视频面")
         return@post
