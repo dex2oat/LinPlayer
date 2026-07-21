@@ -738,7 +738,18 @@ impl Player {
                             st.loaded = true;
                             std::mem::take(&mut st.pending)
                         };
+                        /* 就在事件线程里挂,**不要**另开线程:Drop 的顺序是
+                           running=false → join(事件线程) → mpv_terminate_destroy,
+                           只有跑在这根线程上才被 join 保护住;另开的线程会绕过它,
+                           用户在字幕下载途中关播放器就是 ctx 悬垂。
+                           代价是 sub-add 会同步拉取字幕文件(真服实测两条相隔 4s),
+                           这期间 END_FILE 只是**延迟**latch(事件在 mpv 队列里不丢),
+                           拿几秒的延迟换掉一个 use-after-free,划算。 */
                         for (url, title) in queued {
+                            // 正在关闭就别再挂剩下的了 —— 让 drop 那边的 join 早点回来。
+                            if !r2.load(Ordering::Relaxed) {
+                                break;
+                            }
                             // flags=auto:挂上但不自动切,选哪条仍由用户/语言偏好决定。
                             match cmd_raw(ctx, &["sub-add", &url, "auto", &title]) {
                                 Ok(()) => poclog(&format!("外挂字幕已挂载: {title}")),
