@@ -254,7 +254,9 @@ export default function ServersPage({ go }: { go: (r: Route) => void }) {
           }}
           onLines={() => {
             setMenu(null);
-            go({ page: "lines", itemId: menu.server, title: menu.name });
+            /* 字段名必须是 serverId —— App 的 lines 分支读的是 route.serverId,
+               传 itemId 的话 LinesPage 拿到 undefined,线路管理进去是空的。 */
+            go({ page: "lines", serverId: menu.server, title: menu.name });
           }}
           onReorder={() => {
             const from = accs.findIndex((x) => x.server === menu.server);

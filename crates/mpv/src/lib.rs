@@ -30,6 +30,11 @@ const MPV_END_FILE_REASON_ERROR: c_int = 4;
 /// 正常播放到结尾。★ 原来只latch了 ERROR,自然放完**没有任何人在听** ——
 /// Trakt/Bangumi 的「看完」全靠用户手动退出播放页才会触发,看完走人 = 什么都没同步。
 const MPV_END_FILE_REASON_EOF: c_int = 0;
+/// 文件真正打开完毕。★ `loadfile` 是**异步**命令 —— 它只把条目排进 playlist 就返回,
+/// 此刻并没有「当前文件」。紧跟着发 `sub-add` 必然拿到 -12 error running command
+/// (ctypes 实跑 libmpv v0.41 复现:立刻挂 → 字幕轨 0 条;等到本事件再挂 → 成功 1 条)。
+/// 这就是「外挂字幕挂了等于没挂」的根因,而 `let _ =` 把错误吞得一干二净。
+const MPV_EVENT_FILE_LOADED: c_int = 8;
 
 #[repr(C)]
 struct mpv_event {
@@ -543,11 +548,33 @@ pub fn sync_overlay(video: isize, tauri: isize, x: i32, y: i32, w: i32, h: i32) 
 }
 
 // ---------- 播放器 ----------
+
+/// 不依赖 `&Player` 的命令发送 —— 事件线程只有裸 ctx,但也要能发 `sub-add`。
+/// libmpv 的 mpv_command 是线程安全的(官方文档明示),从事件线程发命令合法。
+fn cmd_raw(ctx: *mut mpv_handle, args: &[&str]) -> Result<(), String> {
+    let cstrs: Vec<CString> = args.iter().map(|a| CString::new(*a).unwrap()).collect();
+    let mut ptrs: Vec<*const c_char> = cstrs.iter().map(|c| c.as_ptr()).collect();
+    ptrs.push(std::ptr::null());
+    let r = unsafe { mpv_command(ctx, ptrs.as_ptr()) };
+    if r < 0 { Err(format!("mpv 命令失败: {}", err_str(r))) } else { Ok(()) }
+}
+
+/* 外挂字幕的挂载状态。★ `loaded` 和 `pending` **必须在同一把锁里**,不能拆成
+   AtomicBool + Mutex<Vec>:那样会有 TOCTOU —— 调用方读到 loaded=false 正准备写
+   pending,事件线程恰好在这一瞬收到 FILE_LOADED 并取走(空的)pending,字幕就永远
+   没人挂了,而且**一声不吭**。同款竞态在预取环形缓存上真炸过一次,不重复踩。 */
+#[derive(Default)]
+struct SubState {
+    loaded: bool,                   // 当前文件是否已 FILE_LOADED
+    pending: Vec<(String, String)>, // (url, title),等 FILE_LOADED 后由事件线程挂
+}
+
 pub struct Player {
     ctx: *mut mpv_handle,
     pub video_hwnd: isize,
     error_eof: Arc<AtomicBool>, // 直链失效标志(END_FILE=error),供 302 重签探测
     eof: Arc<AtomicBool>,       // 正常播完标志(END_FILE=eof),供「看完」同步
+    subs: Arc<std::sync::Mutex<SubState>>,
     running: Arc<AtomicBool>,
     event_thread: Option<JoinHandle<()>>,
 }
@@ -691,14 +718,34 @@ impl Player {
             let error_eof = Arc::new(AtomicBool::new(false));
             let eof = Arc::new(AtomicBool::new(false));
             let running = Arc::new(AtomicBool::new(true));
+            let subs: Arc<std::sync::Mutex<SubState>> = Default::default();
             let ctx_addr = ctx as usize;
-            let (e2, r2, eof2) = (error_eof.clone(), running.clone(), eof.clone());
+            let (e2, r2, eof2, subs2) =
+                (error_eof.clone(), running.clone(), eof.clone(), subs.clone());
             let event_thread = std::thread::spawn(move || {
                 let ctx = ctx_addr as *mut mpv_handle;
                 while r2.load(Ordering::Relaxed) {
                     let ev = mpv_wait_event(ctx, 0.5);
                     if ev.is_null() {
                         continue;
+                    }
+                    /* 文件真开好了 —— 这才是能挂外挂字幕的**唯一**时机。
+                       挂载放在事件线程里做,而不是让调用方阻塞等:两端的调用点都在
+                       播放器锁内,在那儿等 FILE_LOADED 等于拿着锁卡住整个 UI。 */
+                    if (*ev).event_id == MPV_EVENT_FILE_LOADED {
+                        let queued = {
+                            let mut st = subs2.lock().unwrap();
+                            st.loaded = true;
+                            std::mem::take(&mut st.pending)
+                        };
+                        for (url, title) in queued {
+                            // flags=auto:挂上但不自动切,选哪条仍由用户/语言偏好决定。
+                            match cmd_raw(ctx, &["sub-add", &url, "auto", &title]) {
+                                Ok(()) => poclog(&format!("外挂字幕已挂载: {title}")),
+                                // 原来这里是 `let _ =`,失败一声不吭,现象只剩「字幕列表是空的」。
+                                Err(e) => poclog(&format!("外挂字幕挂载失败({title}): {e}")),
+                            }
+                        }
                     }
                     if (*ev).event_id == MPV_EVENT_END_FILE {
                         let ef = (*ev).data as *const mpv_event_end_file;
@@ -718,6 +765,7 @@ impl Player {
                 video_hwnd: video,
                 error_eof,
                 eof,
+                subs,
                 running,
                 event_thread: Some(event_thread),
             })
@@ -734,11 +782,7 @@ impl Player {
     }
 
     fn cmd(&self, args: &[&str]) -> Result<(), String> {
-        let cstrs: Vec<CString> = args.iter().map(|a| CString::new(*a).unwrap()).collect();
-        let mut ptrs: Vec<*const c_char> = cstrs.iter().map(|c| c.as_ptr()).collect();
-        ptrs.push(std::ptr::null());
-        let r = unsafe { mpv_command(self.ctx, ptrs.as_ptr()) };
-        if r < 0 { Err(format!("mpv 命令失败: {}", err_str(r))) } else { Ok(()) }
+        cmd_raw(self.ctx, args)
     }
 
     fn set_str(&self, name: &str, val: &str) {
@@ -811,6 +855,14 @@ impl Player {
         // 换片先清 eof —— 否则上一集播完的标志会被下一集的第一次轮询读到,
         // 刚起播就被判成「已看完」。
         self.eof.store(false, Ordering::Relaxed);
+        /* 字幕状态跟着换片一起复位:loaded 不清的话,下一集的 set_external_subs 会
+           以为文件已经开好而立刻 sub-add(其实新文件还没加载完,又回到 -12);
+           pending 不清的话,上一集没挂成的字幕会漏到这一集。 */
+        {
+            let mut st = self.subs.lock().unwrap();
+            st.loaded = false;
+            st.pending.clear();
+        }
         self.set_str("http-header-fields", header_fields);
         // 源没指定 UA 就用访问 Emby 的那个(用户 2026-07-19 定的 UA 口径)。
         self.set_str(
@@ -826,10 +878,26 @@ impl Player {
     pub fn set_pause(&self, paused: bool) {
         self.set_str("pause", if paused { "yes" } else { "no" });
     }
-    /// 挂一条外挂字幕(URL 自鉴权的源用;当前文件加载后调用)。
+    /* 挂一条外挂字幕(独立 .ass/.srt,不在容器里,mpv 的 track-list 看不到它们)。
+
+       ★ 调用时机不确定,所以由**这里**兜住,而不是让五个调用点各自小心:
+         - 起播路径(两端 play + 网盘源)紧跟在 `load_at` 之后,那时 `loadfile` 还没
+           真正打开文件,直接 sub-add 拿到的是 -12 —— 这就是「外挂字幕全都挂不上」;
+         - 播放中路径(用户手动加字幕、翻译字幕)文件早就开好了,可以当场挂。
+       锁内判一次 loaded 就把两种都覆盖:没开好就排队,等事件线程收到 FILE_LOADED
+       再挂;已开好就当场挂。判断和入队在同一把锁内完成,不留 TOCTOU 缝。 */
     pub fn add_subtitle(&self, url: &str, title: &str) {
+        let mut st = self.subs.lock().unwrap();
+        if !st.loaded {
+            st.pending.push((url.to_string(), title.to_string()));
+            return;
+        }
         // sub-add <url> [<flags> [<title>]];flags=auto 不自动切,让用户/偏好选。
-        let _ = self.cmd(&["sub-add", url, "auto", title]);
+        match self.cmd(&["sub-add", url, "auto", title]) {
+            Ok(()) => poclog(&format!("外挂字幕已挂载: {title}")),
+            // 原来是 `let _ =`,失败一声不吭,现象只剩「字幕列表里什么都没有」。
+            Err(e) => poclog(&format!("外挂字幕挂载失败({title}): {e}")),
+        }
     }
     pub fn seek_abs(&self, secs: f64) -> Result<(), String> {
         self.cmd(&["seek", &secs.to_string(), "absolute"])
@@ -1090,3 +1158,55 @@ pub struct Status {
     pub eof: bool,
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /* 回归:起播路径上的外挂字幕必须真的挂上。
+
+       这条测试盯的是一个**静默**的 bug:`loadfile` 是异步命令,它只把条目排进
+       playlist 就返回,此刻并没有「当前文件」。紧跟着发 `sub-add` 会拿到
+       -12 error running command,而旧代码是 `let _ = self.cmd(...)` —— 错误被吞掉,
+       日志里还照打一行「挂载外挂字幕 N 条」。于是两端表现完全一致:
+       详情页看得见字幕(那是 Emby 的 MediaStreams),播放页字幕列表却是空的。
+
+       反向验证方式:把 add_subtitle 里的 `if !st.loaded { …排队…; return; }` 删掉
+       (退回成无条件立刻 sub-add),这条测试立刻红。
+
+       要真 libmpv + 桌面会话(Player::new 会建叠加窗口),所以默认 ignore。
+       跑:cargo test -p linplayer-mpv --lib external_subtitle -- --ignored --nocapture */
+    #[test]
+    #[ignore]
+    fn external_subtitle_survives_async_loadfile() {
+        let srt = std::env::temp_dir().join("lp_ext_sub_test.srt");
+        std::fs::write(&srt, "1\n00:00:00,000 --> 00:00:04,000\nHELLO-EXTERNAL\n").unwrap();
+
+        let p = Player::new().expect("mpv 起不来(需要 libmpv-2.dll 与桌面会话)");
+        // lavfi 造一段本地视频源,不依赖任何服务器。
+        p.load_at("av://lavfi:testsrc=size=320x240:duration=10", 0.0)
+            .expect("loadfile 失败");
+        // ★ 复刻真实调用时序:load 之后**立刻**挂,不做任何等待 —— 两端的起播路径就是这样。
+        p.add_subtitle(&srt.to_string_lossy(), "外挂测试");
+
+        // 挂载由事件线程在 FILE_LOADED 时完成,给它一点时间(本地源通常几十毫秒)。
+        let mut subs = Vec::new();
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            subs = p.tracks().into_iter().filter(|t| t.kind == "sub").collect();
+            if !subs.is_empty() {
+                break;
+            }
+        }
+
+        assert!(
+            !subs.is_empty(),
+            "外挂字幕没挂上 —— 播放页的字幕列表就会是空的(这正是用户报的现象)"
+        );
+        assert!(
+            subs.iter().any(|t| t.title == "外挂测试"),
+            "挂上了但标题丢了 —— 字幕列表里会是一条空白项,等于选不了。实到:{:?}",
+            subs.iter().map(|t| &t.title).collect::<Vec<_>>()
+        );
+    }
+}

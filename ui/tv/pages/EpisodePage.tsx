@@ -958,6 +958,14 @@ export async function applyPicks(v: MediaVersion | null, p: Picks): Promise<void
 const TRACK_TRIES = 10;
 
 function mpvId(list: Track[], kind: "sub" | "audio", v: MediaVersion | null, s: StreamInfo): string {
+  /* 外挂字幕是核层 sub-add **追加**进 mpv 的,在 track-list 里排在所有内封轨之后 ——
+     Emby 的 index 顺序和 mpv 的 sid 顺序根本对不上,下面那个序号兜底会选错轨。
+     好在挂载时带了 title(核层按 display_title→language→「外挂字幕 N」生成),按它认最准。 */
+  if (s.is_external) {
+    const want = s.display_title || s.language || `外挂字幕 ${s.index}`;
+    const hit = list.find((t) => t.kind === kind && t.title === want);
+    if (hit) return hit.id;
+  }
   const lang = (s.language ?? "").toLowerCase();
   const same = list.filter((t) => t.kind === kind && t.lang.toLowerCase() === lang);
   // 语言唯一时按语言认最稳;双日语音轨这种靠语言分不开,只能退回序号。

@@ -70,6 +70,7 @@ import {
   stopPlayback,
   tracks as tracksApi,
 } from "@shared/api";
+import { pollTracks } from "@shared/track-poll";
 import { DanmakuLayer, type DanmakuComment, type TimeSync } from "./Danmaku";
 import LoginPage from "./pages/LoginPage";
 import Shell from "./app/Shell";
@@ -811,31 +812,10 @@ export default function App() {
      换集/换版本(playing 变或 setTracks 被 switchVersion 重置)自动重来。 */
   useEffect(() => {
     if (!playing) { setTracks([]); return; }
-    let alive = true;
-    let tries = 0;
-    let lastLen = -1;
-    let stable = 0;
-    /* ★ 别在「第一次非空」就停 —— 网络流里音轨常先于字幕 demux 出来:
-       停在只有音轨的那一帧,内封字幕就永远进不了面板(用户 2026-07-16:字幕面板到现在
-       还是不显示内封字幕)。改成每次都更新 tracks,直到轨数连续两次不变(demux 稳定)
-       或 ~14s 兜底才停。 */
-    const poll = async () => {
-      if (!alive) return;
-      try {
-        const t = await tracksApi();
-        if (!alive) return;
-        setTracks(t); // 每轮都刷:字幕晚到也能补进来
-        if (t.length > 0 && t.length === lastLen) {
-          if (++stable >= 2) return; // 连续两次轨数不变 = 稳定,停
-        } else {
-          stable = 0;
-          lastLen = t.length;
-        }
-      } catch { /* 未就绪:继续探 */ }
-      if (++tries < 20) window.setTimeout(poll, 700);
-    };
-    const first = window.setTimeout(poll, 600);
-    return () => { alive = false; window.clearTimeout(first); };
+    /* ★ 别在「第一次非空」就停 —— 网络流里音轨常先于字幕 demux 出来,外挂字幕更是
+       要等核层收到 FILE_LOADED 才挂得上。实现搬到 shared/track-poll.ts 与 TV 共用:
+       TV 端原先自己写了个「拉一次」的残缺版,外挂字幕永远进不了面板。 */
+    return pollTracks(setTracks);
   }, [playing]);
 
   // 版本面板 + 「更多」的静态播放信息都要 MediaSources:开这两个面板任一时拉,省请求。

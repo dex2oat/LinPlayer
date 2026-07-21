@@ -11,6 +11,7 @@ import {
   type Status,
   type Track,
 } from "@shared/api";
+import { pollTracks } from "@shared/track-poll";
 import { onTvKey } from "../app/focus";
 import { Icon, type IconName } from "../app/icons";
 import { FocusBoundary, FocusColumn, FocusItem, FocusRow } from "../components/Focus";
@@ -89,9 +90,10 @@ export default function PlayerPage({
     /* onBack 来自 App 的 useCallback([]),身份稳定 —— 列进依赖不会让轮询反复重启。 */
   }, [onBack]);
 
-  useEffect(() => {
-    getTracks().then(setTrk).catch(() => {});
-  }, []);
+  /* 轨道列表要**探到稳定**,不能起播拉一次就定死 —— 外挂字幕要等核层收到
+     mpv 的 FILE_LOADED 才挂得上,慢服务器上是起播后好几秒的事,那之前的快照
+     里根本没有它们。逻辑与桌面共用一份,见 shared/track-poll.ts。 */
+  useEffect(() => pollTracks(setTrk), []);
 
   /* OSD 自动收起。有面板开着时不收 —— 用户正在里面挑东西。 */
   useEffect(() => {

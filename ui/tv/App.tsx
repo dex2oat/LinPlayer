@@ -156,6 +156,11 @@ function Page({
       return <SettingsPage go={go} />;
     case "lines":
       return <LinesPage go={go} serverId={route.serverId} />;
+    /* 加第二台服务器 —— 和首次启动是同一张表单,没必要造第二份。
+       ★ 原来这里**没有分支**,于是服务器页点「添加服务器」直接落到 Todo 占位页:
+         装完第一台之后就再也加不了服务器了,而占位页看起来像是「功能没做」。 */
+    case "addserver":
+      return <OnboardingPage onDone={back} />;
     default:
       return <Todo page={route.page} />;
   }

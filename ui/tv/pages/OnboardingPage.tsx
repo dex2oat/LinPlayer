@@ -8,7 +8,7 @@ import { FocusColumn, FocusItem } from "../components/Focus";
     ★ 不自建虚拟键盘 —— Android TV 有系统输入法(Leanback IME),输入框聚焦按确认即升起,
       还白拿语音输入和外接键盘。自建只会更难用,还得自己维护中文候选。
     ★ 但**系统键盘会盖住下半屏**,所以三个输入框都排在上半屏(y < 540dp)。 */
-export default function OnboardingPage() {
+export default function OnboardingPage({ onDone }: { onDone?: () => void } = {}) {
   const [server, setServer] = useState("");
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
@@ -21,8 +21,11 @@ export default function OnboardingPage() {
     setErr(null);
     try {
       await login(server.trim(), user.trim(), pass);
-      /* 成功后不用自己跳页:login 会广播 ACCOUNTS_CHANGED,
-         App 重问 current_session 拿到会话,自然换到首页。 */
+      /* 首次启动不用自己跳页:login 会广播 ACCOUNTS_CHANGED,
+         App 重问 current_session 拿到会话,自然换到首页。
+         但**已有会话时**(从服务器页进来加第二台)那条广播不会换页 ——
+         此时靠 onDone 退回服务器页,否则加完就卡在这张表单上。 */
+      onDone?.();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -74,7 +77,8 @@ function Field({
     <div className="field">
       <div className="lb">{label}</div>
       {/* FocusItem 包一层是为了进焦点树;真正接收输入的是里面的原生 input。
-          shouldFocusDOMNode:true 让库同时调 DOM focus() → 系统输入法才会升起。 */}
+          按 OK 时由 FocusItem 把 DOM 焦点转交给这个 input,系统输入法随之升起 ——
+          光靠库的 shouldFocusDOMNode 不行,它 focus 的是外面那个 div(见 Focus.tsx)。 */}
       <FocusItem className="fx" autoFocus={autoFocus}>
         <input
           className="in"
