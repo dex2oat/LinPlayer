@@ -3,7 +3,7 @@
   "productName": "LinPlayer TV",
   "mainBinaryName": "LinPlayerTV",
   "version": "1.0.0",
-  "identifier": "xyz.linplayer.tv",
+  "identifier": "xyz.linplayer.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",

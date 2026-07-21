@@ -622,10 +622,12 @@ jobs:
           fi
 
 
-      # ⚠️ 只写 keystore.properties **还不够**:Tauri 生成的 build.gradle.kts 默认不读它,
-      #    要真出签名包,得在 gen/android/app/build.gradle.kts 里加 signingConfigs 并引用。
-      #    目前仓库没有 ANDROID_KEYSTORE_BASE64 这个 secret,走的是下面的 debug 分支
-      #    (debug 签名同样可以安装),等真要发正式版再补 gradle 那半。
+      # keystore.properties 只是**输入**;真正让它生效的是
+      # gen/android/app/build.gradle.kts 里的 signingConfigs(2026-07-21 补上)。
+      # 这条注释以前写着「仓库没有 ANDROID_KEYSTORE_BASE64」—— 早就有了,注释过时了,
+      # 于是 gradle 那半一直没人补,连发了几个装不上的包。别再让注释替代校验:
+      # 成品有没有签名由下面的「Assert APK is signed」说了算。
+      # 字段名和 build.gradle.kts 里读的必须一字不差。
       - name: Write keystore
         if: steps.signing.outputs.have == 'yes'
         env:
@@ -721,6 +723,53 @@ jobs:
 
       # ★ Android TV 专属校验:没有 LEANBACK_LAUNCHER,应用**在 TV launcher 上根本不出现**
       #   ——「装上了但找不到」是最难自查的一类失败,所以在 CI 里硬断言。
+      # ★★ 签名闸门。2026-07-21 事故:CI 全绿、日志还打「有签名密钥 → 出 release APK」,
+      #   发出去的却是 app-universal-release-unsigned.apk —— 用户装的时候报「安装包无效」。
+      #   根因是 gen/android/app/build.gradle.kts 里 release 变体没有 signingConfig
+      #   (keystore.properties 写了但没人读)。**写了配置 ≠ 用了配置**,所以这里验成品,
+      #   不验中间状态:直接检查 APK 里有没有真的签名。
+      - name: Assert APK is signed
+        run: |
+          APK=$(ls release/*.apk)
+          echo "校验 $APK"
+          # 首选 apksigner(权威,能报出签名方案版本)
+          SIGNER=$(ls "$ANDROID_SDK_ROOT"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$SIGNER" ]; then
+            if ! "$SIGNER" verify --verbose "$APK"; then
+              echo "::error::APK 未签名或签名无效 —— Android 会拒装并报「安装包无效」。"
+              echo "::error::检查 gen/android/app/build.gradle.kts 的 signingConfigs 是否被 release 变体引用。"
+              exit 1
+            fi
+          else
+            # 没有 apksigner 时的兜底:v1 看 META-INF 里的 .RSA/.SF,v2/v3 看签名块魔数。
+            echo "::warning::找不到 apksigner,改用结构检查"
+            V1=$(unzip -l "$APK" | grep -cE 'META-INF/[^/]+\.(RSA|DSA|EC)$' || true)
+            V2=$(grep -c "APK Sig Block 42" "$APK" || true)
+            echo "v1 证书条目=$V1  v2/v3 签名块=$V2"
+            if [ "$V1" -eq 0 ] && [ "$V2" -eq 0 ]; then
+              echo "::error::APK 三种签名方案一个都没有 —— 装不上"; exit 1
+            fi
+          fi
+          echo "签名校验通过"
+
+      # 包名/应用名/图标/banner 一起验成品。2026-07-21 之前发出去的包是
+      # xyz.linplayer.tv + "LinPlayer TV" + Tauri 默认图标 —— 三样全不是要的,
+      # 而这些都只在**装到设备上**才看得出来,源码里改没改肉眼审不出。
+      - name: Assert APK identity
+        run: |
+          APK=$(ls release/*.apk)
+          AAPT=$(ls "$ANDROID_SDK_ROOT"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)
+          [ -n "$AAPT" ] || { echo "::error::找不到 aapt2"; exit 1; }
+          BADGING=$("$AAPT" dump badging "$APK")
+          echo "$BADGING" | grep -E "^package:|^application:"
+          echo "$BADGING" | grep -q "package: name='xyz.linplayer.app'" \
+            || { echo "::error::包名不是 xyz.linplayer.app —— 换了包名老用户就收不到覆盖升级"; exit 1; }
+          echo "$BADGING" | grep -q "application: label='0Player'" \
+            || { echo "::error::应用名不是 0Player"; exit 1; }
+          echo "$BADGING" | grep -q "banner=" \
+            || { echo "::error::没有 android:banner —— Android TV 桌面上是块空白磁贴"; exit 1; }
+          echo "身份校验通过"
+
       - name: Assert Android TV manifest
         run: |
           M=apps/android/gen/android/app/src/main/AndroidManifest.xml
