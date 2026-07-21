@@ -240,8 +240,19 @@ impl DiskCache {
     }
 
     /// 写入一段并标记就绪。写盘走 spawn_blocking,不阻塞 runtime。
+    ///
+    /// ★ 全程持 `slots` 锁,且**先把槽标失效再写**。
+    /// 原来是「写完盘再更新 slots」,于是读者可以:查 slots 命中 → 开始读 →
+    /// 另一条流正把**别的段**覆盖进同一个槽 → 读到半新半旧的脏数据。
+    /// 表现是播放器拿到错帧(实测:B 连接在自己的起始位置读到 A 的字节),
+    /// 比饿死更隐蔽 —— 它不报错,只是画面坏掉。
+    /// 环形缓存是全连接共享的(槽位 = chunk % ring),两条连接的段号模 ring 同余就同槽,
+    /// 所以这个竞态在多连接下是必然会撞上的,不是理论风险。
     async fn put(self: &Arc<Self>, c: u64, data: Vec<u8>) -> bool {
         let me = self.clone();
+        let slot = c % self.ring;
+        let mut slots = self.slots.lock().await;
+        slots.remove(&slot); // 写到一半被读走 = 脏数据,先失效
         let ok = tokio::task::spawn_blocking(move || {
             use std::io::{Seek, SeekFrom, Write};
             let mut f = me.file.lock().ok()?;
@@ -254,14 +265,21 @@ impl DiskCache {
         .flatten()
         .is_some();
         if ok {
-            self.slots.lock().await.insert(c % self.ring, c);
+            slots.insert(slot, c);
         }
         ok
     }
 
-    /// 读回一段(调用方已确认 have 命中)。
+    /// 读回一段。**返回 None = 这一段已经被别的连接挤出槽位**,调用方要重拉而不是当失败。
+    ///
+    /// 槽位校验必须和读盘在**同一把锁**里完成:先 has() 再 get() 的两段式有 TOCTOU,
+    /// 中间那一瞬别人把槽覆盖了就会读到别人的数据(见 put 上的说明)。
     async fn get(self: &Arc<Self>, c: u64, len: usize) -> Option<Vec<u8>> {
         let me = self.clone();
+        let slots = self.slots.lock().await;
+        if slots.get(&(c % self.ring)) != Some(&c) {
+            return None; // 已被挤掉
+        }
         let buf = tokio::task::spawn_blocking(move || {
             use std::io::{Read, Seek, SeekFrom};
             let mut f = me.file.lock().ok()?;
@@ -273,11 +291,12 @@ impl DiskCache {
         .await
         .ok()
         .flatten();
-        // 读完复核:并发下别的 worker 可能刚把这个槽覆盖成另一段,那就当没命中重下。
-        match buf {
-            Some(b) if self.has(c).await => Some(b),
-            _ => None,
-        }
+        /* 这里原来还有一句「读完再 has() 复核一次」。现在**不能留**:
+           slots 锁已经被本函数持到读完,再调 has() 就是对同一把 tokio::Mutex 重入 —— 死锁。
+           而且也不需要了:锁覆盖了「校验 + 读盘」全程,put 又是在同一把锁里先失效再写,
+           两边不可能交错。复核是两段式时代的补丁,协议改对之后它就是纯粹的自锁陷阱。 */
+        drop(slots);
+        buf
     }
 }
 
@@ -293,6 +312,10 @@ struct ChunkState {
     failed: HashSet<u64>, // 永久失败(供给端遇到即断流)
     serve_chunk: u64,     // 下一个要供给的分段
     fetch_cursor: u64,    // 下一个要分配给 worker 的分段
+    /// 已被 worker 认领、还没落盘的分段。
+    /// ★ 必须有它才能把「在飞」和「被环形缓存挤掉」分开:两者的 disk.has() 都是 false,
+    /// 但前者只需等,后者必须重拉。分不开就会把在飞的段又拉一遍(重复下载 = 烧用户流量)。
+    in_flight: HashSet<u64>,
 }
 
 struct Stream {
@@ -565,6 +588,7 @@ impl Origin {
                 failed: HashSet::new(),
                 serve_chunk: first,
                 fetch_cursor: first,
+                in_flight: HashSet::new(),
             }),
             data_notify: Notify::new(),
             window_notify: Notify::new(),
@@ -606,6 +630,7 @@ impl Stream {
                     if self.origin.disk.has(c).await {
                         continue;
                     }
+                    st.in_flight.insert(c);
                     Some(c)
                 }
             };
@@ -633,15 +658,23 @@ impl Stream {
             }
             let fetched = tokio::select! {
                 f = self.origin.fetch_chunk(c) => f,
-                _ = stop => break, // 播放器走了,这段不要了(drop future = 断掉上游连接)
+                _ = stop => {
+                    // 连接已走,注销在飞标记再退出,免得残留把后来者挡住。
+                    self.state.lock().await.in_flight.remove(&c);
+                    break;
+                }
             };
             // 落盘成功才算就绪;写盘失败(磁盘满/被删)等同取数失败,断流回退直连。
             let ok = match fetched {
                 Some(d) => self.origin.disk.put(c, d).await,
                 None => false,
             };
-            if !ok {
-                self.state.lock().await.failed.insert(c);
+            {
+                let mut st = self.state.lock().await;
+                st.in_flight.remove(&c);
+                if !ok {
+                    st.failed.insert(c);
+                }
             }
             self.data_notify.notify_waiters();
         }
@@ -670,10 +703,37 @@ impl Stream {
             }
             if self.origin.disk.has(c).await {
                 let len = self.origin.chunk_len(c);
-                return self.origin.disk.get(c, len).await.map(Arc::new);
+                // get 返回 None = 刚好被别的连接挤出槽位(不是取数失败),
+                // 落到下面的自愈分支重拉,**不能**当失败断流 —— 那就是给播放器一个 early eof。
+                if let Some(b) = self.origin.disk.get(c, len).await {
+                    return Some(Arc::new(b));
+                }
             }
             if self.state.lock().await.failed.contains(&c) {
                 return None;
+            }
+            /* ★ 自愈:我要的这段**曾经拉过、但被挤掉了**,得重拉,不能干等。
+
+               环形缓存是**全连接共享**的(占用恒 = 用户设的上限),槽位 = chunk % ring。
+               两条连接的分段号只要模 ring 同余就落同一个槽,后写的直接盖掉先写的。
+               实测口径:cache=16MB → ring=4 槽;两条连接相距 20MB = 5 段,
+               A 的 chunk1 与 B 的 chunk5 同槽(5%4==1),B 一落盘 A 那段就没了。
+
+               而 worker 认领时 `fetch_cursor` 已经自增越过 c,**再没有人会去重拉它** ——
+               于是 await_chunk 在这里无限空转:has() 永远 false,又不在 failed 里。
+               表现就是那条连接彻底饿死(播放器侧 = 有流量、黑屏/永远缓冲),
+               或者对端超时后我们把连接关掉,客户端读到 early eof。
+               这正是 concurrent_connections_do_not_starve_each_other 偶发红的真凶。
+
+               把游标倒回 c 让 worker 重新认领即可。倒回是幂等的:已经 <= c 就不动,
+               所以不会和正在飞的那次 fetch 打架;重拉一次的代价远小于饿死。 */
+            {
+                let mut st = self.state.lock().await;
+                // 只有「没人在拉、游标又已越过」才是真被挤掉了。在飞的段老实等着。
+                if st.fetch_cursor > c && !st.in_flight.contains(&c) {
+                    st.fetch_cursor = c;
+                    self.window_notify.notify_waiters();
+                }
             }
             // 250ms 兜底重查:防丢失 notify 唤醒,无需逐段 oneshot 记账。
             let _ = tokio::time::timeout(Duration::from_millis(250), self.data_notify.notified())
@@ -925,6 +985,110 @@ mod tests {
             assert_eq!(lo_b.len(), up_b.len(), "{name}: 长度不一致");
             assert_eq!(lo_b, up_b, "{name}: 字节不一致 —— mpv 会黑屏");
         }
+    }
+
+
+    /* 回归:环形缓存把别人正在用的段挤掉后,必须**重拉**,不能干等。
+
+       环形缓存是全连接共享的(占用恒 = 用户设的上限),槽位 = chunk % ring。
+       两条连接的分段号只要模 ring 同余就落同一个槽,后写的直接盖掉先写的。
+       而 worker 认领时 fetch_cursor 已经自增越过那一段,**再没人会去重拉** ——
+       await_chunk 于是无限空转(has() 永远 false,又不在 failed 里),那条连接彻底饿死。
+       线上表现 = 有流量、黑屏/永远缓冲;CI 上表现 = concurrent_connections_
+       do_not_starve_each_other 约 5~20% 概率红(early eof 或超时)。
+
+       这里把冲突**做成必然**而不是碰运气:
+         total 16MB = 4 段;cache 8MB + threads=1 → ring = 2 槽;
+         A 从 chunk0 起、B 从 chunk2 起 —— 2 % 2 == 0 % 2,
+         两条连接**正在供给的那一段**直接同槽,谁后落盘谁就把对方挤掉。
+       反向验证:把 await_chunk 里那段「倒回 fetch_cursor」删掉,本测试必然超时红。 */
+    #[tokio::test]
+    async fn evicted_chunk_is_refetched_not_awaited_forever() {
+        const TOTAL: u64 = 48 * 1024 * 1024; // 12 段
+        let byte_at = |i: u64| (i % 251) as u8;
+
+        let up = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let up_port = up.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let (mut c, _) = match up.accept().await {
+                    Ok(v) => v,
+                    Err(_) => break,
+                };
+                tokio::spawn(async move {
+                    let (_m, rg) = match read_request(&mut c).await {
+                        Ok(v) => v,
+                        Err(_) => return,
+                    };
+                    let (s, e) = match rg {
+                        Some((s, e)) => (s, e.unwrap_or(TOTAL - 1).min(TOTAL - 1)),
+                        None => (0, TOTAL - 1),
+                    };
+                    let body: Vec<u8> = (s..=e).map(byte_at).collect();
+                    let head = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {s}-{e}/{TOTAL}\r\n\
+                         Content-Type: video/x-matroska\r\nContent-Length: {}\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = c.write_all(head.as_bytes()).await;
+                    let _ = c.write_all(&body).await;
+                });
+            }
+        });
+
+        /* ring 的算法:want = max(cache/CHUNK, threads*2) = max(2, 4) = 4 槽。
+           两条连接相距 4 段 → 4 % 4 == 0,B 的 chunk4 与 A 的 chunk0 直接同槽,
+           往后 A(1,2) 与 B(5,6) 也各自同槽 —— 互相挤兑是**必然**,不看运气。
+           ⚠️ threads 会被 start() clamp(2,4),这里写 1 会被悄悄抬成 2 而 ring 变 4,
+           参数和注释就对不上了 —— 我第一版正是这样,测试拿错 ring 白跑一轮。 */
+        let h = start(format!("http://127.0.0.1:{up_port}/f"), 2, 8 * 1024 * 1024, None)
+            .await
+            .expect("假上游给了 Content-Range,代理该起得来");
+
+        let mut a = TcpStream::connect(("127.0.0.1", url_port(&h.url))).await.unwrap();
+        let mut b = TcpStream::connect(("127.0.0.1", url_port(&h.url))).await.unwrap();
+        a.write_all(b"GET /play HTTP/1.1\r\nRange: bytes=0-\r\n\r\n").await.unwrap();
+        // B 从 chunk4(16MB)起。
+        b.write_all(format!("GET /play HTTP/1.1\r\nRange: bytes={}-\r\n\r\n", 16 * 1024 * 1024).as_bytes())
+            .await
+            .unwrap();
+
+        async fn skip_head(s: &mut TcpStream) {
+            let mut one = [0u8; 1];
+            let mut w = Vec::new();
+            loop {
+                s.read_exact(&mut one).await.unwrap();
+                w.push(one[0]);
+                if w.len() >= 4 && &w[w.len() - 4..] == b"\r\n\r\n" {
+                    return;
+                }
+            }
+        }
+
+        tokio::time::timeout(Duration::from_secs(20), async {
+            skip_head(&mut a).await;
+            skip_head(&mut b).await;
+            let (mut pa, mut pb) = (0u64, 16 * 1024 * 1024u64);
+            let mut buf = vec![0u8; 512 * 1024];
+            /* ★ 必须**跨段**读:每条连接读 12MB = 3 段。
+               只在一段之内读是测不出来的 —— await_chunk 整段返回并留在内存里,
+               根本不会再去问磁盘,冲突压根碰不到(我第一版就这么写,摘掉修复照样绿)。 */
+            for _ in 0..24 {
+                a.read_exact(&mut buf).await.expect("A 被挤掉后没重拉 = 饿死");
+                for (k, v) in buf.iter().enumerate() {
+                    assert_eq!(*v, byte_at(pa + k as u64), "A 字节错位 @{}", pa + k as u64);
+                }
+                pa += buf.len() as u64;
+
+                b.read_exact(&mut buf).await.expect("B 被挤掉后没重拉 = 饿死");
+                for (k, v) in buf.iter().enumerate() {
+                    assert_eq!(*v, byte_at(pb + k as u64), "B 字节错位 @{}", pb + k as u64);
+                }
+                pb += buf.len() as u64;
+            }
+        })
+        .await
+        .expect("段被环形缓存挤掉后没有重拉,连接饿死(= 线上的黑屏/永远缓冲)");
     }
 
     /* 回归:并发连接互不干扰 —— 这就是旧版「开了黑屏永远缓冲」的根因。

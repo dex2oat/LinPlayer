@@ -242,6 +242,19 @@ fn cached(slot: &std::sync::RwLock<Option<reqwest::Client>>, ua: Option<String>)
 
 #[cfg(test)]
 mod tests {
+    /* ★ CLIENT / EMBY_CLIENT / PRELOAD_CLIENT 是**进程级**全局缓存,而 cargo test
+       在同一个进程里多线程并行跑。于是会出现:A 刚 client() 把缓存填上,B 调 set_proxy
+       (或改 insecure 白名单)把它清了,A 的 `assert!(CLIENT...is_some())` 当场红 ——
+       和被测代码毫无关系,纯粹是测试互踩。
+       实测:全量套件连跑 20 次红 1 次,报 `assertion failed: CLIENT.read().unwrap().is_some()`。
+       凡是**读写这三个全局或 set_proxy/allow_insecure** 的测试,都必须先拿这把锁串起来。
+       用 unwrap_or_else(into_inner) 而不是 unwrap:上一个测试 panic 会毒化锁,
+       那时候再让后面所有测试跟着红,只会把真正的失败埋掉。 */
+    static GLOBAL_CLIENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn lock_globals() -> std::sync::MutexGuard<'static, ()> {
+        GLOBAL_CLIENT_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     use super::*;
 
     #[test]
@@ -256,6 +269,7 @@ mod tests {
 
     #[test]
     fn insecure_allowlist_is_per_host_not_global() {
+        let _g = lock_globals();
         set_insecure_hosts(["https://nas.local:8096/emby".to_string(), "SELF.example.COM".to_string()]);
         assert!(is_insecure_host("nas.local"), "白名单里的 host 该放行");
         assert!(is_insecure_host("self.example.com"), "host 比对必须大小写不敏感");
@@ -275,6 +289,7 @@ mod tests {
 
     #[test]
     fn client_builds_and_is_cached() {
+        let _g = lock_globals();
         let _ = client();
         let _ = client(); // 走缓存分支
     }
@@ -288,6 +303,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "需要外网(badssl.com)"]
     async fn tls_verification_is_real() {
+        let _g = lock_globals();
         // 1) 正常证书的站必须**通** —— 证明根证书/ALPN/provider 都装对了。
         set_insecure_hosts(Vec::<String>::new());
         let r = client().get("https://sha256.badssl.com/").send().await;
@@ -317,6 +333,7 @@ mod tests {
        反向验证:把 client() 里的 .no_proxy(...) 去掉,此测试立刻红(实测响应体变成 PROXY)。 */
     #[tokio::test]
     async fn loopback_never_goes_through_proxy() {
+        let _g = lock_globals();
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -368,6 +385,7 @@ Content-Length: 5
        反向验证:把 preload_client() 改成 cached(&PRELOAD_CLIENT, Some(user_agent())),此测试立刻红。 */
     #[tokio::test]
     async fn each_client_sends_its_own_user_agent() {
+        let _g = lock_globals();
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
@@ -415,6 +433,7 @@ Content-Length: 5
     /* set_proxy 必须让缓存的 client 失效,否则改代理要重启才生效(静默不干活)。 */
     #[test]
     fn set_proxy_invalidates_cached_client() {
+        let _g = lock_globals();
         // 三个都要填上、三个都要被清 —— 漏清任何一个,那条路就还在用旧代理设置。
         let (_, _, _) = (client(), emby_client(), preload_client());
         assert!(CLIENT.read().unwrap().is_some());
