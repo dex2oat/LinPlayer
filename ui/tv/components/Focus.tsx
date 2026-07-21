@@ -10,12 +10,10 @@
      省得每个页面手工把回调一层层往下递 —— 递漏一个就是一段不会滚的列表。
    ============================================================ */
 
-import { createContext, useCallback, useContext, useEffect, useRef, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
 import { pushBackHandler } from "../app/focus";
 import {
   FocusContext,
-  pause,
-  resume,
   useFocusable,
   type FocusableComponentLayout,
 } from "@noriginmedia/norigin-spatial-navigation";
@@ -71,34 +69,10 @@ export function FocusItem({
   const notify = useContext(ScrollNotify);
   const host = useRef<HTMLDivElement | null>(null);
 
-  /* ---- 确认键落在输入框上时,把 DOM 焦点交给真 <input> ----
-
-     ★ 这是「电视上打不出字」的根因。库的 `shouldFocusDOMNode:true` 只会 focus
-       **登记的那个节点**,也就是下面这个包装 <div> —— 它没有 tabIndex,`.focus()`
-       是个 no-op,`document.activeElement` 始终停在 <body>。Android 的输入法只认
-       DOM 焦点,所以系统键盘永远不升起,遥控器按 OK 也毫无反应。
-       (OnboardingPage 里原本还写着「shouldFocusDOMNode 让输入法升起」的注释,
-        那句话描述的是代码**没有**做到的事。)
-
-     ★ 为什么放在这儿而不是各页自己写:SearchPage 和 SettingsPage 已经各手工写了
-       一遍 `onEnter={() => ref.current?.focus()}`,而首次启动的加服务器页漏了 ——
-       结果就是装上根本没法登录。共享原语兜住,新页面不必再记得这件事。
-
-     ★ 只在**没给 onEnter** 时接管:那两个手工页面有自己的 Enter/Escape 处理,
-       给了 onEnter 就完全走调用方的,零回归。 */
-  const enterInput = useCallback(() => {
-    const el = host.current?.querySelector("input, textarea") as HTMLElement | null;
-    if (!el) return;
-    /* 必须暂停空间导航:input 拿到 DOM 焦点后,方向键既要移动文本光标,又会被库
-       拿去移动虚拟焦点 —— 不暂停的话按左右键光标不动,焦点先飞走了。 */
-    pause();
-    el.focus();
-  }, []);
-
   const { ref, focused, focusSelf } = useFocusable<object, HTMLDivElement>({
     focusable: !disabled,
     focusKey,
-    onEnterPress: onEnter ?? enterInput,
+    onEnterPress: onEnter,
     onFocus: (layout: FocusableComponentLayout) => {
       notify?.(layout.node as HTMLElement);
       onFocus?.();
@@ -108,29 +82,6 @@ export function FocusItem({
   useEffect(() => {
     if (autoFocus && !disabled) focusSelf();
   }, [autoFocus, disabled, focusSelf]);
-
-  /* 退出输入态。Enter=输入完成,Escape/返回=放弃 —— 两者都 blur,并把空间导航还回去。
-     不 stopPropagation 的话 Escape 会顺着冒到全局 back 处理器,直接退出整页。 */
-  useEffect(() => {
-    if (onEnter) return; // 调用方自己管
-    const el = host.current?.querySelector("input, textarea");
-    if (!el) return;
-    const onBlur = () => resume();
-    const onKey = (e: Event) => {
-      const k = (e as KeyboardEvent).key;
-      if (k === "Enter" || k === "Escape") {
-        e.stopPropagation();
-        (el as HTMLElement).blur(); // blur 里 resume,焦点回到本项
-      }
-    };
-    el.addEventListener("blur", onBlur);
-    el.addEventListener("keydown", onKey);
-    return () => {
-      el.removeEventListener("blur", onBlur);
-      el.removeEventListener("keydown", onKey);
-      resume(); // 卸载时别把导航永久停在暂停态(换页时 blur 不一定发)
-    };
-  }, [onEnter]);
 
   return (
     <div
@@ -143,6 +94,130 @@ export function FocusItem({
     >
       {children}
     </div>
+  );
+}
+
+/* ------------------------------------------------------------
+   输入框:**焦点框就是输入框**
+   ------------------------------------------------------------
+
+   ★ 这一版推翻了原来的两段式(先 FocusItem 选中,按确认才把 DOM 焦点转给里面的
+     <input>,期间 pause() 掉整个焦点库,再按确认/返回退出输入态)。那套的问题不是不能用,
+     是**它把"选中"和"输入"做成了两件事**:
+       - 高亮画在外面那个 div 上,里面才是真输入框 —— 看着就是两个盒子;
+       - 进了输入态整个焦点库停摆,上下键失效 → 想先填密码再填地址得先退出、再走位;
+       - 顺序被隐式钉死成"从上往下一路填",而先填哪个本该由用户定。
+
+   ★ 现在:登记进焦点树的**就是 <input> 本身**,焦点走到它身上 DOM 焦点同步跟上
+     (系统 IME 随之升起,不用按确认),上下键照常在字段间走 —— 想先填哪个填哪个。
+     左右/退格这些编辑键在 input 上 stopPropagation 截住,不让焦点库拿去挪焦点
+     (库是 window 冒泡阶段监听,截得住;SearchPage 早就靠这条拦 Escape)。 */
+
+type InputProps = {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  password?: boolean;
+  autoFocus?: boolean;
+  focusKey?: string;
+  className?: string;
+  style?: React.CSSProperties;
+  /** 确认键。给"填完直接连接/搜索"用。 */
+  onEnter?: () => void;
+  /** 失焦提交(设置页那种改完即存的行)。焦点一离开就调。 */
+  onCommit?: (v: string) => void;
+  inputMode?: "text" | "url" | "numeric";
+};
+
+export function FocusInput({
+  value,
+  onChange,
+  placeholder,
+  password,
+  autoFocus,
+  focusKey,
+  className = "",
+  style,
+  onEnter,
+  onCommit,
+  inputMode,
+}: InputProps) {
+  const notify = useContext(ScrollNotify);
+  const el = useRef<HTMLInputElement | null>(null);
+  const commitRef = useRef(onCommit);
+  commitRef.current = onCommit;
+
+  const { ref, focused, focusSelf } = useFocusable<object, HTMLInputElement>({
+    focusKey,
+    /* 不接 onEnterPress:确认键在下面的 onKeyDown 里就被 stopPropagation 截住了,
+       库根本收不到 —— 两边都接就是提交两次。 */
+    onFocus: (layout: FocusableComponentLayout) => notify?.(layout.node as HTMLElement),
+  });
+
+  useEffect(() => {
+    if (autoFocus) focusSelf();
+  }, [autoFocus, focusSelf]);
+
+  /* DOM 焦点跟着虚拟焦点走 —— 这就是"焦点框即输入框"。
+     离开时 blur 并提交:不 blur 的话 Android 的输入法会一直悬在屏幕下半部分,
+     焦点已经走到别的字段了键盘还对着上一个,比不升起更糟。 */
+  useEffect(() => {
+    const n = el.current;
+    if (!n) return;
+    if (focused) {
+      if (document.activeElement !== n) n.focus();
+    } else if (document.activeElement === n) {
+      n.blur();
+      commitRef.current?.(n.value);
+    }
+  }, [focused]);
+
+  /* 正在输入时整页被拆掉(按返回退页/切设置分类):上面那条走不到,改动会静默丢。
+     清理函数跑在 DOM 摘除**之前**,所以 activeElement 还指着自己 —— 拿它当判据,
+     和 blur 那条互斥,不会提交两次。 */
+  useEffect(
+    () => () => {
+      const n = el.current;
+      if (n && document.activeElement === n) commitRef.current?.(n.value);
+    },
+    [],
+  );
+
+  return (
+    <input
+      ref={(n) => {
+        el.current = n;
+        (ref as React.MutableRefObject<HTMLInputElement | null>).current = n;
+      }}
+      className={`${className} ${focused ? "foc" : ""}`.trim()}
+      style={style}
+      type={password ? "password" : "text"}
+      inputMode={inputMode}
+      autoCapitalize="off"
+      autoComplete="off"
+      value={value}
+      placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => {
+        /* 上下 = 换字段(放给焦点库);左右/编辑键 = 移光标改字(在这儿截住)。 */
+        switch (e.key) {
+          case "ArrowLeft":
+          case "ArrowRight":
+          case "Home":
+          case "End":
+          case "Backspace":
+          case "Delete":
+            e.stopPropagation();
+            break;
+          case "Enter":
+            e.stopPropagation();
+            onEnter?.();
+            break;
+          default:
+            break; // Escape 放行:返回键该退页,不该被输入框吃掉
+        }
+      }}
+    />
   );
 }
 

@@ -6,6 +6,7 @@ import {
   setPause,
   setTrack,
   status as getStatus,
+  setNowPlaying,
   stopPlayback,
   tracks as getTracks,
   type Status,
@@ -51,6 +52,15 @@ export default function PlayerPage({
     document.documentElement.classList.add("playing");
     return () => document.documentElement.classList.remove("playing");
   }, []);
+
+  /* 把片名报给核层 —— 手机控制台要显示"正在播放什么",而 mpv 的状态里只有时间。
+     离页清掉,否则手机上会一直挂着上一部片的名字。 */
+  useEffect(() => {
+    void setNowPlaying(title ?? null);
+    return () => {
+      void setNowPlaying(null);
+    };
+  }, [title]);
 
   /* 状态轮询。1s 够了 —— 进度条一秒动一格,人眼在三米外分辨不出更细的。
      轮询而不是订阅事件:核层没有 status 推送通道,而且轮询在页面卸载时天然停掉。 */

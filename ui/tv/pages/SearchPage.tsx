@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { pause, resume } from "@noriginmedia/norigin-spatial-navigation";
+import { useCallback, useEffect, useState } from "react";
 import {
   aggregateSearch,
   fmtRes,
@@ -11,7 +10,7 @@ import {
 } from "@shared/api";
 import type { Route } from "../App";
 import { Icon } from "../app/icons";
-import { FocusColumn, FocusItem } from "../components/Focus";
+import { FocusColumn, FocusInput, FocusItem } from "../components/Focus";
 
 /** 搜索(草稿 06)。左 560dp 搜索框+历史,右 1016dp 范围 chip+结果。
 
@@ -85,8 +84,6 @@ export default function SearchPage({
   /* 初值写成函数,否则每次渲染都读一遍 localStorage。 */
   const [hist, setHist] = useState<string[]>(readHist);
 
-  const inputRef = useRef<HTMLInputElement>(null);
-
   useEffect(() => {
     const t = window.setTimeout(() => setKw(q.trim()), DEBOUNCE_MS);
     return () => window.clearTimeout(t);
@@ -155,51 +152,30 @@ export default function SearchPage({
       {/* ---- 左栏 560dp:搜索框 + 历史 ---- */}
       <div style={{ width: 560, flex: "none" }}>
         <FocusColumn focusKey="SEARCH_L">
-          <div className="field" style={{ marginBottom: 30, maxWidth: "none" }}>
-            <FocusItem
+          {/* 焦点框就是输入框:焦点走到它身上 IME 直接升起,不用先按确认;
+              上下键随时离开去点历史。理由见 Focus.tsx 的 FocusInput。
+              图标画在框外侧(输入框现在是原生 <input>,塞不进子元素了)。 */}
+          <div
+            className="field"
+            style={{
+              marginBottom: 30,
+              maxWidth: "none",
+              display: "flex",
+              alignItems: "center",
+              gap: 16,
+            }}
+          >
+            <Icon n="search" className="ic" />
+            <FocusInput
               className="in"
               focusKey="SEARCH_INPUT"
               autoFocus
-              style={{ height: 84, fontSize: 28, borderRadius: 16, gap: 16 }}
-              /* 确认键 = 把 DOM 焦点交给真 <input>,系统 IME 随之升起。
-                 FocusItem 包的是 div,库的 shouldFocusDOMNode 只会 focus 这个 div,
-                 不手工转交的话输入法永远不出来。 */
-              onEnter={() => inputRef.current?.focus()}
-            >
-              <Icon n="search" className="ic" />
-              <input
-                ref={inputRef}
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="搜索片名"
-                /* ★ 输入期间必须把焦点库**停掉**:IME 没接管的键(以及 PC 上开发时的
-                   方向键)会被库当成移动焦点,光标一动就跳出输入框。 */
-                onFocus={() => pause()}
-                onBlur={() => resume()}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    remember(q);
-                    inputRef.current?.blur();
-                  }
-                  if (e.key === "Escape") {
-                    /* 输入中的返回 = 退出输入,不是退出本页。
-                       React 的事件挂在根容器上,stopPropagation 能拦住
-                       focus.ts 装在 window 上的那个兜底监听。 */
-                    e.stopPropagation();
-                    inputRef.current?.blur();
-                  }
-                }}
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  background: "transparent",
-                  border: "none",
-                  outline: "none",
-                  color: "inherit",
-                  font: "inherit",
-                }}
-              />
-            </FocusItem>
+              value={q}
+              onChange={setQ}
+              placeholder="搜索片名"
+              onEnter={() => remember(q)}
+              style={{ height: 84, fontSize: 28, borderRadius: 16, flex: 1, minWidth: 0 }}
+            />
           </div>
 
           <div className="rowhead" style={{ marginBottom: 14 }}>

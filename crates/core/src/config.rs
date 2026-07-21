@@ -428,6 +428,18 @@ pub struct AppConfig {
     /// 已连接的 Bangumi 账号(令牌);None=未连接。
     #[serde(default)]
     pub sync_bangumi: Option<crate::sync::SyncAccount>,
+    /// 手机控制台(局域网扫码遥控,见 crate::companion)。
+    /// **默认开**:关着的话"遥控器"每次要先在电视上打开,等于没有。
+    #[serde(default = "yes")]
+    pub companion_enabled: bool,
+    /// 界面主题("dark"/"light")的**镜像**。真正的权威在前端 localStorage ——
+    /// 这里存一份只是为了手机控制台能显示当前值(它读不到 WebView 的 localStorage)。
+    #[serde(default)]
+    pub theme: String,
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn config_path() -> PathBuf {

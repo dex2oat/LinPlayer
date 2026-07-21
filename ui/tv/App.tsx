@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { currentSession, onAccountsChanged, type LoginResult } from "@shared/api";
 import { applyTvScale, consumeBack, onTvKey } from "./app/focus";
+import { installRemote } from "./app/remote";
 import { TvIconSprite } from "./app/icons";
 import { FULLSCREEN_PAGES, RAIL_PAGES, type PageId } from "./app/nav";
 import PageBoundary from "./app/PageBoundary";
@@ -76,11 +77,27 @@ export default function App() {
   );
 
   /* 会话。账号表变了要重问 —— 删掉最后一台服务器就该退回首启页。 */
+  const loadSession = useCallback(
+    () => currentSession().then(setSession).catch(() => setSession(null)),
+    [],
+  );
   useEffect(() => {
-    const load = () => currentSession().then(setSession).catch(() => setSession(null));
-    load();
-    return onAccountsChanged(load);
-  }, []);
+    loadSession();
+    return onAccountsChanged(loadSession);
+  }, [loadSession]);
+
+  /* 手机控制台(扫码遥控)的接收端。★ onAccountsChanged 那条是**首启必需**:
+     手机上登录成功后核层账号表变了,但那条广播是前端 invoke 层发的 ——
+     手机走的是 Rust 直连,电视这边一无所知,会一直停在"添加服务器"那一屏。 */
+  useEffect(
+    () =>
+      installRemote({
+        onOpen: (itemId) => go({ page: "detail", itemId }),
+        onHome: () => go("home"),
+        onAccountsChanged: loadSession,
+      }),
+    [go, loadSession],
+  );
 
   if (session === undefined) {
     return (

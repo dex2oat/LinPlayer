@@ -32,7 +32,7 @@ use linplayer_core::source::{MediaSourceBackend, SourceEntry, SourceKind, Source
 use linplayer_core::sync::{bangumi, trakt};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 struct AppState {
     http: reqwest::Client,
@@ -49,6 +49,10 @@ struct AppState {
     pending_update: Mutex<Option<linplayer_core::update::UpdateInfo>>,
     // 本次播放的同步上下文(Trakt/Bangumi)。play 时抓,stop 时消费。与桌面同构。
     scrobble_ctx: Mutex<Option<emby::ScrobbleInfo>>,
+    // 手机控制台的局域网小服务(默认开机即起)。Drop 即停服。
+    companion: Mutex<Option<linplayer_core::companion::Companion>>,
+    // 当前在放什么(标题, 副标题)。mpv 的 Status 里没有片名,而手机控制台要显示。
+    now_playing: Mutex<Option<(String, Option<String>)>>,
 }
 
 fn session_of(state: &State<'_, AppState>) -> Result<Session, String> {
@@ -874,6 +878,274 @@ async fn probe_line(
     Ok(LineProbe { index, url, ms })
 }
 
+/* ---------- 手机控制台(扫码遥控) ----------
+   电视没摄像头,只能"电视出码手机扫"。核层起一个局域网小网页(crates/core/src/companion.rs),
+   业务全在这里:手机那页的每个动作都对应下面 `companion_call` 里的一个分支。
+
+   ★ 为什么处理器能直接调这些 `#[tauri::command]` 函数:`AppHandle::state::<T>()` 在命令
+     之外也能拿到同一个 `State`,所以不必把每条业务再抄一份 —— **抄一份就一定会分叉**,
+     手机上改的设置和电视上改的走两套代码,迟早有一边落后。
+
+   ★ 遥控按键不能在这里"执行",它要落到 WebView 里的焦点库上 ——
+     所以按键只是 `emit` 给前端,由 ui/tv/app/remote.ts 转成真实键事件。 */
+
+/// 手机页当前可扫的地址。null = 没开或起服失败(没连局域网)。
+#[tauri::command]
+fn companion_url(state: State<'_, AppState>) -> Option<String> {
+    state.companion.lock().unwrap().as_ref().map(|c| c.url.clone())
+}
+
+/// 开关手机控制台。关掉即停服(Companion 的 Drop 干这件事),再开会换一个新 token。
+#[tauri::command]
+async fn companion_set_enabled(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<Option<String>, String> {
+    {
+        let st = app.state::<AppState>();
+        let mut cfg = st.config.lock().unwrap();
+        cfg.companion_enabled = enabled;
+        cfg.save();
+    }
+    if !enabled {
+        *app.state::<AppState>().companion.lock().unwrap() = None;
+        return Ok(None);
+    }
+    Ok(start_companion(app.clone()).await)
+}
+
+/// 起服并存进 AppState。失败(没局域网)只记日志:这不该拦住 App 启动。
+async fn start_companion(app: tauri::AppHandle) -> Option<String> {
+    let h = app.clone();
+    let handler: linplayer_core::companion::Handler = std::sync::Arc::new(move |name, body| {
+        let app = h.clone();
+        Box::pin(async move {
+            match companion_call(&app, &name, &body).await {
+                Ok(v) => v.to_string(),
+                Err(e) => serde_json::json!({ "error": e }).to_string(),
+            }
+        })
+    });
+    match linplayer_core::companion::start(handler).await {
+        Ok(c) => {
+            let url = c.url.clone();
+            log::info!("[companion] 手机控制台已开: {url}");
+            *app.state::<AppState>().companion.lock().unwrap() = Some(c);
+            Some(url)
+        }
+        Err(e) => {
+            log::warn!("[companion] 起服失败(不影响其它功能): {e}");
+            None
+        }
+    }
+}
+
+/// 手机页的动作 → 电视上的真实行为。返回的 Value 原样发回手机。
+async fn companion_call(
+    app: &tauri::AppHandle,
+    name: &str,
+    body: &str,
+) -> Result<serde_json::Value, String> {
+    use serde_json::{json, Value};
+    let req: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+    let s = |k: &str| req.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    match name {
+        /* 手机每隔几秒问一次:连的哪台、在放什么。**必须便宜** —— 它是全页的心跳。 */
+        "state" => {
+            let session = current_session(app.state::<AppState>());
+            let playing = match status(app.state::<PlayerState>()) {
+                Ok(st) if st.duration > 0.0 => {
+                    let np = app.state::<AppState>().now_playing.lock().unwrap().clone();
+                    Some(json!({
+                        "title": np.as_ref().map(|(t, _)| t.clone()),
+                        "sub": np.as_ref().and_then(|(_, x)| x.clone()),
+                        "pos": st.time, "dur": st.duration, "paused": st.paused,
+                    }))
+                }
+                /* 没在放 / 播放器还没建起来都算"没有正在播放" —— 手机上不该看见报错。 */
+                _ => None,
+            };
+            Ok(json!({ "session": session, "playing": playing }))
+        }
+
+        /* 遥控按键。这里只转发,真正的"按下"发生在 WebView 里(见 ui/tv/app/remote.ts)。 */
+        "key" => {
+            let k = s("k");
+            if !matches!(
+                k.as_str(),
+                "up" | "down" | "left" | "right" | "enter" | "back" | "home"
+            ) {
+                return Err(format!("不认识的按键: {k}"));
+            }
+            app.emit("lp://remote-key", k).map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true }))
+        }
+
+        "play_ctl" => {
+            match s("a").as_str() {
+                "pause" => {
+                    let paused =
+                        req.get("v").and_then(|v| v.as_f64()).unwrap_or(0.0) != 0.0;
+                    set_pause(app.state::<PlayerState>(), paused)?;
+                }
+                "seek" => {
+                    let pos = req.get("v").and_then(|v| v.as_f64()).unwrap_or(0.0).max(0.0);
+                    seek(app.state::<PlayerState>(), pos)?;
+                }
+                "stop" => {
+                    let pos = status(app.state::<PlayerState>()).map(|x| x.time).unwrap_or(0.0);
+                    stop_playback(app.state::<AppState>(), app.state::<PlayerState>(), pos).await?;
+                    /* 播放页是前端的一条路由,核层停流不会让它自己退 —— 得叫它退。 */
+                    app.emit("lp://remote-key", "back").map_err(|e| e.to_string())?;
+                }
+                other => return Err(format!("不认识的播放动作: {other}")),
+            }
+            Ok(json!({ "ok": true }))
+        }
+
+        "accounts" => Ok(json!({ "accounts": list_accounts(app.state::<AppState>()) })),
+
+        /* ★ 这三条都改了账号表。前端每个页面各持一份副本,**不发这条广播的话
+           电视那边毫无察觉** —— 最明显的是首次启动:手机上登录成功了,
+           电视还停在"添加服务器"那一屏不动。 */
+        "switch" => {
+            set_active_server(app.state::<AppState>(), s("server"))?;
+            app.emit("lp://accounts-changed", ()).ok();
+            Ok(json!({ "ok": true }))
+        }
+
+        "remove" => {
+            remove_account(app.state::<AppState>(), s("server")).await?;
+            app.emit("lp://accounts-changed", ()).ok();
+            Ok(json!({ "ok": true }))
+        }
+
+        "login" => {
+            let r = login(app.state::<AppState>(), s("server"), s("user"), s("pass")).await?;
+            app.emit("lp://accounts-changed", ()).ok();
+            Ok(json!({ "ok": true, "name": r.user_name }))
+        }
+
+        /* 手机上打字搜片 —— 这是遥控器最痛的场景,所以搜的是**全部服务器**,
+           省得用户先切服再搜。点结果时把 server 一起带回来。 */
+        "search" => {
+            let q = s("q");
+            if q.is_empty() {
+                return Ok(json!({ "items": [] }));
+            }
+            let groups = aggregate_search(app.state::<AppState>(), q).await?;
+            let mut items = Vec::new();
+            for g in groups {
+                for it in g.items.into_iter().take(20) {
+                    items.push(json!({
+                        "id": it.id, "name": it.name, "type": it.type_,
+                        "year": it.year, "from": g.server_name, "server": g.server_id,
+                    }));
+                }
+            }
+            items.truncate(60);
+            Ok(json!({ "items": items }))
+        }
+
+        /* 让电视打开某个条目。切服要在前端跳页之前做完,否则详情页拿当前服的 token
+           去问一个不存在的 itemId —— 表现是"点开是空白页"(TV 搜索页踩过同一个坑)。 */
+        "open" => {
+            let server = s("server");
+            if !server.is_empty() {
+                let cur = current_session(app.state::<AppState>()).map(|x| x.server);
+                if cur.as_deref() != Some(server.as_str()) {
+                    set_active_server(app.state::<AppState>(), server)?;
+                    /* 切了服就得让电视那边重问会话 —— 否则页面还揣着上一台的
+                       session 副本去画新服的条目(TV 搜索页当年就是这么"点进去是空白页"的)。 */
+                    app.emit("lp://accounts-changed", ()).ok();
+                }
+            }
+            app.emit("lp://remote-open", s("id")).map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true }))
+        }
+
+        "settings" => {
+            let p = get_prefs(app.state::<AppState>());
+            let proxy = get_proxy(app.state::<AppState>());
+            let bytes = cache_size().await.unwrap_or(0);
+            let theme = app.state::<AppState>().config.lock().unwrap().theme.clone();
+            Ok(json!({
+                "theme": theme,
+                "audio_lang": p.audio_lang, "sub_lang": p.sub_lang, "sub_enabled": p.sub_enabled,
+                "proxy_type": proxy.type_, "proxy_host": proxy.host, "proxy_port": proxy.port,
+                "cache_human": human_size(bytes),
+            }))
+        }
+
+        "set_settings" => {
+            /* 空串 = "自动"。**必须转成 None** —— 传 Some("") 会让选轨规则去匹配一个
+               空语言码,表现是"设了自动却一条音轨都选不中"。 */
+            let opt = |v: String| if v.is_empty() { None } else { Some(v) };
+            set_prefs(
+                app.state::<AppState>(),
+                opt(s("audio_lang")),
+                opt(s("sub_lang")),
+                req.get("sub_enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+            )?;
+            let mut proxy = get_proxy(app.state::<AppState>());
+            proxy.type_ = s("proxy_type");
+            proxy.host = s("proxy_host");
+            proxy.port = req.get("proxy_port").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+            set_proxy(app.state::<AppState>(), proxy)?;
+            /* 主题是前端的东西(localStorage),核层只存一份好让手机读得到当前值,
+               真正生效靠这条 emit —— 不发的话手机上拨了主题,电视要等下次重启才变。 */
+            let theme = s("theme");
+            if !theme.is_empty() {
+                {
+                    let st = app.state::<AppState>();
+                    let mut cfg = st.config.lock().unwrap();
+                    cfg.theme = theme.clone();
+                    cfg.save();
+                }
+                app.emit("lp://remote-theme", theme).map_err(|e| e.to_string())?;
+            }
+            Ok(json!({ "ok": true }))
+        }
+
+        "clear_cache" => {
+            clear_cache().await?;
+            Ok(json!({ "ok": true }))
+        }
+
+        other => Err(format!("不认识的接口: {other}")),
+    }
+}
+
+/// 播放页告诉核层"现在放的是什么" —— 手机控制台要显示片名,而 mpv 的 Status 里没有。
+/// 前端本来就有标题,让它顺手报一次比核层再打一次 Emby 请求便宜。
+#[tauri::command]
+fn set_now_playing(state: State<'_, AppState>, title: Option<String>, sub: Option<String>) {
+    *state.now_playing.lock().unwrap() = title.map(|t| (t, sub));
+}
+
+/// 前端把当前主题镜像到核层 —— 手机控制台读不到 WebView 的 localStorage,
+/// 没有这份镜像它只能瞎猜一个默认值显示。**权威仍在前端**,这里只存不判。
+#[tauri::command]
+fn set_theme_pref(state: State<'_, AppState>, theme: String) {
+    let mut cfg = state.config.lock().unwrap();
+    if cfg.theme != theme {
+        cfg.theme = theme;
+        cfg.save();
+    }
+}
+
+fn human_size(b: u64) -> String {
+    const U: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut v = b as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < 3 {
+        v /= 1024.0;
+        i += 1;
+    }
+    format!("{v:.1} {}", U[i])
+}
+
 /// 删除某账号;若删的是活跃账号,回落到第一个(无账号则清空会话)。
 /// 删本地前尽力通知服务端登出,失败不影响本地删除(实测有的服 /Sessions/Logout 直接 404)。
 #[tauri::command]
@@ -1537,12 +1809,23 @@ pub fn run() {
                 account_status: Mutex::new(HashMap::new()),
                 pending_update: Mutex::new(None),
                 scrobble_ctx: Mutex::new(None),
+                companion: Mutex::new(None),
+                now_playing: Mutex::new(None),
             });
             /* 播放器状态单独一份 State:它的生命周期和 Surface 绑,不跟 AppState 一起建。 */
             app.manage(PlayerState::default());
             /* mpv 提成共享 crate 后自带的日志出口是空的,把安卓这边的接进去,
                否则它那些「静默失效」告警(如 shader 缓存没设上)全被丢掉。 */
             linplayer_mpv::set_logger(|m| log::info!("[mpv] {m}"));
+
+            /* 手机控制台:开机即起(除非用户关了)。**不能阻塞 setup** ——
+               起服要等网卡就绪,拿它挡住启动就是开机白屏。失败只写日志。 */
+            if app.state::<AppState>().config.lock().unwrap().companion_enabled {
+                let h = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    start_companion(h).await;
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1569,6 +1852,10 @@ pub fn run() {
             list_accounts,
             probe_accounts,
             probe_line,
+            companion_url,
+            companion_set_enabled,
+            set_now_playing,
+            set_theme_pref,
             remove_account,
             reorder_accounts,
             set_lines,

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { pause, resume } from "@noriginmedia/norigin-spatial-navigation";
 import {
   bangumiAccount,
   bangumiAuthorizeUrl,
@@ -14,6 +13,7 @@ import {
   getCrossServerResume,
   getPlaybackPrefs,
   getPrefs,
+  companionSetEnabled,
   getProxy,
   getUpdateSettings,
   setCrossServerResume,
@@ -39,7 +39,8 @@ import { useTheme } from "@shared/theme";
 import type { Route } from "../App";
 import { Icon, type IconName } from "../app/icons";
 import { onTvKey } from "../app/focus";
-import { FocusBoundary, FocusColumn, FocusItem } from "../components/Focus";
+import { FocusBoundary, FocusColumn, FocusInput, FocusItem } from "../components/Focus";
+import CompanionQr from "../components/CompanionQr";
 
 /** 设置(草稿 13)。左栏分类 + 右栏设置项的 Master-Detail。
 
@@ -162,6 +163,9 @@ export default function SettingsPage(_props: { go: (r: Route) => void }) {
   /* Bangumi 授权链接。★ 不能用 toast 显示:那是条几十上百字符的 URL,
      3 秒就没了,用户拿手机根本抄不完。要常驻在行下面。 */
   const [bgmUrl, setBgmUrl] = useState<string | null>(null);
+  /* 手机控制台开关。true=开着(核层默认开);切换后重挂二维码组件让它重新取地址。 */
+  const [remoteOn, setRemoteOn] = useState(true);
+  const [remoteNonce, setRemoteNonce] = useState(0);
 
   const { theme, setTheme } = useTheme();
 
@@ -430,6 +434,38 @@ export default function SettingsPage(_props: { go: (r: Route) => void }) {
                         onToggle={() => saveProxy({ proxy_media: !proxy.proxy_media })}
                       />
                     </>
+                  )}
+
+                  {/* ---- 手机遥控 ----
+                      ★ 放在「网络」而不是「通用」:它本质是"电视在局域网上开了个口子",
+                        和代理是同一类事,用户找它时想的也是网络。
+                      ★ 开关和二维码画在一起,不做二级页:遥控器每深一层就多两次按键。 */}
+                  <Grp>手机遥控</Grp>
+                  <SwRow
+                    t="手机扫码遥控"
+                    d="电视在局域网开一个小网页,手机扫码即可遥控、搜片、改设置、加服务器"
+                    on={remoteOn}
+                    onToggle={() => {
+                      const v = !remoteOn;
+                      setRemoteOn(v);
+                      companionSetEnabled(v)
+                        .then(() => setRemoteNonce((n) => n + 1))
+                        .catch((e) => {
+                          setRemoteOn(!v);
+                          say(String(e));
+                        });
+                    }}
+                  />
+                  {remoteOn && (
+                    <div style={{ padding: "18px 0 8px" }}>
+                      {/* key 变了才重新取地址 —— 关掉再开会换一个新 token,旧码作废。 */}
+                      <CompanionQr
+                        key={remoteNonce}
+                        size={300}
+                        title=""
+                        hint="手机和电视连同一个 Wi-Fi,用相机扫这张码。"
+                      />
+                    </div>
                   )}
                 </>
               ) : (
@@ -870,11 +906,10 @@ function StepRow({
   );
 }
 
-/** 文本输入行。确认键把 DOM 焦点交给真 <input>,系统 IME 随之升起 ——
- *  写法与搜索页那个输入框一致(**不自建虚拟键盘**,理由见 SearchPage 顶部注释)。
+/** 文本输入行。**焦点框就是输入框**:焦点走到它身上 IME 直接升起,不用先按确认,
+ *  上下键随时换到别的设置项(实现与理由见 Focus.tsx 的 FocusInput)。
+ *  仍然**不自建虚拟键盘**,理由见 SearchPage 顶部注释。
  *
- *  ★ 输入期间必须 pause() 焦点库:IME 没接管的键会被库当成移动焦点,
- *    光标一动就跳出输入框。blur 时 resume()。
  *  ★ 提交时机是 **Enter 或失焦**,不是每次按键 —— 每敲一个字符就发一次 set_proxy
  *    会把半截主机名落盘,而且核层每次都要写文件。 */
 function TextRow({
@@ -899,11 +934,12 @@ function TextRow({
   onCommit: (v: string) => void;
 }) {
   const [v, setV] = useState(val);
-  const ref = useRef<HTMLInputElement>(null);
   /* 外部值变了(保存失败回滚 / 首次加载完成)要跟上,但**正在输入时不要跟** ——
-     否则用户打到一半会被写回旧值。用 document.activeElement 判是不是自己在输入。 */
+     否则用户打到一半会被写回旧值。判据是"焦点在不在本行里"(输入框已经是行内的
+     那个原生 input,不再有单独的 ref 可比)。 */
+  const row = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (ref.current !== document.activeElement) setV(val);
+    if (!row.current?.contains(document.activeElement)) setV(val);
   }, [val]);
 
   const commit = () => {
@@ -912,32 +948,21 @@ function TextRow({
   };
 
   return (
-    <FocusItem className="srow" onEnter={() => ref.current?.focus()}>
+    /* 行本身不再是焦点项 —— 焦点直接落在右边那个 input 上,否则又变回
+       "外面一个选中框、里面一个输入框"。 */
+    <div className="srow" ref={row}>
       <div className="tx">
         <div className="t">{t}</div>
         {d && <div className="d">{d}</div>}
       </div>
-      <input
-        ref={ref}
+      <FocusInput
         value={v}
-        type={secret ? "password" : "text"}
+        onChange={setV}
+        password={secret}
         inputMode={numeric ? "numeric" : "text"}
         placeholder={placeholder}
-        onChange={(e) => setV(e.target.value)}
-        onFocus={() => pause()}
-        onBlur={() => {
-          resume();
-          commit();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") ref.current?.blur(); // blur 里统一提交,别提交两次
-          if (e.key === "Escape") {
-            /* 输入中的返回 = 退出输入,不是退出本页。 */
-            e.stopPropagation();
-            setV(val);
-            ref.current?.blur();
-          }
-        }}
+        onEnter={commit}
+        onCommit={commit}
         style={{
           marginLeft: "auto",
           width: 380,
@@ -952,7 +977,7 @@ function TextRow({
           outline: "none",
         }}
       />
-    </FocusItem>
+    </div>
   );
 }
 

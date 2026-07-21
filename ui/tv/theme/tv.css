@@ -867,6 +867,13 @@ body {
 .field .in::placeholder {
   color: var(--tv-ink-3);
 }
+/* 焦点框就是输入框(见 Focus.tsx 的 FocusInput):高亮直接画在 input 上,
+   不再是"外面一个选中框、里面一个输入框"两个盒子。 */
+.field .in.foc {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: transparent;
+  caret-color: var(--accent);
+}
 
 /* ---- 设置双栏 ---- */
 .master {
