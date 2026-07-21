@@ -2040,6 +2040,84 @@ mod tests {
         }
     }
 
+    /// 壳往前端喊的每一个按键名,前端必须**真的有人处理**。
+    ///
+    /// ★ 这条挡的是 2026-07-22 那个 bug:`menu` 在 focus.ts 的 TvKey 里定义了、
+    ///   MainActivity 也转发了 KEYCODE_MENU,**唯独没有任何页面写 `k === "menu"`** ——
+    ///   于是菜单键按下去静默无事。类型系统对此一声不吭(联合类型里多一个成员
+    ///   不强制你处理它),只有用户按了才发现。
+    ///
+    /// 只查"有没有人处理",不查"处理得对不对" —— 后者不是静态能查的。
+    /// 反向验证:把 PlayerPage 里 `k === "menu"` 那行删掉 → 本测试立刻红。
+    #[test]
+    fn every_shell_key_is_handled_by_the_frontend() {
+        let kt = include_str!(
+            "../gen/android/app/src/main/java/xyz/linplayer/tv/MainActivity.kt"
+        );
+        // 抠出 __lpTvKey('xxx') 里的 xxx
+        let mut emitted: Vec<&str> = Vec::new();
+        for (i, _) in kt.match_indices("__lpTvKey('") {
+            let rest = &kt[i + "__lpTvKey('".len()..];
+            if let Some(end) = rest.find('\'') {
+                emitted.push(&rest[..end]);
+            }
+        }
+        // 壳里还有一张 keyCode -> 名字的映射表,形如 `KeyEvent.KEYCODE_X -> "name"`
+        for (i, _) in kt.match_indices("-> \"") {
+            let rest = &kt[i + "-> \"".len()..];
+            if let Some(end) = rest.find('"') {
+                emitted.push(&rest[..end]);
+            }
+        }
+        emitted.retain(|k| *k != "$name"); // 模板串本身不是键名
+        emitted.sort_unstable();
+        emitted.dedup();
+        assert!(
+            emitted.len() >= 5,
+            "只从 MainActivity 抠出 {} 个键名,解析多半坏了:{emitted:?}",
+            emitted.len()
+        );
+
+        /* 前端的**处理点**。
+           ★ 这里**绝不能**把 focus.ts 算进来 —— 那里是 `TvKey` 联合类型的**声明**,
+             每个键名都在,搜什么都命中。第一版就是这么写的,把 menu 处理器删掉
+             测试照样绿(2026-07-22 实测),等于什么都没守住。声明 ≠ 处理。 */
+        let front = concat!(
+            include_str!("../../../ui/tv/pages/PlayerPage.tsx"),
+            include_str!("../../../ui/tv/App.tsx"),
+        );
+
+        /* 明知没做的键。写在这里是为了**逼人显式承认**:
+           next/prev(上一集/下一集)核层根本没有对应命令,stop 与返回键重复。
+           哪天做了就从这里删掉;在此之前它们至少是"记录在案的没做",
+           而不是"以为做了其实没有"。 */
+        const KNOWN_UNHANDLED: [&str; 3] = ["next", "prev", "stop"];
+
+        /* ★ 必须匹配 `k === "x"` 这个**处理**形态,不能只搜 `"x"`。
+           只搜引号串会撞上同名的图标/标签:PlayerPage 里有 `icon="next"`(下一集按钮的
+           图标名),于是 "next" 被判成"已处理" —— 又一条假绿(2026-07-22 实测撞到)。 */
+        let handled = |k: &str| front.contains(&format!("k === \"{k}\""));
+
+        let unhandled: Vec<&&str> = emitted
+            .iter()
+            .filter(|k| !KNOWN_UNHANDLED.contains(k))
+            .filter(|k| !handled(k))
+            .collect();
+        assert!(
+            unhandled.is_empty(),
+            "壳把这些按键喊给了前端,前端却没有任何地方处理:{unhandled:?}\n\
+             (表现是按下去静默无事 —— 用户只会说「这个键坏了」)"
+        );
+
+        // 反过来:allowlist 里躺着已经做了的键,说明它该被删掉了。
+        for k in KNOWN_UNHANDLED {
+            assert!(
+                !handled(k),
+                "「{k}」已经有人处理了,把它从 KNOWN_UNHANDLED 里删掉"
+            );
+        }
+    }
+
     /// TV 前端 `ui/tv` 会调的命令,一个都不能漏注册 —— 漏了**不会编译报错**,
     /// 只在用户走到那个页面时抛 "command not found"。这条把 ui/tv(含它 import 的
     /// ui/shared/api.ts)里出现的 invoke 名和本文件的注册表对一遍。

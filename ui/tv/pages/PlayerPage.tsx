@@ -159,19 +159,38 @@ export default function PlayerPage({
           }
           return;
         }
+        /* ★ 菜单键唤出/收起 OSD。
+           **这一条原来根本没接** —— `menu` 早在 focus.ts 的 TvKey 里定义了,壳也
+           转发了 KEYCODE_MENU,唯独播放页这里没有分支,按下去静默什么都不发生。
+           用户 2026-07-22 报「菜单键也没反应」,就是它。 */
+        if (k === "menu") {
+          if (panel) setPanel(null);
+          else if (osd) setOsd(false);
+          else bump();
+          return;
+        }
+        /* 方向键/OK 的独立唤醒通道(壳转发,不消费)。见 TvKey 里 'wake' 的注释。 */
+        if (k === "wake") {
+          bump();
+          return;
+        }
         if (k === "playpause" || k === "play" || k === "pause") void togglePause();
         if (k === "ff") void jump(30);
         if (k === "rew") void jump(-10);
       }),
-    [panel, osd, st, togglePause, jump, onBack],
+    [panel, osd, st, togglePause, jump, onBack, bump],
   );
 
-  /* 任意方向键唤出 OSD。TV 上没有鼠标移动这种"我还在"的信号,
-     唤出的唯一途径就是按键。 */
+  /* 任意按键唤出 OSD —— 这是 WebView **自己**收到按键时的那条路。
+     ★ 和上面 'wake' 那条是**两条独立通道**,故意冗余:
+       真机上方向键到底进不进得了 WebView 的 JS,我在电视外面证明不了,
+       而只留一条的代价是"整屏黑着、按什么都没反应"。两条都 bump,幂等。
+     ★ capture 阶段:焦点库也在 window 上监听,若它先拿到并 stopPropagation
+       (面板里的进度条就这么干),冒泡阶段这条就永远收不到。 */
   useEffect(() => {
     const h = () => bump();
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
+    window.addEventListener("keydown", h, true);
+    return () => window.removeEventListener("keydown", h, true);
   }, [bump]);
 
   const dur = st?.duration ?? 0;

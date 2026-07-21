@@ -16,6 +16,10 @@ export const TV_KEY_EVENT = "lp:tvkey";
 export type TvKey =
   | "back"
   | "menu"
+  /** 方向键/OK 被按了。**只用来"唤醒"界面(播放页亮 OSD),绝不能拿它移动焦点** ——
+   *  壳转发这一条时是 `return super.onKeyDown(...)`(不消费),按键照常派发给 WebView
+   *  做正常导航。谁要是在这里顺手做了导航,焦点就会一次跳两格。 */
+  | "wake"
   | "play"
   | "pause"
   | "playpause"

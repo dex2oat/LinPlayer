@@ -103,6 +103,28 @@ class MainActivity : TauriActivity() {
    * 再转发一次等于每次按键触发两遍导航(焦点一次跳两格)。
    */
   override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+    /* ★ 方向键/OK 键:**通知前端但不吃掉**。
+       播放页的 OSD 靠"按任意键唤出",而它原来只监听 WebView 里的 keydown ——
+       那条路真机上到底通不通,我在电视外面无法证明(2026-07-22 用户报「无论点什么
+       都不出 OSD」)。与其继续猜,不如把这一条独立通道也接上:
+       Activity 一定收得到按键,让它额外喊一嗓子。
+
+       ★ 关键是 `return super.onKeyDown(...)` 而**不是** return true ——
+         按键照常往下派发给 WebView,焦点导航一点不受影响。
+         前端收到的 'wake' 只做一件事:把 OSD 亮起来,绝不移动焦点。
+         所以就算两条路都通,也只是 bump 两次(幂等),不会出现焦点一次跳两格 ——
+         那正是本文件原来不转发方向键的理由,这里用"不消费"绕开了它。 */
+    when (keyCode) {
+      KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
+      KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+      KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+        runOnUiThread {
+          findWebView()?.evaluateJavascript("window.__lpTvKey && window.__lpTvKey('wake')", null)
+        }
+        return super.onKeyDown(keyCode, event)
+      }
+    }
+
     val name = when (keyCode) {
       KeyEvent.KEYCODE_BACK -> "back"
       KeyEvent.KEYCODE_MENU -> "menu"
