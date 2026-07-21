@@ -34,6 +34,10 @@ type Props = {
    服务端排的是整个库,本地排只能排到已加载的那一页,翻页后顺序就乱了。 */
 const SORTS = [
   { id: "added", label: "加入时间", by: "DateCreated", order: "Descending" },
+  /* 「更新时间」≠「加入时间」:DateCreated 是条目自己被建出来的时间(剧集 = 剧第一次入库),
+     DateLastContentAdded 是**这部剧最近一集**入库的时间。追更要的是后者,两个都得留。 */
+  { id: "updated", label: "更新时间", by: "DateLastContentAdded", order: "Descending" },
+  { id: "premiere", label: "上映日期", by: "PremiereDate", order: "Descending" },
   { id: "name-asc", label: "名称 A→Z", by: "SortName", order: "Ascending" },
   { id: "name-desc", label: "名称 Z→A", by: "SortName", order: "Descending" },
   { id: "year", label: "年份", by: "ProductionYear", order: "Descending" },

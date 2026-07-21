@@ -262,22 +262,101 @@ async fn fetch_profile(access: &str) -> Option<(Option<String>, Option<String>)>
     Some((j["username"].as_str().map(String::from), user_id))
 }
 
-/// Scrobble 一次(start/pause/stop)。action ∈ {"start","pause","stop"};type_ ∈ {"movie","episode"};
-/// ids 如 {"imdb":"tt..","tmdb":123};progress 0~100。stop 且 progress≥80% Trakt 自动标记看过。
-pub async fn scrobble(
-    account: &SyncAccount,
-    type_: &str,
-    ids: Value,
-    progress: f64,
-    action: &str,
-) -> bool {
+/// 直接写入观看历史(`POST /sync/history`)。
+///
+/// ★ 为什么 scrobble 之外还要这个:`/scrobble/stop` 只在 Trakt **认可这次会话**时才落历史 ——
+/// progress<80%、没有先 start、或 ids 形态不合它口味,都会静默不入库,于是「继续观看有、
+/// 历史观看空」。`/sync/history` 是幂等的显式写入,不依赖会话状态,看完就一定进历史。
+///
+/// `item` 用 `ScrobbleInfo::trakt_body()` 的形状(movie / show+episode)。
+pub async fn add_to_history(account: &SyncAccount, item: &Value) -> bool {
     let Some(valid) = ensure_valid(account).await else {
         return false;
     };
-    let body = serde_json::json!({
-        type_: { "ids": ids },
-        "progress": progress.clamp(0.0, 100.0),
-    });
+    // watched_at=now:不给的话 Trakt 用服务端时间,基本等价,但显式给更可控。
+    let mut entry = item.clone();
+    if let Some(o) = entry.as_object_mut() {
+        o.insert("watched_at".into(), Value::String(iso_now()));
+    }
+    // movie 走 movies[],episode/show+episode 走 episodes[]/shows[]。
+    let body = if entry.get("movie").is_some() {
+        let m = merge_watched_at(&entry["movie"], &entry);
+        serde_json::json!({ "movies": [m] })
+    } else if entry.get("show").is_some() {
+        // shows[].seasons[].episodes[] —— 这是 Trakt 对「只有剧 ID + 季集号」唯一接受的形状。
+        serde_json::json!({ "shows": [{
+            "ids": entry["show"]["ids"],
+            "seasons": [{
+                "number": entry["episode"]["season"],
+                "episodes": [{ "number": entry["episode"]["number"], "watched_at": iso_now() }],
+            }],
+        }]})
+    } else {
+        let e = merge_watched_at(&entry["episode"], &entry);
+        serde_json::json!({ "episodes": [e] })
+    };
+    let mut req = crate::http::client()
+        .post(format!("{API_BASE}/sync/history"))
+        .header("Content-Type", "application/json")
+        .json(&body);
+    for (k, v) in api_headers(&valid.access_token) {
+        req = req.header(k, v);
+    }
+    match req.send().await {
+        Ok(r) => r.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+fn merge_watched_at(node: &Value, src: &Value) -> Value {
+    let mut n = node.clone();
+    if let (Some(o), Some(w)) = (n.as_object_mut(), src.get("watched_at")) {
+        o.insert("watched_at".into(), w.clone());
+    }
+    n
+}
+
+/// RFC3339 UTC 时间戳(Trakt 要这个格式)。
+fn iso_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    // 手算 civil date,不为一个时间戳拉 chrono。
+    let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
+    let (y, m, d) = civil_from_days(days);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
+}
+
+/// Howard Hinnant 的 civil_from_days(纪元日 → 年月日),公认写法。
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Scrobble 一次(start/pause/stop)。action ∈ {"start","pause","stop"};
+/// `item` 为 `ScrobbleInfo::trakt_body()` 产出的条目节点;progress 0~100。
+pub async fn scrobble(account: &SyncAccount, item: &Value, progress: f64, action: &str) -> bool {
+    let Some(valid) = ensure_valid(account).await else {
+        return false;
+    };
+    let mut body = item.clone();
+    if let Some(o) = body.as_object_mut() {
+        o.insert("progress".into(), Value::from(progress.clamp(0.0, 100.0)));
+    }
     let mut req = crate::http::client()
         .post(format!("{API_BASE}/scrobble/{action}"))
         .header("Content-Type", "application/json")
@@ -354,4 +433,53 @@ pub async fn fetch_shows_calendar(
     }
     fill_tmdb(&mut out).await;
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn civil_from_days_matches_known_dates() {
+        // 纪元日 0 = 1970-01-01;闰年边界与世纪非闰年是这个算法最容易写错的地方。
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(59), (1970, 3, 1));
+        assert_eq!(civil_from_days(365), (1971, 1, 1));
+        assert_eq!(civil_from_days(730), (1972, 1, 1));
+        assert_eq!(civil_from_days(789), (1972, 2, 29)); // 1972 是闰年
+        assert_eq!(civil_from_days(11016), (2000, 2, 29)); // 2000 闰(整400)
+        assert_eq!(civil_from_days(20513), (2026, 3, 1)); // 2026 平年:2/28 后直接 3/1
+        assert_eq!(civil_from_days(20512), (2026, 2, 28));
+    }
+
+    #[test]
+    fn iso_now_is_rfc3339_utc() {
+        let s = iso_now();
+        assert_eq!(s.len(), 20, "{s}");
+        assert!(s.ends_with('Z'), "{s}");
+        assert_eq!(&s[4..5], "-");
+        assert_eq!(&s[10..11], "T");
+    }
+
+    /// 分集没有自己的 ProviderIds 时,必须退到 show + 季集号,而不是发一个空 ids。
+    #[test]
+    fn trakt_body_falls_back_to_show_and_episode_number() {
+        let info = crate::emby::ScrobbleInfo {
+            media_type: "episode".into(),
+            ids: serde_json::json!({}),
+            show_ids: serde_json::json!({ "tvdb": 1234 }),
+            runtime_secs: 1440.0,
+            title: "某剧".into(),
+            original_title: None,
+            air_date: None,
+            season: 2,
+            episode: 7,
+        };
+        assert!(info.has_trakt_ids(), "有剧 ID 就该允许上报");
+        let b = info.trakt_body();
+        assert_eq!(b["show"]["ids"]["tvdb"], 1234);
+        assert_eq!(b["episode"]["season"], 2);
+        assert_eq!(b["episode"]["number"], 7);
+        assert!(b.get("movie").is_none());
+    }
 }

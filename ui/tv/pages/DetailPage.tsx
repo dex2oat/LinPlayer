@@ -4,7 +4,9 @@ import {
   downloadEnqueue,
   fmtTime,
   itemDetail,
+  getPrefs,
   itemMedia,
+  peekItemDetail,
   personUrl,
   play,
   posterUrl,
@@ -47,7 +49,26 @@ export default function DetailPage({
   go: (r: Route) => void;
   itemId?: string;
 }) {
-  const d = useAsync(() => itemDetail(itemId ?? ""), [itemId]);
+  /* ★ 第三个参数 = 先偷看 5 分钟 TTL 缓存。命中就直接画,不再闪一次「载入中…」——
+     用户报的「简介每次打开都要更新」就是这一下空屏,不是缓存没做(桌面同解法)。 */
+  const d = useAsync(
+    () => itemDetail(itemId ?? ""),
+    [itemId],
+    () => peekItemDetail(itemId ?? ""),
+  );
+
+  /* 背景模糊强度(设置 → 外观)。核层 Prefs.detail_blur 0~100,默认 40。
+     ★ null = 还没读到,先按 0 画(清晰),读到再糊 —— 反过来(先糊后清)
+     在弱机上是一次多余的重绘,而且用户会看见画面"由糊变清"像加载没完。 */
+  const [blur, setBlur] = useState<number | null>(null);
+  useEffect(() => {
+    getPrefs()
+      .then((p) => setBlur(p.detail_blur))
+      .catch(() => {});
+  }, []);
+  /* 0~100 → 0~40px。★ 必须同时放大一点点:blur 会把图边缘和透明区混在一起,
+     不放大的话四周会出现一圈越来越淡的灰边(inset:0 铺满也挡不住)。 */
+  const blurPx = ((blur ?? 0) / 100) * 40;
 
   if (!itemId) return <Note text="没有指定要打开的条目。" />;
   if (d.err) return <Note text={d.err.message} />;
@@ -63,7 +84,15 @@ export default function DetailPage({
             : posterUrl(session, d.data.id, 1080)
         }
         alt=""
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+          filter: blurPx > 0 ? `blur(${blurPx}px)` : undefined,
+          transform: blurPx > 0 ? "scale(1.08)" : undefined,
+        }}
       />
       {/* ★ 均匀遮罩(用户 2026-07-20:「加一点遮罩吧,不然看不清字真的很伤」)。
           详情页是**整页正文**压在 backdrop 上,和首页 Hero 只有左下角一小块不同 ——

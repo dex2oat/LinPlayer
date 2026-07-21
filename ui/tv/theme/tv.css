@@ -38,6 +38,62 @@
   --tv-glow: rgba(91, 141, 239, 0.34);
 }
 
+/* ---- 浅色主题 ----
+
+   ★ 上面那段注释写着「强制深色,浅色在客厅是灾难」,那个判断没变 ——
+     所以浅色**不是默认**,要用户在 设置 → 外观 里自己拨过去。
+   ★ 但设置页顶上另有一条更硬的规矩:**做不到的开关一个都不画**。
+     既然要给主题开关,就得让它真的改变屏幕上的东西;只调用 useTheme() 写个
+     data-theme 属性而这份样式表里一条都不接,那是个假开关 —— 拨过去毫无反应,
+     比不给这个开关更糟。所以这里只做一件事:把 --tv-* 整体换一套,
+     版式/尺寸/焦点规则一律不动(它们和明暗无关)。
+   ★ 焦点环在浅底上必须换深色:白环画在浅灰底上等于没有焦点指示。 */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --accent-soft: rgba(91, 141, 239, 0.14);
+  --ph: #dfe4ea;
+  --ph-2: #eef1f5;
+  --line-strong: #c6ccd6;
+
+  --tv-bg: #f4f5f7;
+  --tv-rail: #e6e9ee;
+  --tv-panel: #ffffff;
+  --tv-line: #d8dde5;
+  --tv-ink: #14181f;
+  --tv-ink-2: #4a5361;
+  --tv-ink-3: #7b8493;
+  --tv-focus: #14181f;
+  --tv-glow: rgba(91, 141, 239, 0.28);
+}
+:root[data-theme="light"] body {
+  background: #fff;
+}
+/* 详情页遮罩:浅色下压深色反而更看不清(白字变黑字了),换成浅色薄纱。 */
+:root[data-theme="light"] .scrim {
+  background: rgba(244, 245, 247, 0.68);
+}
+/* 全站那层「白色薄底」(rgba(255,255,255,.05~.15))在浅底上等于消失,
+   翻成同强度的深色薄底。列在一起改一次,别去逐条改上面的深色规则。 */
+:root[data-theme="light"] .fchip,
+:root[data-theme="light"] .field .in,
+:root[data-theme="light"] .hitem,
+:root[data-theme="light"] .epsw,
+:root[data-theme="light"] .ep {
+  background: rgba(20, 24, 31, 0.06);
+}
+/* ★ 这四条是**必须**的,不是好看不好看:它们写死了 color:#fff,
+   浅底上就是白字压白底,一个字都读不出来。 */
+:root[data-theme="light"] .ritem.foc,
+:root[data-theme="light"] .pitem.foc {
+  background: rgba(20, 24, 31, 0.1);
+  color: var(--tv-ink);
+}
+:root[data-theme="light"] .pitem.on,
+:root[data-theme="light"] .mitem.on {
+  color: var(--tv-ink);
+}
+
 * {
   box-sizing: border-box;
 }

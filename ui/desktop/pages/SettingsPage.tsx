@@ -15,6 +15,7 @@ import {
   type WritebackSettings,
   getPrefs,
   setPrefs,
+  setDetailBlur,
   getProxy,
   setProxy,
   getDanmakuConfig,
@@ -251,6 +252,37 @@ function Row({
    通用 · 外观与语言
    ============================================================ */
 function AppearancePane({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void }) {
+  const f = useFlash();
+  /* null = 还没读回来。核层自带默认(40),前端别再硬编一份 —— 两份默认早晚对不上。 */
+  const [blur, setBlur] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    getPrefs()
+      .then((p) => alive && setBlur(p.detail_blur))
+      .catch(f.err);
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /* 改完即落核层。同时写 :root 的 --detail-blur(App 启动时写的是同一个变量),
+     详情页 .dt-hero-bg 直接读它 —— 不这么写就得等下次启动才看得见效果。
+     失败要回滚 UI **和** 变量,否则数字停在新值而磁盘/画面是旧值。 */
+  async function applyBlur(v: number) {
+    const prev = blur;
+    setBlur(v);
+    document.documentElement.style.setProperty("--detail-blur", String(v));
+    try {
+      await setDetailBlur(v);
+      f.ok("已保存");
+    } catch (e) {
+      setBlur(prev);
+      if (prev != null) document.documentElement.style.setProperty("--detail-blur", String(prev));
+      f.err(e);
+    }
+  }
+
   return (
     <div className="mdpane">
       <h4>外观与语言</h4>
@@ -265,9 +297,17 @@ function AppearancePane({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme
           onChange={setTheme}
         />
       </Row>
+      <Row t="详情页背景模糊" d="0 = 剧照清晰可辨,100 = 糊成一块底色">
+        {blur == null ? (
+          <span className="muted">读取中…</span>
+        ) : (
+          <Stepper value={blur} onChange={applyBlur} min={0} max={100} step={5} fmt={(v) => `${v}`} />
+        )}
+      </Row>
       <Row t="界面语言" d="目前仅简体中文,多语言待接">
         <span className="muted">简体中文</span>
       </Row>
+      {f.node}
     </div>
   );
 }

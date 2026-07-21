@@ -18,7 +18,15 @@
   background: var(--panel-2);
   isolation: isolate;
 }
-.dt-hero-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -2; }
+/* --detail-blur 是**无单位**数字 0~100(外观设置里调,App.tsx 写到 :root)。
+   scale 必须跟着 blur 一起长:blur 会把图的四边糊成半透明,不撑出 overflow:hidden 的
+   裁剪框就会沿边露出一圈 --panel-2 的亮边(模糊越大边越宽)。
+   ★ 静态 transform,别改成关键帧动画 —— 带 transform 的祖先会永久毁掉后代的 fixed 定位。 */
+.dt-hero-bg {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -2;
+  filter: blur(calc(var(--detail-blur, 0) * 1px));
+  transform: scale(calc(1 + var(--detail-blur, 0) * 0.008));
+}
 /* 渐变改「左浓右淡 + 底部一条」双层。
    ★ 决定 B(用户 2026-07-15:「背景压暗浓度要更亮」):左 88% → 右 12%,比草稿初版(97%→32%)亮一档。
    左边浓是为了让独立封面和文字读得清,右边淡让剧照露出来。别加回那种糊掉大半张的均匀暗层。 */

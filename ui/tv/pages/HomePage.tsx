@@ -5,6 +5,7 @@ import {
   listNextUp,
   listResume,
   listRandom,
+  peekList,
   views,
   type Item,
   type LoginResult,
@@ -28,10 +29,18 @@ export default function HomePage({
   session: LoginResult;
   go: (r: Route) => void;
 }) {
-  const hero = useAsync(() => listRandom(5), []);
-  const resume = useAsync(() => listResume(20), []);
-  const next = useAsync(() => listNextUp(20), []);
-  const libs = useAsync(() => views(), []);
+  /* ★ 每块都先偷看 api.ts 的 5 分钟 TTL 列表缓存,命中就直接画 ——
+     返回键是 TV 的主交互,每次退回首页整屏重新骨架化正是用户说的「每次打开都要更新」。
+
+     ★★ key 必须与 api.ts 里 `memo(...)` 的第一个参数**逐字相同**,且第二参数要对上:
+        listRandom(5) → "random:5" / listResume(20) → "resume:20" /
+        listNextUp(20) → "nextUp:20" / views() → "views"。
+        写错**不报错**,只是永远不命中 —— 静默退回改造前的行为。改这里的数字时
+        务必把 key 一起改。 */
+  const hero = useAsync(() => listRandom(5), [], () => peekList<Item[]>("random:5"));
+  const resume = useAsync(() => listResume(20), [], () => peekList<Item[]>("resume:20"));
+  const next = useAsync(() => listNextUp(20), [], () => peekList<Item[]>("nextUp:20"));
+  const libs = useAsync(() => views(), [], () => peekList<Item[]>("views"));
 
   return (
     <FocusColumn focusKey="HOME">
@@ -231,7 +240,12 @@ function LatestRow({
   session: LoginResult;
   go: (r: Route) => void;
 }) {
-  const { data, err } = useAsync(() => listLatest(lib.id, 20), [lib.id]);
+  /* key 抄自 api.ts 的 `latest:${parentId}:${limit}` —— 两个参数都要编进去。 */
+  const { data, err } = useAsync(
+    () => listLatest(lib.id, 20),
+    [lib.id],
+    () => peekList<Item[]>(`latest:${lib.id}:20`),
+  );
   /* ★ 标题不写「· 最近添加」:首页各媒体库行默认就是按最新排,是常识,
      写出来只是把每一行的标题都拉长一截,远看还更难扫。
      ★ 用竖版海报:这些行里装的是剧和电影,人家的封面本来就是竖的。 */

@@ -38,6 +38,11 @@ export default function PlayerPage({
   /* OSD 默认**收起**:进来就该看见画面,不是看见一层控件。 */
   const [osd, setOsd] = useState(false);
   const hideAt = useRef(0);
+  /* ★ eof 收尾只许跑一次。轮询每秒一发,而 eof 一旦为 true 就**一直**为 true
+     (mpv keep-open=yes 停在最后一帧),不加锁就是每秒一发 stop_playback ——
+     每一发都会重置 Emby 进度、重打一次 Trakt/Bangumi 上报。
+     用 ref 不用 state:state 要等下一次渲染才生效,而下一次轮询在 1s 后,足够重入。 */
+  const ended = useRef(false);
 
   /* ★ 让整条渲染链透明,否则原生视频被 UI 层盖死 —— 黑屏但有声音,且不报错。
      开关放在这里(而不是全局常开)是因为其它页面要那个不透明底色。 */
@@ -55,6 +60,21 @@ export default function PlayerPage({
         const s = await getStatus();
         if (!alive) return;
         setSt(s);
+
+        /* ★ 正常播完自动收尾。走的是和按返回键**完全同一条路**(stopPlayback + onBack),
+           只是位置传 `duration` 而不是 `time`:
+           - mpv 停在最后一帧时 time 通常差最后零点几秒,传 time 算出来是 99%,
+             服务端不算「看完」,Trakt/Bangumi 的看完一次都不会触发(用户报的正是这个);
+           - 传 duration 才是 100%,核层才收得住尾。
+           ★ 本页**没有**自动连播下一集(OSD 的「上一集/下一集」两个按钮至今没有 onEnter,
+             核层也没有对应命令),所以这里不去"复用"一个不存在的东西 —— 直接退出播放页。 */
+        if (s.eof && !ended.current) {
+          ended.current = true;
+          clearInterval(t);
+          void stopPlayback(s.duration).finally(onBack);
+          return;
+        }
+
         /* 上报进度给 Emby。★ 必须带 PlaySessionId 且与取流会话同 id ——
            核层已经在 play() 里处理,这里只管按节奏喂 pos。 */
         void reportProgress(s.time, s.paused).catch(() => {});
@@ -66,7 +86,8 @@ export default function PlayerPage({
       alive = false;
       clearInterval(t);
     };
-  }, []);
+    /* onBack 来自 App 的 useCallback([]),身份稳定 —— 列进依赖不会让轮询反复重启。 */
+  }, [onBack]);
 
   useEffect(() => {
     getTracks().then(setTrk).catch(() => {});
@@ -113,7 +134,12 @@ export default function PlayerPage({
         if (k === "back") {
           if (panel) setPanel(null);
           else if (osd) setOsd(false);
-          else void stopPlayback(st?.time ?? 0).finally(onBack);
+          /* 同一把锁:eof 已经收过尾了就只退页,别再 stop 一次把 100% 改回 time。 */
+          else if (ended.current) onBack();
+          else {
+            ended.current = true;
+            void stopPlayback(st?.time ?? 0).finally(onBack);
+          }
           return;
         }
         if (k === "playpause" || k === "play" || k === "pause") void togglePause();

@@ -204,6 +204,7 @@ fn report_target(s: &emby::Session, item_id: &str) -> emby::PlaybackTarget {
         play_session_id: format!("{}-wh-{item_id}", s.device_id),
         play_method: "DirectStream".to_string(),
         is_dolby_vision: false, // 纯上报,不解码,这个字段对它没有意义
+        external_subs: Vec::new(),
     }
 }
 

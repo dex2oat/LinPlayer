@@ -27,6 +27,9 @@ const MPV_FORMAT_DOUBLE: c_int = 5;
 // 事件循环:检测直链失效(网盘短链过期)以触发 302 重签。
 const MPV_EVENT_END_FILE: c_int = 7;
 const MPV_END_FILE_REASON_ERROR: c_int = 4;
+/// 正常播放到结尾。★ 原来只latch了 ERROR,自然放完**没有任何人在听** ——
+/// Trakt/Bangumi 的「看完」全靠用户手动退出播放页才会触发,看完走人 = 什么都没同步。
+const MPV_END_FILE_REASON_EOF: c_int = 0;
 
 #[repr(C)]
 struct mpv_event {
@@ -544,6 +547,7 @@ pub struct Player {
     ctx: *mut mpv_handle,
     pub video_hwnd: isize,
     error_eof: Arc<AtomicBool>, // 直链失效标志(END_FILE=error),供 302 重签探测
+    eof: Arc<AtomicBool>,       // 正常播完标志(END_FILE=eof),供「看完」同步
     running: Arc<AtomicBool>,
     event_thread: Option<JoinHandle<()>>,
 }
@@ -685,9 +689,10 @@ impl Player {
 
             // 事件循环线程:排空 mpv 事件,捕获 END_FILE=error(直链失效)。
             let error_eof = Arc::new(AtomicBool::new(false));
+            let eof = Arc::new(AtomicBool::new(false));
             let running = Arc::new(AtomicBool::new(true));
             let ctx_addr = ctx as usize;
-            let (e2, r2) = (error_eof.clone(), running.clone());
+            let (e2, r2, eof2) = (error_eof.clone(), running.clone(), eof.clone());
             let event_thread = std::thread::spawn(move || {
                 let ctx = ctx_addr as *mut mpv_handle;
                 while r2.load(Ordering::Relaxed) {
@@ -697,8 +702,12 @@ impl Player {
                     }
                     if (*ev).event_id == MPV_EVENT_END_FILE {
                         let ef = (*ev).data as *const mpv_event_end_file;
-                        if !ef.is_null() && (*ef).reason == MPV_END_FILE_REASON_ERROR {
-                            e2.store(true, Ordering::Relaxed);
+                        if !ef.is_null() {
+                            match (*ef).reason {
+                                MPV_END_FILE_REASON_ERROR => e2.store(true, Ordering::Relaxed),
+                                MPV_END_FILE_REASON_EOF => eof2.store(true, Ordering::Relaxed),
+                                _ => {}
+                            }
                         }
                     }
                 }
@@ -708,6 +717,7 @@ impl Player {
                 ctx,
                 video_hwnd: video,
                 error_eof,
+                eof,
                 running,
                 event_thread: Some(event_thread),
             })
@@ -715,6 +725,10 @@ impl Player {
     }
 
     /// 取并清「直链失效」标志(网盘短链过期 → 触发 302 重签)。
+    /// 取走「已播完」标志(取一次即清零,保证同一次播放只触发一次同步)。
+    pub fn take_eof(&self) -> bool {
+        self.eof.swap(false, Ordering::Relaxed)
+    }
     pub fn take_error_eof(&self) -> bool {
         self.error_eof.swap(false, Ordering::Relaxed)
     }
@@ -794,6 +808,9 @@ impl Player {
         header_fields: &str,
         user_agent: Option<&str>,
     ) -> Result<(), String> {
+        // 换片先清 eof —— 否则上一集播完的标志会被下一集的第一次轮询读到,
+        // 刚起播就被判成「已看完」。
+        self.eof.store(false, Ordering::Relaxed);
         self.set_str("http-header-fields", header_fields);
         // 源没指定 UA 就用访问 Emby 的那个(用户 2026-07-19 定的 UA 口径)。
         self.set_str(
@@ -823,6 +840,13 @@ impl Player {
             duration: self.get_f64("duration"),
             paused: self.get_str("pause").as_deref() == Some("yes"),
             buffered: self.get_f64("demuxer-cache-time"),
+            /* ★ 用 `eof-reached` 属性判播完,**不能**只靠 END_FILE 事件:
+               我们开着 keep-open=yes,mpv 到结尾时是「暂停在最后一帧」而**不卸载文件**,
+               这种情况下 END_FILE 压根不发 —— 只监听事件就是个永远不触发的死分支。
+               mpv 文档里 eof-reached 正是为 keep-open 场景准备的。
+               事件那条线仍保留(reason=EOF 时会置位),两者取或,谁先到算谁。 */
+            eof: self.get_str("eof-reached").as_deref() == Some("yes")
+                || self.eof.load(Ordering::Relaxed),
         }
     }
     pub fn tracks(&self) -> Vec<Track> {
@@ -1062,5 +1086,7 @@ pub struct Status {
     pub duration: f64,
     pub paused: bool,
     pub buffered: f64,
+    /// 本片是否已正常播放到结尾(keep-open=yes 时画面停在最后一帧,时间不再前进)。
+    pub eof: bool,
 }
 

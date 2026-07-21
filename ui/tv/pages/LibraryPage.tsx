@@ -108,11 +108,19 @@ function Picker({
 
 /** 排序档。服务端排序(listItemsPage 带 sortBy),不是本地排 ——
  *  本地排只能排已加载的那几页,翻到第三页顺序就乱了。 */
+/** ★ 「更新时间」(DateLastContentAdded)和「加入日期」(DateCreated)**是两回事**,
+ *  两个都要留:剧集的 DateCreated 是剧本身建条目的时间,一部老番今天更了新一集,
+ *  按 DateCreated 排它还沉在底下;DateLastContentAdded 才是「最新一集入库的时间」。
+ *  追更的人要的是后者 —— 这是用户 2026-07-21 点名要的。 */
 const SORTS = [
+  { id: "DateLastContentAdded", order: "Descending", label: "更新时间" },
   { id: "DateCreated", order: "Descending", label: "加入日期" },
   { id: "SortName", order: "Ascending", label: "名称" },
+  /* 名称 Z→A:桌面有、TV 缺。同一个 sortBy 换 order,不是另一个字段。 */
+  { id: "SortName", order: "Descending", label: "名称 Z→A" },
   { id: "CommunityRating", order: "Descending", label: "评分" },
   { id: "PremiereDate", order: "Descending", label: "上映日期" },
+  { id: "ProductionYear", order: "Descending", label: "年份" },
 ] as const;
 
 /** 一页 60 项 = 10 行。TV 上一屏只看得到两行多,再大就是白拉。 */
@@ -303,7 +311,9 @@ function Grid({
             <FocusColumn>
               <div className="grp">排序</div>
               {SORTS.map((s, i) => (
-                <Row key={s.id} on={i === sort} label={s.label} onEnter={() => setSort(i)} />
+                /* key 用 label 不用 id:名称升/降序共用 id="SortName",
+                   拿 id 当 key 会撞出重复 key(React 会静默复用错行)。 */
+                <Row key={s.label} on={i === sort} label={s.label} onEnter={() => setSort(i)} />
               ))}
 
               <div className="grp">类型</div>

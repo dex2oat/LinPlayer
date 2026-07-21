@@ -7,9 +7,13 @@
 use serde_json::Value;
 
 use super::calendar::parse_date_to_days;
-use super::BANGUMI_API_MIRROR;
+use super::BANGUMI_API_OFFICIAL;
 
-const API_BASE: &str = BANGUMI_API_MIRROR;
+// ★ 2026-07-21:原来这里挂的是 BANGUMI_API_MIRROR(bgmapi.anibt.net)。
+// 那个反代过不了 CF —— 四个查询全部 `.ok()?` 静默返回 None,resolve_episode 永远失败,
+// 于是 set_collection_type(3=在看) 一次都没被调到。这就是「在看不会加进来」的直接根因。
+// bangumi.rs 早就换官方了,这个文件被漏掉。图片仍走 anibt 反代,与 mod.rs 的注释一致。
+const API_BASE: &str = BANGUMI_API_OFFICIAL;
 const MAX_SEQUEL_HOPS: i64 = 10;
 const EPISODES_PAGE_LIMIT: i64 = 200;
 const DATE_TOLERANCE_DAYS: i64 = 180;
@@ -19,6 +23,9 @@ const DATE_TOLERANCE_DAYS: i64 = 180;
 pub struct BangumiEpisodeRef {
     pub subject_id: i64,
     pub episode_id: i64,
+    /// 这是本篇的最后一集吗。用来在看完最后一集时把整个条目从「在看」推到「看过」——
+    /// 没有它,Bangumi 永远停在在看,用户说的「更不用说已看完的了」就是这个。
+    pub is_last_episode: bool,
 }
 
 struct SubjectMatch {
@@ -43,8 +50,8 @@ pub async fn resolve_episode(
     if season > 1 && !m.season_matched {
         subject_id = resolve_season_subject_id(m.subject_id, season).await?;
     }
-    let episode_id = find_episode_id_by_sort(subject_id, episode).await?;
-    Some(BangumiEpisodeRef { subject_id, episode_id })
+    let (episode_id, is_last_episode) = find_episode_id_by_sort(subject_id, episode).await?;
+    Some(BangumiEpisodeRef { subject_id, episode_id, is_last_episode })
 }
 
 /// 解析电影 → (subject_id, 主章节 episode_id)。
@@ -54,8 +61,9 @@ pub async fn resolve_movie(
     air_date: Option<&str>,
 ) -> Option<BangumiEpisodeRef> {
     let m = search_subject(title, original_title, air_date, 1).await?;
-    let episode_id = find_episode_id_by_sort(m.subject_id, 1).await?;
-    Some(BangumiEpisodeRef { subject_id: m.subject_id, episode_id })
+    let (episode_id, _) = find_episode_id_by_sort(m.subject_id, 1).await?;
+    // 电影只有一「集」,看完即完结。
+    Some(BangumiEpisodeRef { subject_id: m.subject_id, episode_id, is_last_episode: true })
 }
 
 // ============ 标题搜索 → subject ============
@@ -165,7 +173,7 @@ async fn search_bgm(keyword: &str) -> Vec<Value> {
 
 /// 已知 subject_id,按集号取真实 ep id(供弹弹play 反查路径复用)。
 pub async fn find_episode_id(subject_id: i64, episode: i64) -> Option<i64> {
-    find_episode_id_by_sort(subject_id, episode).await
+    find_episode_id_by_sort(subject_id, episode).await.map(|(id, _)| id)
 }
 
 // ============ 续集链 / 集数解析 ============
@@ -200,7 +208,8 @@ async fn next_sequel_subject_id(subject_id: i64) -> Option<i64> {
     None
 }
 
-async fn find_episode_id_by_sort(subject_id: i64, target_sort: i64) -> Option<i64> {
+/// 返回 (episode_id, 是否为本篇最后一集)。
+async fn find_episode_id_by_sort(subject_id: i64, target_sort: i64) -> Option<(i64, bool)> {
     let mut offset = 0;
     while offset < EPISODES_PAGE_LIMIT * 5 {
         let resp = client()
@@ -218,15 +227,22 @@ async fn find_episode_id_by_sort(subject_id: i64, target_sort: i64) -> Option<i6
             return None;
         }
         let j: Value = resp.json().await.ok()?;
+        // total = 本篇总集数。响应按 sort 升序,故「第 offset+i 条」就是全局第 offset+i 集。
+        let total = j["total"].as_i64().unwrap_or(0);
         let data = j["data"].as_array()?;
         if data.is_empty() {
             return None;
         }
-        for ep in data {
+        for (i, ep) in data.iter().enumerate() {
             let sort = ep["sort"].as_i64();
             let ep_no = ep["ep"].as_i64();
             if sort == Some(target_sort) || ep_no == Some(target_sort) {
-                return ep["id"].as_i64().or_else(|| ep["id"].as_str().and_then(|s| s.parse().ok()));
+                let id = ep["id"]
+                    .as_i64()
+                    .or_else(|| ep["id"].as_str().and_then(|s| s.parse().ok()))?;
+                // total 缺失(=0)时保守判否:宁可不标完结,也别在没播完时误标。
+                let is_last = total > 0 && offset + i as i64 + 1 == total;
+                return Some((id, is_last));
             }
         }
         if (data.len() as i64) < EPISODES_PAGE_LIMIT {

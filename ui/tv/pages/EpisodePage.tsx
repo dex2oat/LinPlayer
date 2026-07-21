@@ -10,6 +10,7 @@ import {
   itemDetail,
   itemMedia,
   listAccounts,
+  peekItemDetail,
   play,
   posterUrl,
   setActiveLine,
@@ -51,7 +52,8 @@ export default function EpisodePage({
   /* 当前这一集。集数栏切集改的是它,不动路由栈 —— 退出时按一次返回就回剧详情,
      而不是"切了几集就要按几次"。 */
   const [curId, setCurId] = useState(itemId ?? "");
-  const ep = useAsync(() => itemDetail(curId), [curId]);
+  /* ★ 先偷看缓存再拉:集数栏来回切集时命中率极高,不偷看就是每切一集整页空一下。 */
+  const ep = useAsync(() => itemDetail(curId), [curId], () => peekItemDetail(curId));
   const d = ep.data;
 
   /* 剧本体单独一块各自加载:集数栏要的是**整季的分集表**,而分集详情里没有。
@@ -60,6 +62,9 @@ export default function EpisodePage({
   const series = useAsync(
     () => (seriesId ? itemDetail(seriesId) : Promise.resolve(null)),
     [seriesId],
+    /* 剧本体这一份缓存命中率最高(整季切集都是同一个 seriesId)——
+       没有它,集数栏每切一集都要空一次再重画。 */
+    () => (seriesId ? peekItemDetail(seriesId) : undefined),
   );
 
   /* 同季分集。跨季混在一起会让 E01 出现两次(第一季和第二季各一个)。 */

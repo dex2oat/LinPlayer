@@ -179,6 +179,29 @@ pub async fn exchange_code(code: &str, redirect_uri: &str) -> Result<SyncAccount
     Ok(account_from_token(&tok, None).await)
 }
 
+/// 用**个人访问令牌**登录(https://next.bgm.tv/demo/access-token 自助生成)。
+/// 与授权码流的区别:没有 refresh_token,过期时间由 Bangumi 侧决定(通常一年),
+/// 客户端不做刷新 —— 过期后用户重新生成一个粘进来即可。
+/// 好处是完全不经 CF 代理,代理挂了/共享密钥轮换也能登录。
+pub async fn login_with_access_token(token: &str) -> Result<SyncAccount, String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err("请填写 Access Token".into());
+    }
+    // 立刻打一次 /v0/me 验证令牌真的有效,别把一个废令牌存进配置里。
+    let (name, uid) = fetch_profile(token)
+        .await
+        .ok_or("Access Token 无效或已过期(Bangumi 未返回用户信息)")?;
+    Ok(SyncAccount {
+        service: "bangumi".into(),
+        access_token: token.to_string(),
+        refresh_token: None,
+        expires_at: None, // 不主动过期;真过期了 API 会 401,用户重新贴一个
+        username: name,
+        user_id: uid,
+    })
+}
+
 /// 刷新令牌(走代理)。失败 None。
 pub async fn refresh(account: &SyncAccount, redirect_uri: &str) -> Option<SyncAccount> {
     let rt = account.refresh_token.as_deref().filter(|s| !s.is_empty())?;

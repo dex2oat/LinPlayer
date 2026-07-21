@@ -47,6 +47,8 @@ struct AppState {
     account_status: Mutex<HashMap<String, AccountStatus>>,
     // check_update 查到的待装版本。存核层是为了不让前端把资产清单原样传回来。
     pending_update: Mutex<Option<linplayer_core::update::UpdateInfo>>,
+    // 本次播放的同步上下文(Trakt/Bangumi)。play 时抓,stop 时消费。与桌面同构。
+    scrobble_ctx: Mutex<Option<emby::ScrobbleInfo>>,
 }
 
 fn session_of(state: &State<'_, AppState>) -> Result<Session, String> {
@@ -104,12 +106,48 @@ async fn play(
     let target =
         emby::resolve_stream(&state.http, &s, &item_id, media_source_id.as_deref()).await?;
 
-    let g = ensure_player(&ps)?;
-    let p = g.as_ref().unwrap();
-    let _ = p.take_error_eof(); // 清历史失效标志
-    p.load_at(&target.url, resume_secs)?;
-    p.set_pause(false);
+    // 播放器锁必须在后面那些 await 之前放掉:MutexGuard 不是 Send,
+    // 跨 await 持有会让整个 command 的 future 不能在线程间移动(编译期直接拒)。
+    {
+        let g = ensure_player(&ps)?;
+        let p = g.as_ref().unwrap();
+        let _ = p.take_error_eof(); // 清历史失效标志
+        p.load_at(&target.url, resume_secs)?;
+        /* ★ 外挂字幕必须在 load 之后逐条 sub-add —— 它们是服务器上的独立文件,
+           不在容器里,mpv 的 track-list 看不到。桌面同一处理,别让两端再分叉。 */
+        for sub in &target.external_subs {
+            p.add_subtitle(&sub.url, &sub.title);
+        }
+        if !target.external_subs.is_empty() {
+            log::info!("挂载外挂字幕 {} 条", target.external_subs.len());
+        }
+        p.set_pause(false);
+    }
     *ps.playback.lock().unwrap() = Some(target);
+
+    // 播放期同步上下文。任一服务已连接才去抓(多一次请求,不白花)。
+    *state.scrobble_ctx.lock().unwrap() = None;
+    let (trakt_acc, bangumi_on) = {
+        let cfg = state.config.lock().unwrap();
+        (cfg.sync_trakt.clone(), cfg.sync_bangumi.is_some())
+    };
+    if trakt_acc.is_some() || bangumi_on {
+        if let Some(info) = emby::fetch_scrobble_info(&state.http, &s, &item_id).await {
+            *state.scrobble_ctx.lock().unwrap() = Some(info.clone());
+            if let Some(acc) = trakt_acc {
+                if info.has_trakt_ids() {
+                    let progress = if info.runtime_secs > 0.0 {
+                        (resume_secs / info.runtime_secs * 100.0).clamp(0.0, 100.0)
+                    } else {
+                        0.0
+                    };
+                    tauri::async_runtime::spawn(async move {
+                        trakt::scrobble(&acc, &info.trakt_body(), progress, "start").await;
+                    });
+                }
+            }
+        }
+    }
     Ok(resume_secs)
 }
 
@@ -177,10 +215,186 @@ async fn stop_playback(
             let _ = emby::report_stopped(&state.http, &s, &t, pos).await;
         }
     }
+    sync_on_stop(&state, pos).await;
     /* ★ 必须真的 drop 掉 Player。安卓上留着它 = 一直占着 Surface 和 MediaCodec 实例,
        下次起播要么黑屏要么直接拿不到解码器(硬件解码器数量是有限的)。 */
     ps.player.lock().unwrap().take();
     Ok(())
+}
+
+/// 播放收尾时把进度同步到 Trakt / Bangumi。与桌面 stop_playback 里那段等价 ——
+/// 安卓原来**整段都没有**,所以 TV 上看完从来不会出现在任何一边。
+async fn sync_on_stop(state: &State<'_, AppState>, pos: f64) {
+    let ctx = state.scrobble_ctx.lock().unwrap().take();
+    let Some(info) = ctx else { return };
+    let (trakt_acc, bangumi_acc) = {
+        let cfg = state.config.lock().unwrap();
+        (cfg.sync_trakt.clone(), cfg.sync_bangumi.clone())
+    };
+    let progress = if info.runtime_secs > 0.0 {
+        (pos / info.runtime_secs * 100.0).clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+    let watched = progress >= WATCHED_PERCENT;
+    if let Some(acc) = trakt_acc {
+        if info.has_trakt_ids() {
+            let body = info.trakt_body();
+            let ok = trakt::scrobble(&acc, &body, progress, "stop").await;
+            log::info!("[Trakt] scrobble stop {progress:.1}% -> {ok}");
+            if watched {
+                let ok = trakt::add_to_history(&acc, &body).await;
+                log::info!("[Trakt] 写入观看历史 -> {ok}");
+            }
+        } else {
+            log::info!("[Trakt] 跳过:条目和所属剧集都没有外部 ID");
+        }
+    }
+    if let Some(acc) = bangumi_acc {
+        if watched && !info.title.is_empty() {
+            mark_bangumi_watched(&acc, &info).await;
+        }
+    }
+}
+
+/// 判定「看完」的进度阈值(与 Trakt 自动标记阈值一致)。
+const WATCHED_PERCENT: f64 = 80.0;
+
+/// 看完后标 Bangumi:反查 subject/episode → 在看 → 单集看过 →(最后一集)整部看过。
+async fn mark_bangumi_watched(acc: &linplayer_core::sync::SyncAccount, info: &emby::ScrobbleInfo) {
+    use linplayer_core::sync::bangumi_matcher;
+    let matched = if info.media_type == "movie" {
+        bangumi_matcher::resolve_movie(
+            &info.title,
+            info.original_title.as_deref(),
+            info.air_date.as_deref(),
+        )
+        .await
+    } else {
+        bangumi_matcher::resolve_episode(
+            &info.title,
+            info.original_title.as_deref(),
+            info.air_date.as_deref(),
+            info.season,
+            info.episode,
+        )
+        .await
+    };
+    let Some(r) = matched else {
+        log::info!("[Bangumi] 反查不到条目,跳过: {}", info.title);
+        return;
+    };
+    if info.media_type == "movie" {
+        let ok = bangumi::set_collection_type(acc, r.subject_id, 2).await;
+        log::info!("[Bangumi] 电影标记看过 -> {ok}");
+        return;
+    }
+    let ok = bangumi::set_collection_type(acc, r.subject_id, 3).await;
+    log::info!("[Bangumi] 收藏为在看 subject={} -> {ok}", r.subject_id);
+    let ok = bangumi::update_episode_status(acc, r.subject_id, r.episode_id, 2).await;
+    log::info!("[Bangumi] 单集标看过 ep={} -> {ok}", r.episode_id);
+    if r.is_last_episode {
+        let ok = bangumi::set_collection_type(acc, r.subject_id, 2).await;
+        log::info!("[Bangumi] 最后一集,整部标看过 -> {ok}");
+    }
+}
+
+/// 详情页背景模糊强度(0~100)。单独一个命令而不是塞进 set_prefs ——
+/// set_prefs 只管选轨三项,整体覆盖会把别的偏好重置掉(那个坑上面注释里写着)。
+#[tauri::command]
+fn set_detail_blur(state: State<'_, AppState>, value: u8) -> Result<(), String> {
+    if value > 100 {
+        return Err("模糊强度只支持 0~100".into());
+    }
+    let mut cfg = state.config.lock().unwrap();
+    cfg.prefs.detail_blur = value;
+    cfg.save();
+    Ok(())
+}
+
+/// 当前代理配置。TV 上原来完全没有这两个命令,设置页也就画不出代理项 ——
+/// 机顶盒恰恰是最需要配代理的场景。
+#[tauri::command]
+fn get_proxy(state: State<'_, AppState>) -> linplayer_core::ProxyConfig {
+    state.config.lock().unwrap().proxy.clone()
+}
+
+/// 保存代理并即时生效(新建的 HTTP 客户端全部带上;主 Emby 客户端下次启动完全生效)。
+#[tauri::command]
+fn set_proxy(state: State<'_, AppState>, config: linplayer_core::ProxyConfig) -> Result<(), String> {
+    http::set_proxy(config.proxy_url());
+    let mut cfg = state.config.lock().unwrap();
+    cfg.proxy = config;
+    cfg.save();
+    Ok(())
+}
+
+/* ---------- Trakt / Bangumi 登录(TV 上原来根本登不上,只能看日历) ---------- */
+
+#[tauri::command]
+async fn trakt_device_code() -> Result<linplayer_core::sync::trakt::TraktDeviceCode, String> {
+    trakt::request_device_code().await
+}
+
+#[tauri::command]
+async fn trakt_poll(
+    state: State<'_, AppState>,
+    device_code: String,
+) -> Result<linplayer_core::sync::trakt::TraktPollResult, String> {
+    let r = trakt::poll_once(&device_code).await;
+    if let Some(acc) = r.account.clone() {
+        let mut cfg = state.config.lock().unwrap();
+        cfg.sync_trakt = Some(acc);
+        cfg.save();
+    }
+    Ok(r)
+}
+
+#[tauri::command]
+fn trakt_logout(state: State<'_, AppState>) {
+    let mut cfg = state.config.lock().unwrap();
+    cfg.sync_trakt = None;
+    cfg.save();
+}
+
+#[tauri::command]
+fn bangumi_authorize_url(redirect_uri: Option<String>) -> String {
+    let uri = redirect_uri.unwrap_or_else(|| bangumi::DEFAULT_REDIRECT_URI.to_string());
+    bangumi::build_authorize_url(&uri)
+}
+
+#[tauri::command]
+async fn bangumi_exchange(
+    state: State<'_, AppState>,
+    code: String,
+    redirect_uri: Option<String>,
+) -> Result<linplayer_core::sync::SyncAccount, String> {
+    let uri = redirect_uri.unwrap_or_else(|| bangumi::DEFAULT_REDIRECT_URI.to_string());
+    let acc = bangumi::exchange_code(&code, &uri).await?;
+    let mut cfg = state.config.lock().unwrap();
+    cfg.sync_bangumi = Some(acc.clone());
+    cfg.save();
+    Ok(acc)
+}
+
+/// 用个人 Access Token 登录 Bangumi(不经 CF 代理,电视上比粘贴 code 好操作得多)。
+#[tauri::command]
+async fn bangumi_login_token(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<linplayer_core::sync::SyncAccount, String> {
+    let acc = bangumi::login_with_access_token(&token).await?;
+    let mut cfg = state.config.lock().unwrap();
+    cfg.sync_bangumi = Some(acc.clone());
+    cfg.save();
+    Ok(acc)
+}
+
+#[tauri::command]
+fn bangumi_logout(state: State<'_, AppState>) {
+    let mut cfg = state.config.lock().unwrap();
+    cfg.sync_bangumi = None;
+    cfg.save();
 }
 
 #[tauri::command]
@@ -1182,6 +1396,58 @@ async fn bangumi_calendar(
     }
 }
 
+/// 把旧的内部沙盒数据搬到新的外部应用目录(一次性,幂等)。
+///
+/// 只搬**配置和用户数据**,不搬 cache —— 缓存重建就好,搬它纯属浪费开机时间。
+/// 目标已存在同名文件就跳过:重装后旧目录还在时,不能拿旧配置盖掉新的。
+/// 搬完在旧目录留一个 `.migrated` 记号,避免每次启动都遍历一遍。
+#[cfg(target_os = "android")]
+fn migrate_internal_data(old: &std::path::Path, new: &std::path::Path) {
+    let flag = old.join(".migrated");
+    if flag.exists() || !old.exists() {
+        return;
+    }
+    let mut moved = 0usize;
+    for name in ["config.json", "translation.json", "data", "plugins", "logs"] {
+        let src = old.join(name);
+        if !src.exists() {
+            continue;
+        }
+        let dst = new.join(name);
+        if dst.exists() {
+            continue;
+        }
+        if copy_tree(&src, &dst).is_ok() {
+            moved += 1;
+        }
+    }
+    let _ = std::fs::write(&flag, b"1");
+    if moved > 0 {
+        log::info!(
+            "数据已从内部沙盒迁到外部应用目录({moved} 项): {} -> {}",
+            old.display(),
+            new.display()
+        );
+    }
+}
+
+#[cfg(target_os = "android")]
+fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    if src.is_file() {
+        if let Some(p) = dst.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        std::fs::copy(src, dst)?;
+        return Ok(());
+    }
+    std::fs::create_dir_all(dst)?;
+    for e in std::fs::read_dir(src)? {
+        let e = e?;
+        copy_tree(&e.path(), &dst.join(e.file_name()))?;
+    }
+    Ok(())
+}
+
 /* ============================================================
    入口
    ============================================================ */
@@ -1201,8 +1467,31 @@ pub fn run() {
                (桌面壳能在 run() 顶部就把状态建好,是因为它的根不依赖 AppHandle。) */
             #[cfg(target_os = "android")]
             {
-                let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+                /* ★ 数据根放**外部应用专属目录** `/sdcard/Android/data/<pkg>/files`,
+                   而不是 `app_data_dir()`(= `/data/user/0/<pkg>`)。
+                   后者是内部沙盒:文件管理器看不见、adb pull 不到、用户捞日志/配置无从下手,
+                   正是用户说的「Android/data 里没有包的文件夹,找都找不到」。
+                   外部应用专属目录**不需要任何存储权限**(API19 起豁免分区存储),卸载即清。
+
+                   Tauri 没暴露 getExternalFilesDir(null),但 document_dir() 返回的是
+                   `.../files/Documents` —— 取它的父目录就是 `.../files`。
+                   外置存储未挂载时 document_dir() 会 Err,此时退回内部目录,宁可不好找也要能跑。 */
+                let external = app
+                    .path()
+                    .document_dir()
+                    .ok()
+                    .and_then(|d| d.parent().map(std::path::Path::to_path_buf));
+                let dir = match external {
+                    Some(d) => d,
+                    None => app.path().app_data_dir().map_err(|e| e.to_string())?,
+                };
                 std::fs::create_dir_all(&dir)?;
+                // 老版本的数据在内部沙盒里,搬过来,否则升级后账号全丢。
+                if let Ok(old) = app.path().app_data_dir() {
+                    if old != dir {
+                        migrate_internal_data(&old, &dir);
+                    }
+                }
                 // 已被用过就说明有人抢跑了,如实报错而不是继续跑一个数据分裂的 App。
                 linplayer_core::paths::set_root(dir).map_err(std::io::Error::other)?;
             }
@@ -1247,6 +1536,7 @@ pub fn run() {
                 download,
                 account_status: Mutex::new(HashMap::new()),
                 pending_update: Mutex::new(None),
+                scrobble_ctx: Mutex::new(None),
             });
             /* 播放器状态单独一份 State:它的生命周期和 Surface 绑,不跟 AppState 一起建。 */
             app.manage(PlayerState::default());
@@ -1311,10 +1601,20 @@ pub fn run() {
             // --- 排行 / 日历 ---
             ranking_categories,
             ranking_fetch,
+            set_detail_blur,
+            get_proxy,
+            set_proxy,
             trakt_account,
             trakt_calendar,
+            trakt_device_code,
+            trakt_poll,
+            trakt_logout,
             bangumi_account,
             bangumi_calendar,
+            bangumi_authorize_url,
+            bangumi_exchange,
+            bangumi_login_token,
+            bangumi_logout,
             // --- 播放器(桩:缺 libmpv .so,调用即报错,详见文件头)---
             play,
             play_local,

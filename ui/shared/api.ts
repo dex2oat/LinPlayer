@@ -118,6 +118,10 @@ export type StreamInfo = {
   frame_rate: number | null;
   video_range: string | null;
   is_default: boolean;
+  /** 外挂字幕(服务器上的独立 .ass/.srt 文件)。核层起播时用 sub-add 挂载,
+   *  它**不会**出现在 mpv 的 track-list 里 —— 除非挂上了。 */
+  is_external: boolean;
+  delivery_url: string | null;
 };
 
 export type MediaVersion = {
@@ -171,6 +175,10 @@ export type Status = {
   duration: number;
   paused: boolean;
   buffered: number;
+  /** 本片已正常播放到结尾(mpv keep-open=yes,画面停最后一帧、时间不再走)。
+   *  ★ 播放器页必须监听它:不监听 = 看完不退出 = stop_playback 永远不触发 =
+   *  Trakt/Bangumi 的「看完」一次都不会上报(用户报的正是这个)。 */
+  eof: boolean;
 };
 
 export type Track = {
@@ -185,7 +193,13 @@ export type Prefs = {
   audio_lang: string | null;
   sub_lang: string | null;
   sub_enabled: boolean;
+  /** 详情页背景图模糊强度 0~100(0=清晰,100=糊成色块)。外观设置里调。 */
+  detail_blur: number;
 };
+
+/** 保存详情页背景模糊强度。单独命令:setPrefs 只覆盖选轨三项,别混。 */
+export const setDetailBlur = (value: number) =>
+  invoke<void>("set_detail_blur", { value });
 
 export type SourceEntry = {
   id: string;
@@ -416,7 +430,8 @@ export const relogin = (serverId: string, username: string, password: string) =>
 export const login = (server: string, username: string, password: string) =>
   invoke<LoginResult>("login", { server, username, password });
 
-export const views = () => invoke<Item[]>("views");
+/** 媒体库列表。几乎不变,走缓存 —— 首页/媒体库/侧栏三处都要它,每次 mount 各打一遍太亏。 */
+export const views = () => memo("views", () => invoke<Item[]>("views"));
 
 export const listItems = (parentId: string) =>
   invoke<Item[]>("list_items", { parentId });
@@ -459,18 +474,20 @@ export const getFilters = (parentId: string) =>
 export const search = (query: string, types?: string[], limit?: number) =>
   invoke<Item[]>("search", { query, types: types ?? null, limit: limit ?? null });
 
-export const listCollections = () => invoke<Item[]>("list_collections");
-export const listNextUp = (limit = 20) => invoke<Item[]>("list_next_up", { limit });
+export const listCollections = () =>
+  memo("collections", () => invoke<Item[]>("list_collections"));
+export const listNextUp = (limit = 20) =>
+  memo(`nextUp:${limit}`, () => invoke<Item[]>("list_next_up", { limit }));
 
 /** 标记已看/未看。played=false 亦即「移出继续观看」。 */
 export const setPlayed = (itemId: string, played: boolean) =>
   invoke<void>("set_played", { itemId, played });
 
 export const listLatest = (parentId: string, limit = 20) =>
-  invoke<Item[]>("list_latest", { parentId, limit });
+  memo(`latest:${parentId}:${limit}`, () => invoke<Item[]>("list_latest", { parentId, limit }));
 
 export const listResume = (limit = 20) =>
-  invoke<Item[]>("list_resume", { limit });
+  memo(`resume:${limit}`, () => invoke<Item[]>("list_resume", { limit }));
 
 /* ---------- 条目详情缓存 ----------
    用户 2026-07-15:「简介……每次都要重新加载,服务器压力很大」。
@@ -499,6 +516,36 @@ const detailMemo = new Map<string, { at: number; v: ItemDetail }>();
  *  report_progress 仍然不在表里:高频,进度由 stop_playback 收尾时清一次就够。 */
 const ITEM_MUTATIONS = new Set(["set_played", "set_favorite", "stop_playback"]);
 
+/* ---------- 列表级缓存 ----------
+   详情页有 detailMemo,列表却一个都没有:首页/媒体库/收藏每次 mount 全量重拉。
+   桌面上不明显(鼠标操作少),TV 上返回键是主交互 —— 每次退回首页都要重跑
+   views + resume + nextUp + N×latest,机顶盒网络下就是用户说的「每次打开都要更新」。
+
+   TTL 同样取 5 分钟,且和 detailMemo 共用一套失效规则(见 ITEM_MUTATIONS):
+   标记已看/收藏/停止播放都会让「继续观看」「收藏」变脸,不清就会显示旧列表。 */
+const listMemo = new Map<string, { at: number; v: unknown }>();
+
+/** 包一层 TTL 缓存。key 必须把全部入参编进去,否则不同参数会互相串。 */
+function memo<T>(key: string, fetch: () => Promise<T>): Promise<T> {
+  const hit = listMemo.get(key);
+  if (hit && Date.now() - hit.at <= DETAIL_TTL_MS) return Promise.resolve(hit.v as T);
+  return fetch().then((v) => {
+    listMemo.set(key, { at: Date.now(), v });
+    return v;
+  });
+}
+
+/** 同步偷看列表缓存 —— 给 UI 首屏直接画,别先空一下。 */
+export function peekList<T>(key: string): T | undefined {
+  const hit = listMemo.get(key);
+  if (!hit) return undefined;
+  if (Date.now() - hit.at > DETAIL_TTL_MS) {
+    listMemo.delete(key);
+    return undefined;
+  }
+  return hit.v as T;
+}
+
 /** 同步偷看缓存,拿不到给 undefined。给 UI 用:有缓存就先画出来,别先清空闪一下。 */
 export function peekItemDetail(itemId: string): ItemDetail | undefined {
   const hit = detailMemo.get(itemId);
@@ -513,6 +560,7 @@ export function peekItemDetail(itemId: string): ItemDetail | undefined {
 /** 清空条目详情缓存。切服务器/改条目状态后必须调 —— 否则会拿 A 服的详情去画 B 服。 */
 export function clearItemCache() {
   detailMemo.clear();
+  listMemo.clear();
 }
 
 /** 相似推荐(剧集/电影详情页底部)。空数组不是错误 —— 有些条目没有相似项,前端整段不渲染。
@@ -616,9 +664,12 @@ export const mpvGet = (name: string) => invoke<string | null>("mpv_get", { name 
 export const mpvSet = (name: string, value: string) => invoke<void>("mpv_set", { name, value });
 export const mpvCommand = (args: string[]) => invoke<void>("mpv_command", { args });
 
-/** 首页 Hero 随机推荐(只返回有剧照的)。 */
+/** 首页 Hero 随机推荐(只返回有剧照的)。
+ *  ★ 也走缓存:它每次都返回**不同**的条目,不缓存就意味着每次退回首页都要重新
+ *  下载 5 张 1600px 大图 —— 这是 TV 上「每次打开都要更新」最刺眼的那一处。
+ *  5 分钟内保持同一批,过期自然换新,随机性没丢。 */
 export const listRandom = (limit = 5) =>
-  invoke<Item[]>("list_random", { limit });
+  memo(`random:${limit}`, () => invoke<Item[]>("list_random", { limit }));
 
 /** 条目的全部版本+流(详情页 版本/音轨/字幕 选择器 + 媒体信息块)。 */
 export const itemMedia = (itemId: string) =>
@@ -1177,6 +1228,11 @@ export const bangumiAuthorizeUrl = () => invoke<string>("bangumi_authorize_url",
 export const bangumiExchange = (code: string) =>
   invoke<SyncAccount>("bangumi_exchange", { code });
 export const bangumiLogout = () => invoke<void>("bangumi_logout");
+/** 个人 Access Token 直登(https://next.bgm.tv/demo/access-token 自助生成)。
+ *  相比授权码流的好处:不经我们的 CF 代理,代理挂了也能登;TV 上尤其重要 ——
+ *  授权码要在电视上一个字符一个字符敲。核层会先打 /v0/me 验真,不存废令牌。 */
+export const bangumiLoginToken = (token: string) =>
+  invoke<SyncAccount>("bangumi_login_token", { token });
 
 // ---------- 追剧日历(付费解锁) ----------
 export type CalendarEntry = {

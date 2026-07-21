@@ -209,9 +209,9 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
 
   const [playing, setPlaying] = useState<Item | null>(null);
-  const [status, setStatus] = useState<Status>({ time: 0, duration: 0, paused: false, buffered: 0 });
+  const [status, setStatus] = useState<Status>({ time: 0, duration: 0, paused: false, buffered: 0, eof: false });
   const [tracks, setTracks] = useState<Track[]>([]);
-  const [prefs, setPrefs2] = useState<Prefs>({ audio_lang: null, sub_lang: null, sub_enabled: true });
+  const [prefs, setPrefs2] = useState<Prefs>({ audio_lang: null, sub_lang: null, sub_enabled: true, detail_blur: 40 });
   const [seeking, setSeeking] = useState<number | null>(null);
   const [panel, setPanel] = useState<Panel>(null);
   const [idle, setIdle] = useState(false);
@@ -220,6 +220,8 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const timer = useRef<number | null>(null);
   const tick = useRef(0);
+  /** 本片是否已按 eof 收过尾。见轮询里的 eof 分支 —— 一片只准触发一次。 */
+  const ended = useRef(false);
   const idleTimer = useRef<number | null>(null);
 
   // 播放器 OSD 态
@@ -354,6 +356,13 @@ export default function App() {
       setBooted(true);
     })();
   }, []);
+
+  /* 详情页背景模糊:核层偏好 → :root 上的 --detail-blur(**无单位**数字),
+     由 DetailPage.css 的 .dt-hero-bg 消费。走 CSS 变量而不是层层传 prop,
+     因为设置页改完也只需写这一个变量就即时生效(见 AppearancePane.applyBlur)。 */
+  useEffect(() => {
+    document.documentElement.style.setProperty("--detail-blur", String(prefs.detail_blur));
+  }, [prefs.detail_blur]);
 
   // 全局 Ctrl+K 唤起搜索。
   useEffect(() => {
@@ -581,7 +590,7 @@ export default function App() {
       setPlaying(it);
       // 版本:详情页指定了就照它高亮,否则等 item_media 回来按服务端第一个初始化。
       setCurMsId(mediaSourceId ?? null);
-      setStatus({ time: resume, duration: it.runtime_secs, paused: false, buffered: 0 });
+      setStatus({ time: resume, duration: it.runtime_secs, paused: false, buffered: 0, eof: false });
       afterStart(it);
     } catch (e) {
       alert(String(e));
@@ -603,7 +612,7 @@ export default function App() {
       };
       setPlaying(synth);
       setCurMsId(null);
-      setStatus({ time: resume, duration: 0, paused: false, buffered: 0 });
+      setStatus({ time: resume, duration: 0, paused: false, buffered: 0, eof: false });
       afterStart(synth);
     } catch (e) {
       alert(String(e));
@@ -617,7 +626,7 @@ export default function App() {
       const synth: Item = { id: entry.id, name: entry.name, type_: "Video", is_folder: false, has_primary: false, runtime_secs: 0, resume_secs: 0, series_name: null, episode_no: null, season_no: null, video_height: null, bitrate: null, size_bytes: null, played: false, genres: [], year: null, rating: null, provider_ids: {}, presentation_unique_key: null, path: null, series_id: null, date_updated: null, sort_name: null };
       setPlaying(synth);
       setCurMsId(null);
-      setStatus({ time: start, duration: 0, paused: false, buffered: 0 });
+      setStatus({ time: start, duration: 0, paused: false, buffered: 0, eof: false });
       afterStart(synth);
     } catch (e) {
       alert(String(e));
@@ -637,8 +646,11 @@ export default function App() {
   }
   const doSeek = (t: number) => { const v = Math.max(0, Math.min(status.duration || t, t)); seekApi(v); setStatus((s) => ({ ...s, time: v })); };
 
-  async function closePlayer() {
-    await stopPlayback(status.time);
+  /** pos 省略 = 用当前进度。**播完(eof)必须显式传 st.duration**:
+      status 是 state,轮询回调里读到的是闭包快照,靠它落库会把进度记成播放前的旧值,
+      算出来的 progress 到不了 100%,Trakt/Bangumi 的「看完」就永远不触发。 */
+  async function closePlayer(pos?: number) {
+    await stopPlayback(pos ?? status.time);
     setPlaying(null);
     setTracks([]);
     setPanel(null);
@@ -727,6 +739,7 @@ export default function App() {
       return;
     }
     tick.current = 0;
+    ended.current = false; // 换片必须解锁,否则第二部片播完不会自动收尾
     // 兜底:4s 后无论如何放行黑屏(暂停起播 st.time 不动,不能永远黑着)。
     const readyFallback = window.setTimeout(() => setReady(true), 4000);
     timer.current = window.setInterval(async () => {
@@ -739,6 +752,16 @@ export default function App() {
         if (tick.current % 10 === 0) reportProgress(st.time, st.paused);
         sourceWatchdog(st.time);
         autoSkip(st.time);
+        /* 正常播到结尾:走和用户手动点「返回」完全同一条路(closePlayer → stopPlayback),
+           位置传 st.duration —— 播完了位置就是总时长,后端才算得出 100%。
+           ★ 上锁:eof 会一直是 true,而这个回调每 500ms 跑一次,不锁就重复 stop。
+             用 ref 不用 state:state 要等重渲染才更新,同一帧内的下一次 tick 读到的还是旧值。 */
+        if (st.eof && !ended.current) {
+          ended.current = true;
+          // duration 拿不到(某些直链/网盘流报 0)就退回 time —— keep-open 下它停在最后一帧,
+          // 已经是本片能拿到的最大进度;传 0 会把刚看完的片记成「没看」。
+          await closePlayer(st.duration || st.time);
+        }
       } catch { /* 未就绪忽略 */ }
     }, 500);
     return () => { if (timer.current) window.clearInterval(timer.current); window.clearTimeout(readyFallback); };
@@ -1276,7 +1299,7 @@ export default function App() {
 
           {/* 顶栏 */}
           <div className="p-top">
-            <button className="p-back" onClick={closePlayer} title="返回">
+            <button className="p-back" onClick={() => closePlayer()} title="返回">
               <IconChevronLeft size={17} />
             </button>
             <span className={`p-title${marquee ? " run" : ""}`} ref={titleRef} title={title}>

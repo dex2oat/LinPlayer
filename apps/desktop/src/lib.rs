@@ -1386,6 +1386,16 @@ async fn play(
         p.set_http_proxy(mpv_proxy.as_deref());
         apply_playback_defaults(&state, p, target.is_dolby_vision);
         p.load_at(&play_url, resume_secs)?;
+        /* ★ 外挂字幕(和视频同级的独立 .ass/.srt)**不在容器里**,mpv 拿到视频 URL 后
+           track-list 里根本看不到它们 —— 这就是「外挂字幕不加载」。必须逐条 sub-add。
+           放在 load_at 之后:sub-add 挂的是**当前文件**,先挂会被 loadfile 冲掉。
+           flags=auto 表示挂上但不自动切,选哪条仍由用户/语言偏好决定。 */
+        for sub in &target.external_subs {
+            p.add_subtitle(&sub.url, &sub.title);
+        }
+        if !target.external_subs.is_empty() {
+            poclog(&format!("挂载外挂字幕 {} 条", target.external_subs.len()));
+        }
         p.set_pause(false);
     }
     *state.source_play_entry.lock().unwrap() = None; // Emby 播放,非源
@@ -1413,7 +1423,7 @@ async fn play(
                         0.0
                     };
                     tauri::async_runtime::spawn(async move {
-                        trakt::scrobble(&acc, &info.media_type, info.ids, progress, "start").await;
+                        trakt::scrobble(&acc, &info.trakt_body(), progress, "start").await;
                     });
                 }
             }
@@ -1711,15 +1721,27 @@ async fn stop_playback(state: State<'_, AppState>, pos: f64) -> Result<(), Strin
         } else {
             0.0
         };
-        // Trakt:stop 上报(Trakt 在 ≥80% 时自动标记看过并写历史)。
+        let watched = progress >= WATCHED_PERCENT;
+        // Trakt:先 scrobble/stop(维护「继续观看」),看完再显式写一次历史。
         if let Some(acc) = trakt_acc {
             if info.has_trakt_ids() {
-                trakt::scrobble(&acc, &info.media_type, info.ids.clone(), progress, "stop").await;
+                let body = info.trakt_body();
+                let ok = trakt::scrobble(&acc, &body, progress, "stop").await;
+                poclog(&format!("[Trakt] scrobble stop {:.1}% -> {}", progress, ok));
+                /* ★ 只靠 scrobble/stop 是不够的 —— 它只在 Trakt 认可这次会话时才落历史,
+                   于是出现「继续观看有、历史观看空」。看完就显式 POST /sync/history,
+                   它是幂等的,重复写不会产生重复记录。 */
+                if watched {
+                    let ok = trakt::add_to_history(&acc, &body).await;
+                    poclog(&format!("[Trakt] 写入观看历史 -> {ok}"));
+                }
+            } else {
+                poclog("[Trakt] 跳过:该条目和它所属剧集都没有外部 ID(Imdb/Tmdb/Tvdb)");
             }
         }
-        // Bangumi:看过阈值(≥80%)才反查标记(反查耗多次 API,不到阈值不触发)。
+        // Bangumi:看过阈值才反查标记(反查耗多次 API,不到阈值不触发)。
         if let Some(acc) = bangumi_acc {
-            if progress >= 80.0 && !info.title.is_empty() {
+            if watched && !info.title.is_empty() {
                 mark_bangumi_watched(&acc, &info).await;
             }
         }
@@ -4027,7 +4049,8 @@ async fn trakt_scrobble(
 ) -> Result<bool, String> {
     let acc = state.config.lock().unwrap().sync_trakt.clone();
     let Some(acc) = acc else { return Ok(false) };
-    Ok(trakt::scrobble(&acc, &type_, ids, progress, &action).await)
+    let item = serde_json::json!({ type_: { "ids": ids } });
+    Ok(trakt::scrobble(&acc, &item, progress, &action).await)
 }
 
 /// 追剧日历(only_mine=只看我追的)。未连接返回空。
@@ -4060,11 +4083,31 @@ async fn mark_bangumi_watched(acc: &linplayer_core::sync::SyncAccount, info: &em
         )
         .await
     };
-    let Some(r) = matched else { return };
-    // 先确保条目已收藏(3=在看),再标单集看过(2)。
-    bangumi::set_collection_type(acc, r.subject_id, 3).await;
-    bangumi::update_episode_status(acc, r.subject_id, r.episode_id, 2).await;
+    let Some(r) = matched else {
+        poclog(&format!("[Bangumi] 反查不到条目,跳过: {}", info.title));
+        return;
+    };
+    /* 电影没有「在看」这个中间态,看完就是看过(2)。
+       剧集先收藏成在看(3)—— 这是用户说的「在看不会加进来」;
+       再标单集看过(2);若这是最后一集,把整个条目也推到看过(2)。
+       顺序不能反:未收藏的条目直接更新单集会被 Bangumi 拒。 */
+    if info.media_type == "movie" {
+        let ok = bangumi::set_collection_type(acc, r.subject_id, 2).await;
+        poclog(&format!("[Bangumi] 电影标记看过 subject={} -> {ok}", r.subject_id));
+        return;
+    }
+    let ok = bangumi::set_collection_type(acc, r.subject_id, 3).await;
+    poclog(&format!("[Bangumi] 收藏为在看 subject={} -> {ok}", r.subject_id));
+    let ok = bangumi::update_episode_status(acc, r.subject_id, r.episode_id, 2).await;
+    poclog(&format!("[Bangumi] 单集标看过 ep={} -> {ok}", r.episode_id));
+    if r.is_last_episode {
+        let ok = bangumi::set_collection_type(acc, r.subject_id, 2).await;
+        poclog(&format!("[Bangumi] 最后一集,整部标看过 -> {ok}"));
+    }
 }
+
+/// 判定「看完」的进度阈值(与 Trakt 的自动标记阈值一致)。
+const WATCHED_PERCENT: f64 = 80.0;
 
 /// 构造 Bangumi 授权页 URL(前端用浏览器打开,用户授权后粘贴 code 回来)。
 #[tauri::command]
@@ -4082,6 +4125,25 @@ async fn bangumi_exchange(
 ) -> Result<linplayer_core::sync::SyncAccount, String> {
     let uri = redirect_uri.unwrap_or_else(|| bangumi::DEFAULT_REDIRECT_URI.to_string());
     let acc = bangumi::exchange_code(&code, &uri).await?;
+    {
+        let mut cfg = state.config.lock().unwrap();
+        cfg.sync_bangumi = Some(acc.clone());
+        cfg.save();
+    }
+    Ok(acc)
+}
+
+/// 用**个人 Access Token** 登录(https://next.bgm.tv/demo/access-token 自助生成)。
+///
+/// 为什么要这条路:授权码流的 code→token 那一跳必须经我们自己的 CF 代理注入 client_secret,
+/// 代理挂了/共享密钥轮换,登录就整个失效且报错含糊。个人令牌直连 api.bgm.tv,不依赖代理。
+/// 命令里先打一次 /v0/me 验真,不把废令牌写进配置。
+#[tauri::command]
+async fn bangumi_login_token(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<linplayer_core::sync::SyncAccount, String> {
+    let acc = bangumi::login_with_access_token(&token).await?;
     {
         let mut cfg = state.config.lock().unwrap();
         cfg.sync_bangumi = Some(acc.clone());
@@ -4244,6 +4306,19 @@ fn set_proxy(state: State<'_, AppState>, config: linplayer_core::ProxyConfig) ->
         cfg.proxy = config;
         cfg.save();
     }
+    Ok(())
+}
+
+/// 详情页背景模糊强度(0~100)。单独一个命令而不是塞进 set_prefs ——
+/// set_prefs 只管选轨三项,整体覆盖会把别的偏好重置掉(那个坑上面注释里写着)。
+#[tauri::command]
+fn set_detail_blur(state: State<'_, AppState>, value: u8) -> Result<(), String> {
+    if value > 100 {
+        return Err("模糊强度只支持 0~100".into());
+    }
+    let mut cfg = state.config.lock().unwrap();
+    cfg.prefs.detail_blur = value;
+    cfg.save();
     Ok(())
 }
 
@@ -4742,6 +4817,7 @@ pub fn run() {
             whisper_download_ffmpeg,
             get_proxy,
             set_proxy,
+            set_detail_blur,
             ranking_categories,
             ranking_fetch,
             afdian_verify,
@@ -4754,6 +4830,7 @@ pub fn run() {
             trakt_calendar,
             bangumi_authorize_url,
             bangumi_exchange,
+            bangumi_login_token,
             bangumi_account,
             bangumi_logout,
             bangumi_set_collection,

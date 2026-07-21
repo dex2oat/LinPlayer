@@ -251,6 +251,14 @@ pub struct Prefs {
     /// 启动时自动检查更新。关掉之后只剩设置页里的手动检查。
     #[serde(default = "default_true")]
     pub update_auto_check: bool,
+
+    /// 详情页背景图的模糊强度,0~100(0=完全不糊,能看清背景图;100=糊成纯色块)。
+    /// 归 Prefs 是因为它是**观感偏好**,不是主题 —— 换主题不该把它重置。
+    #[serde(default = "default_detail_blur")]
+    pub detail_blur: u8,
+}
+fn default_detail_blur() -> u8 {
+    40
 }
 fn default_hwdec() -> String {
     "auto-safe".to_string()
@@ -300,6 +308,7 @@ impl Default for Prefs {
             external_player: String::new(),
             update_channel: crate::update::UpdateChannel::Stable,
             update_auto_check: true,
+            detail_blur: default_detail_blur(),
         }
     }
 }

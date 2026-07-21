@@ -277,6 +277,12 @@ struct RawStream {
     is_default: Option<bool>,
     #[serde(rename = "Index")]
     index: Option<i64>,
+    /// ★ 外挂字幕三件套。不解析这三个字段 = 分不出外挂和内封,
+    /// 也就永远拼不出取字幕的地址 —— 「外挂字幕不加载」的第一层根因。
+    #[serde(rename = "IsExternal")]
+    is_external: Option<bool>,
+    #[serde(rename = "DeliveryUrl")]
+    delivery_url: Option<String>,
 }
 
 /// 一条流(视频/音频/字幕),字段照草稿媒体信息卡的 kv 行来。
@@ -297,6 +303,10 @@ pub struct StreamInfo {
     pub video_range: Option<String>,
     pub video_range_type: Option<String>,
     pub is_default: bool,
+    /// 外挂字幕(单独文件),需要 mpv 用 `sub-add` 另外挂载,不在容器的 track-list 里。
+    pub is_external: bool,
+    /// 服务器给的取字幕地址(可能是相对路径)。缺失时按 index 自己拼。
+    pub delivery_url: Option<String>,
 }
 
 /// 这条视频流是不是杜比视界。判定顺序 = 从最权威到最兜底:
@@ -363,6 +373,10 @@ impl From<RawMediaSource> for MediaVersion {
                 video_range: s.video_range.filter(|x| !x.is_empty() && x != "Unknown"),
                 video_range_type: s.video_range_type.filter(|x| !x.is_empty() && x != "Unknown"),
                 is_default: s.is_default.unwrap_or(false),
+                is_external: s.is_external.unwrap_or(false),
+                // 只认 DeliveryUrl。Path 是**服务端本地文件系统路径**(如 /media/x.ass),
+                // 客户端取不到,拿来当 URL 只会 404。
+                delivery_url: s.delivery_url.filter(|x| !x.is_empty()),
             })
             .collect();
         MediaVersion {
@@ -904,6 +918,11 @@ async fn episodes(
 pub struct ScrobbleInfo {
     pub media_type: String,     // "movie" | "episode"
     pub ids: serde_json::Value, // {imdb, tmdb, tvdb}(Trakt;可能为空对象)
+    /// 剧集专用:**剧**(Series)自己的外部 ID。
+    /// ★ 为什么要它:Emby 分集的 ProviderIds 经常是空的(尤其番剧),此时 `ids` 为空对象,
+    /// scrobble 直接被 has_trakt_ids() 挡掉、一声不吭。有剧 ID + 季集号就能用
+    /// {"show":{ids},"episode":{season,number}} 这种 Trakt 更认的形态兜底。
+    pub show_ids: serde_json::Value,
     pub runtime_secs: f64,
     // Bangumi 反查用:剧集取剧名(SeriesName),电影取片名(Name)。
     pub title: String,
@@ -914,10 +933,51 @@ pub struct ScrobbleInfo {
 }
 
 impl ScrobbleInfo {
-    /// Trakt 是否可用(有至少一个外部 ID)。
+    /// Trakt 是否可用:分集自己的 ID 或所属剧的 ID,有一个就能上报。
     pub fn has_trakt_ids(&self) -> bool {
-        self.ids.as_object().map(|o| !o.is_empty()).unwrap_or(false)
+        let non_empty = |v: &serde_json::Value| v.as_object().is_some_and(|o| !o.is_empty());
+        non_empty(&self.ids) || non_empty(&self.show_ids)
     }
+
+    /// 组装 Trakt 请求体里的条目部分。
+    /// 分集优先用「剧 ID + 季集号」——Trakt 对这种形态的容错最好;分集自带 ID 才走 episode.ids。
+    pub fn trakt_body(&self) -> serde_json::Value {
+        let non_empty = |v: &serde_json::Value| v.as_object().is_some_and(|o| !o.is_empty());
+        if self.media_type == "movie" {
+            return serde_json::json!({ "movie": { "ids": self.ids } });
+        }
+        if non_empty(&self.show_ids) {
+            serde_json::json!({
+                "show": { "ids": self.show_ids },
+                "episode": { "season": self.season, "number": self.episode },
+            })
+        } else {
+            serde_json::json!({ "episode": { "ids": self.ids } })
+        }
+    }
+}
+
+/// 取某个条目的外部 ID(Imdb/Tmdb/Tvdb),归一成 Trakt 要的形状。
+fn provider_ids(j: &serde_json::Value) -> serde_json::Value {
+    let mut ids = serde_json::Map::new();
+    if let Some(obj) = j["ProviderIds"].as_object() {
+        for (k, v) in obj {
+            let key = k.to_lowercase();
+            if !matches!(key.as_str(), "imdb" | "tmdb" | "tvdb") {
+                continue;
+            }
+            let sv = v.as_str().unwrap_or("").trim().to_string();
+            if sv.is_empty() {
+                continue;
+            }
+            if key == "imdb" {
+                ids.insert(key, serde_json::Value::String(sv));
+            } else if let Ok(n) = sv.parse::<i64>() {
+                ids.insert(key, serde_json::Value::from(n));
+            }
+        }
+    }
+    serde_json::Value::Object(ids)
 }
 
 /// 取条目元数据,组装成播放期同步用信息。仅 Movie/Episode 返回 Some(其它类型不同步)。
@@ -943,24 +1003,22 @@ pub async fn fetch_scrobble_info(
     };
     let is_episode = raw_type == "Episode";
     // ProviderIds 键名大小写不一(Imdb/Tmdb/Tvdb),归一小写;tmdb/tvdb 转数字(Trakt 要 int)。
-    let mut ids = serde_json::Map::new();
-    if let Some(obj) = j["ProviderIds"].as_object() {
-        for (k, v) in obj {
-            let key = k.to_lowercase();
-            if !matches!(key.as_str(), "imdb" | "tmdb" | "tvdb") {
-                continue;
-            }
-            let sv = v.as_str().unwrap_or("").trim().to_string();
-            if sv.is_empty() {
-                continue;
-            }
-            if key == "imdb" {
-                ids.insert(key, serde_json::Value::String(sv));
-            } else if let Ok(n) = sv.parse::<i64>() {
-                ids.insert(key, serde_json::Value::from(n));
+    let ids = provider_ids(&j);
+    // 分集再顺带把**剧**的 ID 拉一次(多一次请求,换 Trakt 上报不再静默失败)。
+    let show_ids = match (is_episode, j["SeriesId"].as_str()) {
+        (true, Some(sid)) if !sid.is_empty() => {
+            let u = format!("{}/Users/{}/Items/{sid}?Fields=ProviderIds", s.server, s.user_id);
+            match http.get(&u).header("X-Emby-Token", &s.token).send().await {
+                Ok(r) if r.status().is_success() => r
+                    .json::<serde_json::Value>()
+                    .await
+                    .map(|v| provider_ids(&v))
+                    .unwrap_or_else(|_| serde_json::json!({})),
+                _ => serde_json::json!({}),
             }
         }
-    }
+        _ => serde_json::json!({}),
+    };
     // 剧集用剧名(SeriesName)反查 Bangumi 本体,电影用片名。
     let title = if is_episode {
         j["SeriesName"].as_str().unwrap_or("")
@@ -970,7 +1028,8 @@ pub async fn fetch_scrobble_info(
     .to_string();
     Some(ScrobbleInfo {
         media_type: media_type.to_string(),
-        ids: serde_json::Value::Object(ids),
+        ids,
+        show_ids,
         runtime_secs: j["RunTimeTicks"].as_i64().unwrap_or(0) as f64 / 1e7,
         title,
         original_title: j["OriginalTitle"].as_str().filter(|s| !s.is_empty()).map(String::from),
@@ -1382,6 +1441,26 @@ pub struct PlaybackTarget {
     /// 在这里算而不是丢给前端:PlaybackInfo 的 MediaStreams 只有这条路上拿得到,
     /// 前端手里的 media_versions 是**另一次请求**,两边可能选的不是同一个版本。
     pub is_dolby_vision: bool,
+    /// 外挂字幕(服务器上和视频同级的独立 .ass/.srt 文件)。
+    /// 这些**不在容器里**,mpv 拿到视频 URL 后 track-list 里根本看不到它们,
+    /// 必须播放器起来后逐条 `sub-add`。
+    pub external_subs: Vec<ExternalSub>,
+}
+
+/// 服务器不给 DeliveryUrl 时自己拼的取字幕路径(相对路径,不含 host)。
+///
+/// 格式必须和 Emby 自己发的 DeliveryUrl 一模一样 —— 见 tests 里那条实测断言。
+fn subtitle_path(item_id: &str, media_source_id: &str, index: i64, ext: &str, token: &str) -> String {
+    format!("/Videos/{item_id}/{media_source_id}/Subtitles/{index}/0/Stream.{ext}?api_key={token}")
+}
+
+/// 一条外挂字幕的挂载信息。
+#[derive(Clone, Serialize)]
+pub struct ExternalSub {
+    pub url: String,
+    pub title: String,
+    pub lang: Option<String>,
+    pub is_default: bool,
 }
 
 // ---------- 章节(「跳过片头/片尾」与「进度条缩略图预览」共用同一份数据)----------
@@ -1587,7 +1666,22 @@ pub async fn resolve_stream(
             "TranscodingProfiles": [],
             "ContainerProfiles": [],
             "CodecProfiles": [],
-            "SubtitleProfiles": []
+            // ★ 原来这里是 `[]`。空表 = 告诉服务器「本客户端一种字幕都不支持」,
+            // 服务器于是把 DeliveryMethod 判成 Encode/Drop 且不发 DeliveryUrl,
+            // 外挂字幕从源头就被掐死。声明 External 后服务器才会给取字幕地址。
+            "SubtitleProfiles": [
+                { "Format": "srt",  "Method": "External" },
+                { "Format": "subrip","Method": "External" },
+                { "Format": "ass",  "Method": "External" },
+                { "Format": "ssa",  "Method": "External" },
+                { "Format": "vtt",  "Method": "External" },
+                { "Format": "webvtt","Method": "External" },
+                { "Format": "sub",  "Method": "External" },
+                { "Format": "idx",  "Method": "External" },
+                { "Format": "smi",  "Method": "External" },
+                { "Format": "pgssub","Method": "Embed" },
+                { "Format": "dvdsub","Method": "Embed" }
+            ]
         }
     });
     let resp = http
@@ -1642,6 +1736,48 @@ pub async fn resolve_stream(
                     || profile.contains("dolby vision"))
         });
 
+    // 外挂字幕:优先用服务器给的 DeliveryUrl,没有就按 index 拼标准路由。
+    let external_subs: Vec<ExternalSub> = ms
+        .media_streams
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|st| st.type_.as_deref() == Some("Subtitle") && st.is_external == Some(true))
+        .filter_map(|st| {
+            let index = st.index?;
+            let codec = st.codec.as_deref().unwrap_or("srt").to_ascii_lowercase();
+            // pgs/dvdsub 是图形字幕,外挂形态少见且 mpv 挂载后多半不可用,跳过。
+            if matches!(codec.as_str(), "pgssub" | "pgs" | "dvdsub" | "dvbsub") {
+                return None;
+            }
+            // Emby 的 Stream.{ext} 里 ext 用的是封装名,subrip 要写成 srt。
+            let ext = match codec.as_str() {
+                "subrip" => "srt",
+                "webvtt" => "vtt",
+                other => other,
+            };
+            let url = match st.delivery_url.as_deref().filter(|u| !u.is_empty()) {
+                Some(d) => abs_url(s, d),
+                None => format!(
+                    "{}{}",
+                    s.server,
+                    subtitle_path(item_id, &media_source_id, index, ext, &s.token)
+                ),
+            };
+            Some(ExternalSub {
+                title: st
+                    .display_title
+                    .clone()
+                    .filter(|x| !x.is_empty())
+                    .or_else(|| st.language.clone().filter(|x| !x.is_empty()))
+                    .unwrap_or_else(|| format!("外挂字幕 {index}")),
+                lang: st.language.clone().filter(|x| !x.is_empty()),
+                is_default: st.is_default.unwrap_or(false),
+                url,
+            })
+        })
+        .collect();
+
     let (url, play_method) = if let Some(d) = ms.direct_stream_url.filter(|x| !x.is_empty()) {
         (abs_url(s, &d), "DirectStream")
     } else if let Some(t) = ms.transcoding_url.filter(|x| !x.is_empty()) {
@@ -1670,6 +1806,7 @@ pub async fn resolve_stream(
         play_session_id,
         play_method: play_method.to_string(),
         is_dolby_vision,
+        external_subs,
     })
 }
 
@@ -1816,6 +1953,46 @@ mod tests {
         assert_eq!(ms.direct_stream_url.as_deref(), Some("/videos/1/stream.mkv"));
     }
 
+    /// 外挂字幕兜底路径必须和 Emby 自己发的 DeliveryUrl 字节一致。
+    ///
+    /// 期望值不是我编的,是 2026-07-21 在 mecf.mebimmer.de(接近原版的 Emby)实测抓到的:
+    /// 带 `SubtitleProfiles:[{Format:"ass",Method:"External"}]` 的 PlaybackInfo 返回
+    /// `DeliveryUrl=/Videos/50257/mediasource_50257/Subtitles/37/0/Stream.ass?api_key=...`;
+    /// 而 `SubtitleProfiles:[]`(改之前的写法)返回 `DeliveryMethod=Encode, DeliveryUrl=null`
+    /// —— 那就是「外挂字幕不加载」的源头:根本没有地址可挂。
+    /// 少那个 `/0`(StartPositionTicks 段)或把 codec 直接当扩展名,都会 404。
+    #[test]
+    fn subtitle_fallback_path_matches_real_server() {
+        assert_eq!(
+            subtitle_path("50257", "mediasource_50257", 37, "ass", "TOKEN"),
+            "/Videos/50257/mediasource_50257/Subtitles/37/0/Stream.ass?api_key=TOKEN"
+        );
+    }
+
+    /// IsExternal / DeliveryUrl 必须真的被解析出来 —— 原来 RawStream 压根没这两个字段,
+    /// 于是内封和外挂分不开,外挂字幕永远是「看得见名字、挂不上内容」。
+    #[test]
+    fn external_subtitle_fields_are_parsed() {
+        let raw = serde_json::json!({
+            "Id": "ms1",
+            "MediaStreams": [
+                { "Type": "Subtitle", "Index": 37, "Codec": "ass", "IsExternal": true,
+                  "DeliveryUrl": "/Videos/1/ms1/Subtitles/37/0/Stream.ass", "Language": "chi" },
+                { "Type": "Subtitle", "Index": 2, "Codec": "ass", "IsExternal": false },
+                { "Type": "Video", "Index": 0, "Codec": "hevc" }
+            ]
+        });
+        let ms: RawMediaSource = serde_json::from_value(raw).unwrap();
+        let v: MediaVersion = ms.into();
+        let subs: Vec<_> = v.streams.iter().filter(|s| s.type_ == "Subtitle").collect();
+        assert_eq!(subs.len(), 2);
+        let ext = subs.iter().find(|s| s.is_external).expect("外挂字幕没被识别出来");
+        assert_eq!(ext.index, 37);
+        assert_eq!(ext.delivery_url.as_deref(), Some("/Videos/1/ms1/Subtitles/37/0/Stream.ass"));
+        let emb = subs.iter().find(|s| !s.is_external).unwrap();
+        assert!(emb.delivery_url.is_none(), "内封字幕不该有取字幕地址");
+    }
+
     /// HDR10 ≠ 杜比视界。只看 VideoRange=HDR 就判 DV,会把所有 HDR 片子无谓拖进软解。
     #[test]
     fn hdr10_is_not_mistaken_for_dolby_vision() {
@@ -1824,6 +2001,7 @@ mod tests {
             display_title: None, language: None, width: None, height: None, bitrate: None,
             channels: None, channel_layout: None, frame_rate: None,
             video_range: Some("HDR".into()), video_range_type: Some("DOVI".into()), is_default: true,
+            is_external: false, delivery_url: None,
         };
         let hdr10 = StreamInfo { video_range_type: Some("HDR10".into()), ..dv.clone() };
         let dv_by_codec = StreamInfo { codec: "dvhe.08".into(), video_range_type: None, ..dv.clone() };
