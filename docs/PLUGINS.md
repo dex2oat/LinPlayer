@@ -64,7 +64,7 @@ lib/plugins/
   "description": "一句话说明",
   "main": "main.js",                // 入口，默认 main.js
   "permissions": ["http", "storage"],
-  "httpAllowedHosts": ["api.example.com"],  // 可选：HTTPS 白名单
+  "httpAllowedHosts": ["api.example.com", "*.cdn.example.com"],  // 联网必填，fail-closed
   "extends": {                      // 可选：静态声明扩展点
     "settingsPages": [
       { "id": "settings", "title": "设置", "handler": "openSettings" }
@@ -119,7 +119,9 @@ lib/plugins/
 - **权限声明制**：启用前弹窗征得用户同意（`plugin_permission_dialog.dart`）。
 - **隔离**：每个插件一个 QuickJS isolate（`IsolateQjs`），内存上限 64MB；
   插件 JS 崩溃/死循环只影响自己的 isolate，**主程序始终响应**。
-- **网络**：默认仅 HTTPS；可用 `httpAllowedHosts` 进一步限制域名。
+- **网络**：仅 HTTPS，且受 `httpAllowedHosts` 白名单约束 —— **fail-closed**：不写 =
+  拒绝所有出网（不是放行）。支持 `*.example.com` 子域通配（不覆盖主域本身，裸 `*`
+  不算通配）。重定向后的最终 host 也要在白名单内。实现见 `crates/core/src/plugins/state.rs`。
 - **无文件系统**：不暴露 fs / 模块加载（`import` 被拒绝）。
 - **超时**：每次进入 JS 的调用有墙钟超时（默认 8s）作为卡死保护，超时即判定
   插件失控、自动禁用并停止与之通信。

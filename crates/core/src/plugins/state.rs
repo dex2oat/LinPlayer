@@ -39,6 +39,25 @@ pub struct CtxState {
     pub deadline: Arc<AtomicI64>,
 }
 
+/// host 是否命中白名单。除精确匹配外支持 `*.example.com` 形式的子域通配
+/// (线路节点这类由服务端动态分配、事先枚举不全的域名靠它)。
+fn host_allowed(allowed: &[String], host: &str) -> bool {
+    let h = host.to_lowercase();
+    allowed.iter().any(|raw| {
+        let entry = raw.to_lowercase();
+        if entry == h {
+            return true;
+        }
+        match entry.strip_prefix('*') {
+            // "*.example.com" -> ".example.com";要求点分隔,防 evil-example.com 命中。
+            // 只认 "*." 开头:裸 "*" 会让 suffix 为空、ends_with 恒真,
+            // 一个字符就把 fail-closed 击穿成放行全网。
+            Some(suffix) if suffix.starts_with('.') => h.len() > suffix.len() && h.ends_with(suffix),
+            _ => false,
+        }
+    })
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -74,22 +93,10 @@ impl CtxState {
     }
 
     // ---- http:仅 HTTPS + 白名单(fail-closed)----
+    // 匹配逻辑在下面的自由函数,不然要构造整个 CtxState(含 rquickjs 句柄)才测得了。
 
     fn host_allowed(&self, host: &str) -> bool {
-        let h = host.to_lowercase();
-        for raw in &self.allowed_hosts {
-            let entry = raw.to_lowercase();
-            if entry == h {
-                return true;
-            }
-            if let Some(suffix) = entry.strip_prefix('*') {
-                // "*.example.com" -> ".example.com";要求点分隔,防 evil-example.com 命中。
-                if h.len() > suffix.len() && h.ends_with(&suffix) {
-                    return true;
-                }
-            }
-        }
-        false
+        host_allowed(&self.allowed_hosts, host)
     }
 
     /// 执行插件 http 请求。method ∈ get/post/delete。args 已转 JSON。
@@ -224,5 +231,44 @@ impl<'js> IntoJs<'js> for JsOut {
             Ok(v) => json_to_js(ctx, &v),
             Err(msg) => Err(Exception::throw_message(ctx, &msg)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::host_allowed;
+
+    fn list(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn empty_whitelist_denies_everything() {
+        assert!(!host_allowed(&[], "www.uhdnow.com")); // fail-closed,空 != 放行
+    }
+
+    #[test]
+    fn exact_and_case_insensitive() {
+        let w = list(&["www.uhdnow.com"]);
+        assert!(host_allowed(&w, "www.uhdnow.com"));
+        assert!(host_allowed(&w, "WWW.UHDNOW.COM"));
+        assert!(!host_allowed(&w, "uhdnow.com"));
+    }
+
+    #[test]
+    fn wildcard_matches_subdomains_only() {
+        let w = list(&["*.uhdnow.com"]);
+        assert!(host_allowed(&w, "china-vod4.uhdnow.com"));
+        assert!(host_allowed(&w, "a.b.uhdnow.com")); // 多级子域也算
+        assert!(!host_allowed(&w, "uhdnow.com")); // 裸主域要单独列
+        assert!(!host_allowed(&w, "evil-uhdnow.com")); // 点分隔,防前缀拼接
+        assert!(!host_allowed(&w, "uhdnow.com.evil.net")); // 只看后缀,不看包含
+    }
+
+    #[test]
+    fn bare_star_is_not_a_wildcard() {
+        // 裸 "*" 若被当通配,一个字符就把 fail-closed 击穿成放行全网。
+        assert!(!host_allowed(&list(&["*"]), "attacker.com"));
+        assert!(!host_allowed(&list(&["*com"]), "attacker.com"));
     }
 }
