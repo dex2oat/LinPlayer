@@ -273,6 +273,12 @@ export type SourceKind =
   | "anirss"
   | "feiniu"
   | "stremio"
+  | "onedrive"
+  | "googledrive"
+  | "dropbox"
+  | "aliyundrive"
+  | "baidu"
+  | "pan115"
   | (string & {});
 
 /** 连通状态三态。unknown = 还没探过(按灰显示),与 down「探过确实不通」同色不同义。 */
@@ -853,10 +859,16 @@ export const sourceLogin = (
   username: string,
   password: string,
   cookie: string | null,
-) => invoke<void>("source_login", { kind, baseUrl, username, password, cookie });
+  /** 令牌系源用它带 refresh_token 之外的可选覆盖(oplist_api / oplist_driver_txt)。 */
+  extra?: Record<string, string> | null,
+) => invoke<void>("source_login", { kind, baseUrl, username, password, cookie, extra: extra ?? null });
 
 export const sourceListDir = (dirId: string | null) =>
   invoke<SourceEntry[]>("source_list_dir", { dirId });
+
+/** 源端全盘搜索。后端返回「该源不支持搜索」时,调用方应退回当前目录本地过滤。 */
+export const sourceSearch = (query: string) =>
+  invoke<SourceEntry[]>("source_search", { query });
 
 export const sourcePlay = (entry: SourceEntry, resumeSecs: number) =>
   invoke<number>("source_play", {

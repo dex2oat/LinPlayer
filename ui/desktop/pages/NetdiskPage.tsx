@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { type SourceEntry, sourceListDir } from "@shared/api";
+import { type SourceEntry, sourceListDir, sourceSearch } from "@shared/api";
 import {
   IconChevronDown,
   IconChevronRight,
@@ -68,6 +68,9 @@ export default function NetdiskPage({
   const [entries, setEntries] = useState<SourceEntry[] | null>(null);
   const [err, setErr] = useState("");
   const [query, setQuery] = useState("");
+  // 服务端搜索结果:非 null 时优先显示它(全盘搜);null = 未搜索或该源不支持,退回当前目录本地过滤。
+  const [searchHits, setSearchHits] = useState<SourceEntry[] | null>(null);
+  const [searching, setSearching] = useState(false);
   const [sort, setSort] = useState<Sort>({ field: "name", asc: true });
   const [grid, setGrid] = useState(false);
   const [ctx, setCtx] = useState<Ctx | null>(null);
@@ -78,6 +81,9 @@ export default function NetdiskPage({
     setEntries(null);
     setErr("");
     setCtx(null);
+    // 切目录清掉上一次的搜索态,否则会显示别处的搜索结果。
+    setQuery("");
+    setSearchHits(null);
     try {
       setEntries(await sourceListDir(dirId));
     } catch (e) {
@@ -85,6 +91,36 @@ export default function NetdiskPage({
       setEntries([]);
     }
   }
+
+  /* 全盘搜索:输入 debounce 400ms 后打服务端。
+     - 成功 → searchHits 显示全盘结果
+     - 该源不支持(后端返回 unsupported)或出错 → searchHits=null,view 退回当前目录本地过滤
+     115 等有频率限制的源不宜每次击键都打,故 debounce。空查询立即清。 */
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setSearchHits(null);
+      setSearching(false);
+      return;
+    }
+    let alive = true;
+    setSearching(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const hits = await sourceSearch(q);
+        if (alive) setSearchHits(hits);
+      } catch {
+        // 不支持搜索 / 网络错误:退回本地过滤,不打断用户。
+        if (alive) setSearchHits(null);
+      } finally {
+        if (alive) setSearching(false);
+      }
+    }, 400);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [query]);
 
   // 进页即列根目录。
   useEffect(() => {
@@ -139,13 +175,14 @@ export default function NetdiskPage({
     };
   }, [ctx]);
 
-  // 当前目录内搜索 + 排序(文件夹恒置顶,升降序只作用于同类之内)。
+  // 搜索(优先服务端全盘,退回当前目录本地过滤)+ 排序(文件夹恒置顶,升降序只作用于同类之内)。
   const view = useMemo(() => {
-    if (!entries) return [];
     const q = query.trim().toLowerCase();
-    const list = q
-      ? entries.filter((e) => e.name.toLowerCase().includes(q))
-      : entries.slice();
+    // 服务端给了全盘结果就用它;否则本地过滤当前目录。
+    const src = searchHits ?? entries;
+    if (!src) return [];
+    const list =
+      q && !searchHits ? src.filter((e) => e.name.toLowerCase().includes(q)) : src.slice();
     const dir = sort.asc ? 1 : -1;
     list.sort((a, b) => {
       if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
@@ -163,7 +200,7 @@ export default function NetdiskPage({
       }
     });
     return list;
-  }, [entries, query, sort]);
+  }, [entries, searchHits, query, sort]);
 
   /** 点表头:同列切升降序,换列则从升序开始(通用文件管理器的习惯)。 */
   const clickHead = (field: SortField) =>
@@ -186,7 +223,7 @@ export default function NetdiskPage({
             <IconSearch size={14} />
             <input
               className="nd-search-input"
-              placeholder="当前目录搜索…"
+              placeholder={searching ? "搜索中…" : "搜索…"}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />

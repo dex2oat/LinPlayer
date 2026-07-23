@@ -33,9 +33,15 @@ use linplayer_core::emby::{self, Item, LoginResult, PlaybackTarget, Session};
 use linplayer_core::http;
 use linplayer_core::media::{pick_tracks, Track};
 use linplayer_core::net::cf;
+use linplayer_core::source::aliyundrive::AliyunDriveBackend;
 use linplayer_core::source::anirss::AniRssBackend;
+use linplayer_core::source::baidu::BaiduBackend;
+use linplayer_core::source::dropbox::DropboxBackend;
 use linplayer_core::source::feiniu::FeiniuBackend;
+use linplayer_core::source::googledrive::GoogleDriveBackend;
+use linplayer_core::source::onedrive::OneDriveBackend;
 use linplayer_core::source::openlist::OpenListBackend;
+use linplayer_core::source::pan115::Pan115Backend;
 use linplayer_core::source::quark::QuarkBackend;
 use linplayer_core::source::quark_tv;
 use linplayer_core::source::stremio::StremioBackend;
@@ -1543,10 +1549,54 @@ async fn build_wh_ctx(
 #[tauri::command]
 async fn report_progress(state: State<'_, AppState>, pos: f64, paused: bool) -> Result<(), String> {
     let target = state.playback.lock().unwrap().clone();
-    let Some(t) = target else { return Ok(()) }; // 网盘源无会话,跳过
+    let Some(t) = target else {
+        // 无 Emby 会话 = 浏览型源在播。有服务端观看记录的源(飞牛)在这里落进度。
+        return report_source_progress(&state, pos, false).await;
+    };
     let s = session_of(&state)?;
     let _ = emby::report_progress(&state.http, &s, &t, pos, paused).await;
     capture_history(&state, pos, false);
+    Ok(())
+}
+
+/// 浏览型源的进度上报。多数网盘没有服务端进度(默认空实现),飞牛有。
+/// 一律吞错:进度没记上是小事,把正在看的片子打断是大事。
+async fn report_source_progress(
+    state: &State<'_, AppState>,
+    pos: f64,
+    is_stop: bool,
+) -> Result<(), String> {
+    let Some((entry_id, entry_name)) = state.source_play_entry.lock().unwrap().clone() else {
+        return Ok(());
+    };
+    let Some((kind, server)) = state.source.lock().unwrap().clone() else {
+        return Ok(());
+    };
+    let Ok(backend) = source_backend(state, &kind) else {
+        return Ok(());
+    };
+    // 时长从播放器现读 —— 前端那一拍只传了位置。
+    let duration = state
+        .player
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|p| p.status().duration)
+        .unwrap_or(0.0);
+    let entry = SourceEntry {
+        id: entry_id,
+        name: entry_name,
+        is_dir: false,
+        is_video: true,
+        size: None,
+        thumb_url: None,
+        raw: None,
+    };
+    // 「看完」的判据与 Emby 一致(90%),只在停止那一次判 —— 中途每 5s 一拍不该置已看。
+    let finished = is_stop && duration > 0.0 && pos >= duration * 0.9;
+    let _ = backend
+        .report_progress(&state.http, &server, &entry, pos, duration, finished)
+        .await;
     Ok(())
 }
 
@@ -1808,9 +1858,17 @@ async fn stop_playback(state: State<'_, AppState>, pos: f64) -> Result<(), Strin
     }
 
     let target = state.playback.lock().unwrap().take();
-    if let (Some(t), Ok(s)) = (target, session_of(&state)) {
-        if let Err(e) = emby::report_stopped(&state.http, &s, &t, pos).await {
-            poclog(&format!("report_stopped ERR: {e}"));
+    match target {
+        Some(t) => {
+            if let Ok(s) = session_of(&state) {
+                if let Err(e) = emby::report_stopped(&state.http, &s, &t, pos).await {
+                    poclog(&format!("report_stopped ERR: {e}"));
+                }
+            }
+        }
+        // 浏览型源:把最终进度落到服务端观看记录(飞牛),够 90% 顺带置已看。
+        None => {
+            let _ = report_source_progress(&state, pos, true).await;
         }
     }
     // 派发 onPlayEnd 给插件(eventListeners,如 telegram-notify)。
@@ -3061,6 +3119,9 @@ async fn source_login(
     username: String,
     password: String,
     cookie: Option<String>,
+    // 令牌系源用它带 refresh_token(也可走 cookie)与可选的 oplist 地址/driver 覆盖。
+    // additive:老调用不传即空,行为不变。
+    extra: Option<HashMap<String, String>>,
 ) -> Result<(), String> {
     // 夸克 Cookie 模式无 base_url(固定云端 API),用 kind 名做稳定 id。
     let id = if base_url.trim().is_empty() {
@@ -3074,7 +3135,7 @@ async fn source_login(
         username: (!username.is_empty()).then_some(username),
         password: (!password.is_empty()).then_some(password),
         token: cookie.filter(|c| !c.is_empty()),
-        extra: HashMap::new(),
+        extra: extra.unwrap_or_default(),
     };
     let backend = source_backend(&state, &kind)?;
 
@@ -3113,6 +3174,36 @@ async fn source_login(
     Ok(())
 }
 
+/// 后端轮换出的新凭据落盘 + 更新内存里的活跃源。
+///
+/// 不做这件事的后果:oplist 系与阿里云盘的 refresh_token 是**一次性的**,刷新一次旧值当场作废。
+/// 会话内因为有内存缓存看不出问题,一重启就拿着死 token 去刷 —— 表现为「用得好好的,
+/// 重开就要重新授权」,而且不会报任何错。夸克扫码登录此前就欠着这一笔。
+fn persist_rotated(
+    state: &State<'_, AppState>,
+    kind: &SourceKind,
+    backend: &Arc<dyn MediaSourceBackend>,
+) {
+    let Some((cur_kind, mut server)) = state.source.lock().unwrap().clone() else {
+        return;
+    };
+    if &cur_kind != kind {
+        return;
+    }
+    let Some(updates) = backend.take_rotated_credentials(&server.id) else {
+        return;
+    };
+    server.extra.extend(updates);
+    {
+        let mut cfg = state.config.lock().unwrap();
+        if let Some(acc) = cfg.accounts.iter_mut().find(|a| a.server == server.id) {
+            acc.source = Some(server.clone());
+        }
+        cfg.save();
+    }
+    *state.source.lock().unwrap() = Some((cur_kind, server));
+}
+
 #[tauri::command]
 async fn source_list_dir(
     state: State<'_, AppState>,
@@ -3120,10 +3211,28 @@ async fn source_list_dir(
 ) -> Result<Vec<SourceEntry>, String> {
     let (kind, server) = state.source.lock().unwrap().clone().ok_or("未登录源")?;
     let backend = source_backend(&state, &kind)?;
-    backend
+    let r = backend
         .list_dir(&state.http, &server, dir_id.as_deref())
         .await
-        .map_err(|e| e.message)
+        .map_err(|e| e.message);
+    persist_rotated(&state, &kind, &backend);
+    r
+}
+
+/// 源端全盘搜索。返回 Err("该源不支持搜索") 时前端退回当前目录本地过滤。
+#[tauri::command]
+async fn source_search(
+    state: State<'_, AppState>,
+    query: String,
+) -> Result<Vec<SourceEntry>, String> {
+    let (kind, server) = state.source.lock().unwrap().clone().ok_or("未登录源")?;
+    let backend = source_backend(&state, &kind)?;
+    let r = backend
+        .search(&state.http, &server, &query)
+        .await
+        .map_err(|e| e.message);
+    persist_rotated(&state, &kind, &backend);
+    r
 }
 
 /// 解析源文件为直链并用 mpv 播放(带逐流 headers)。返回起播秒数。
@@ -3152,6 +3261,7 @@ async fn source_play(
         .resolve_play(&state.http, &server, &entry, None)
         .await
         .map_err(|e| e.message)?;
+    persist_rotated(&state, &kind, &backend);
     poclog(&format!("SOURCE PLAY url={}", resolved.url));
     {
         let guard = state.player.lock().unwrap();
@@ -4663,6 +4773,14 @@ pub fn run() {
     // ★ 这张表安卓侧(apps/android/src/lib.rs)有一份**独立的拷贝**。只加这边,
     //   安卓上的表现是「源加得进去、点进去报『该源类型暂未接入』」,而且编译全绿。
     source_backends.insert(SourceKind::stremio(), Arc::new(StremioBackend::new()));
+    // oplist 令牌系(四家):令牌走 api.oplist.org,接口全是各家官方有文档的 API。
+    source_backends.insert(SourceKind::onedrive(), Arc::new(OneDriveBackend::new()));
+    source_backends.insert(SourceKind::googledrive(), Arc::new(GoogleDriveBackend::new()));
+    source_backends.insert(SourceKind::dropbox(), Arc::new(DropboxBackend::new()));
+    source_backends.insert(SourceKind::aliyundrive(), Arc::new(AliyunDriveBackend::new()));
+    // 百度双路线(令牌/Cookie),115 走 Cookie + 私有编解码。
+    source_backends.insert(SourceKind::baidu(), Arc::new(BaiduBackend::new()));
+    source_backends.insert(SourceKind::pan115(), Arc::new(Pan115Backend::new()));
 
     // 有活跃账号 -> 用存盘凭据重建会话/源(重启免登)。
     // 活跃的是 Emby 就装 session,是浏览型源就装 source —— 两者互斥,别同时留着。
@@ -4897,6 +5015,7 @@ pub fn run() {
             download_and_apply_update,
             source_login,
             source_list_dir,
+            source_search,
             source_play,
             source_watchdog,
             quark_scan_start,

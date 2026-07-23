@@ -24,6 +24,10 @@ pub struct QuarkBackend {
     cookie_cache: Mutex<HashMap<String, String>>,
     // TV(扫码)模式:access_token 缓存(serverId -> access_token)。
     tv_access: Mutex<HashMap<String, String>>,
+    // TV 模式刷新后轮换出的新 refresh_token,等宿主层取走落盘(serverId -> refresh_token)。
+    tv_rotated: Mutex<HashMap<String, String>>,
+    // 自上次取走以来 refresh_token 变过的 serverId。没有它,每个请求后都会重写一次配置文件。
+    tv_dirty: Mutex<std::collections::HashSet<String>>,
 }
 
 fn replace_cookie(cookie: &str, key: &str, value: &str) -> String {
@@ -88,6 +92,28 @@ fn pick_quality(
     };
     let qualities = cands.into_iter().map(|c| c.0).collect();
     Some((chosen.1, qualities, chosen.0.id))
+}
+
+/// 一行 file 记录 → SourceEntry。列目录与搜索共用 —— 两处各写一份的话,
+/// 字段判定迟早分叉(搜索结果里目录变文件之类),且只有真机点进去才发现。
+fn file_to_entry(f: &Value) -> SourceEntry {
+    let is_dir = f["dir"].as_bool() == Some(true) || f["file"].as_bool() == Some(false);
+    let name = f["file_name"].as_str().unwrap_or("").to_string();
+    let is_video = !is_dir && (f["category"].as_i64() == Some(1) || is_video_file_name(&name));
+    let thumb = f["thumbnail"]
+        .as_str()
+        .or_else(|| f["big_thumbnail"].as_str())
+        .filter(|s| s.starts_with("http"))
+        .map(|s| s.to_string());
+    SourceEntry {
+        id: f["fid"].as_str().unwrap_or("").to_string(),
+        name,
+        is_dir,
+        is_video,
+        size: f["size"].as_i64(),
+        thumb_url: thumb,
+        raw: None,
+    }
 }
 
 impl QuarkBackend {
@@ -194,7 +220,8 @@ impl QuarkBackend {
     }
 
     /// 取 TV 模式 (access_token, device_id);force 或缓存空时用 refresh_token 刷新。
-    /// ponytail: 刷新后若 refresh_token 轮换,未回写持久化(会话内够用);长期用需回存。
+    /// 轮换出的新 refresh_token 记进 tv_rotated,由宿主层经 take_rotated_credentials 落盘 ——
+    /// 不落盘的话会话内没事,一重启就拿着旧值去刷,表现为"扫过码了还要再扫"。
     async fn tv_auth(
         &self,
         http: &reqwest::Client,
@@ -202,7 +229,15 @@ impl QuarkBackend {
         force: bool,
     ) -> Result<(String, String), SourceError> {
         let device_id = server.extra.get("device_id").cloned().unwrap_or_default();
-        let refresh = server.extra.get("refresh_token").cloned().unwrap_or_default();
+        // 内存里轮换后的新值优先 —— 存盘那份刷过一次就可能失效了。
+        let refresh = self
+            .tv_rotated
+            .lock()
+            .unwrap()
+            .get(&server.id)
+            .cloned()
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| server.extra.get("refresh_token").cloned().unwrap_or_default());
         if device_id.is_empty() || refresh.is_empty() {
             return Err(SourceError::auth("夸克未扫码登录，请重新扫码"));
         }
@@ -213,12 +248,19 @@ impl QuarkBackend {
                 }
             }
         }
-        let (access, _new_refresh) =
+        let (access, new_refresh) =
             quark_tv::exchange_token(http, &device_id, &refresh, true).await?;
         self.tv_access
             .lock()
             .unwrap()
             .insert(server.id.clone(), access.clone());
+        if !new_refresh.is_empty() && new_refresh != refresh {
+            self.tv_rotated
+                .lock()
+                .unwrap()
+                .insert(server.id.clone(), new_refresh);
+            self.tv_dirty.lock().unwrap().insert(server.id.clone());
+        }
         Ok((access, device_id))
     }
 }
@@ -273,26 +315,50 @@ impl MediaSourceBackend for QuarkBackend {
             let empty = vec![];
             let list = v["data"]["list"].as_array().unwrap_or(&empty);
             let count = list.len();
-            for f in list {
-                let is_dir = f["dir"].as_bool() == Some(true) || f["file"].as_bool() == Some(false);
-                let name = f["file_name"].as_str().unwrap_or("").to_string();
-                let is_video =
-                    !is_dir && (f["category"].as_i64() == Some(1) || is_video_file_name(&name));
-                let thumb = f["thumbnail"]
-                    .as_str()
-                    .or_else(|| f["big_thumbnail"].as_str())
-                    .filter(|s| s.starts_with("http"))
-                    .map(|s| s.to_string());
-                entries.push(SourceEntry {
-                    id: f["fid"].as_str().unwrap_or("").to_string(),
-                    name,
-                    is_dir,
-                    is_video,
-                    size: f["size"].as_i64(),
-                    thumb_url: thumb,
-                    raw: None,
-                });
+            entries.extend(list.iter().map(file_to_entry));
+            if count < PAGE_SIZE {
+                break;
             }
+            page += 1;
+        }
+        Ok(entries)
+    }
+
+    /// 源端搜索(Cookie 模式)。此前夸克走 trait 默认的 unsupported,UI 只能在当前目录本地过滤 ——
+    /// 网盘里翻几层找一部片子时那等于没有搜索。
+    async fn search(
+        &self,
+        http: &reqwest::Client,
+        server: &SourceServer,
+        query: &str,
+    ) -> Result<Vec<SourceEntry>, SourceError> {
+        // 扫码(TV)模式的开放 API 没有搜索端点,如实返回 unsupported 让 UI 退回本地过滤,
+        // 而不是编一个端点出来静默返回空列表。
+        if self.is_tv(server) {
+            return Err(SourceError::unsupported());
+        }
+        let mut entries = Vec::new();
+        let mut page = 1;
+        while page <= MAX_PAGES {
+            let v = self
+                .request(
+                    http,
+                    server,
+                    "/file/search",
+                    None,
+                    &[
+                        ("q", query.to_string()),
+                        ("_page", page.to_string()),
+                        ("_size", PAGE_SIZE.to_string()),
+                        ("_fetch_total", "1".into()),
+                        ("_sort", "file_type:asc,updated_at:desc".into()),
+                    ],
+                )
+                .await?;
+            let empty = vec![];
+            let list = v["data"]["list"].as_array().unwrap_or(&empty);
+            let count = list.len();
+            entries.extend(list.iter().map(file_to_entry));
             if count < PAGE_SIZE {
                 break;
             }
@@ -395,5 +461,13 @@ impl MediaSourceBackend for QuarkBackend {
             qualities: vec![],
             selected_quality_id: None,
         })
+    }
+
+    fn take_rotated_credentials(&self, server_id: &str) -> Option<HashMap<String, String>> {
+        if !self.tv_dirty.lock().unwrap().remove(server_id) {
+            return None;
+        }
+        let t = self.tv_rotated.lock().unwrap().get(server_id).cloned()?;
+        Some(HashMap::from([("refresh_token".to_string(), t)]))
     }
 }

@@ -22,6 +22,12 @@ dirs = "5"
 async-trait = "0.1"
 md-5 = "0.10"
 sha2 = "0.10"
+# 115 网盘下载直链的私有编解码要一次 1024 位模幂(见 source/pan115_crypto.rs)。
+# 纯 Rust 无 C 依赖,安卓交叉编译安全;不引 rsa crate —— 115 那套加解密都只用公钥,
+# 要的仅是 modpow,rsa crate 的私钥/填充/校验整套都用不上。
+num-bigint = "0.4"
+# 115 的 16 字节会话密钥与 RSA 填充随机字节。rand 本就在依赖树里(传递引入),提成直接依赖不增体积。
+rand = "0.9"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
 base64 = "0.22"

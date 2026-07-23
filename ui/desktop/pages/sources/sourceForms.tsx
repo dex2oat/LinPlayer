@@ -46,10 +46,17 @@ export type SourceId =
   | "feiniu"
   | "anirss"
   | "stremio"
+  | "onedrive"
+  | "googledrive"
+  | "dropbox"
+  | "aliyundrive"
+  | "baidu"
+  | "pan115"
   | "batch"
   | "qrsync"
   /** 插件贡献的源:`plugin:<插件id>/<源id>`,直接就是 SourceKind。 */
   | (string & {});
+
 
 /* Stremio 配置框的默认内容。预填官方 Cinemeta —— 它是免费的元数据 addon,
    不填任何东西根目录就是空的,新用户会以为源坏了。用户想换随时删掉重写。
@@ -100,6 +107,12 @@ export const BUILTIN_SOURCES: SourceMeta[] = [
   { id: "quark", label: "夸克网盘", sec: "网盘 / 文件源", icon: () => <IconCloud size={16} /> },
   { id: "feiniu", label: "飞牛影视", sec: "网盘 / 文件源", icon: () => <IconCloud size={16} /> },
   { id: "anirss", label: "Ani-RSS", sec: "网盘 / 文件源", icon: () => <IconCloud size={16} /> },
+  { id: "aliyundrive", label: "阿里云盘", sec: "网盘 / 文件源", icon: () => <IconCloud size={16} /> },
+  { id: "baidu", label: "百度网盘", sec: "网盘 / 文件源", icon: () => <IconCloud size={16} /> },
+  { id: "pan115", label: "115 网盘", sec: "网盘 / 文件源", icon: () => <IconCloud size={16} /> },
+  { id: "onedrive", label: "OneDrive", sec: "网盘 / 文件源", icon: () => <IconCloud size={16} /> },
+  { id: "googledrive", label: "Google Drive", sec: "网盘 / 文件源", icon: () => <IconCloud size={16} /> },
+  { id: "dropbox", label: "Dropbox", sec: "网盘 / 文件源", icon: () => <IconCloud size={16} /> },
   { id: "stremio", label: "Stremio", sec: "插件协议", icon: () => <IconServer size={16} /> },
   { id: "batch", label: "批量粘贴导入", sec: "批量", icon: () => <IconFile size={16} /> },
   { id: "qrsync", label: "扫码搬配置", sec: "批量", icon: () => <IconQr size={16} /> },
@@ -173,6 +186,11 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
   const [note, setNote] = useState("");
   const [cookie, setCookie] = useState("");
   const [stremio, setStremio] = useState(STREMIO_DEFAULT);
+  // 令牌系源:refresh token + 可选的令牌服务地址覆盖(官方实例被墙时自建改地址用)。
+  const [token, setToken] = useState("");
+  const [oplistApi, setOplistApi] = useState("");
+  // 百度双路线:授权令牌 / Cookie。
+  const [baiduWay, setBaiduWay] = useState<"token" | "cookie">("token");
   const [batchText, setBatchText] = useState("");
   const [qrPayload, setQrPayload] = useState("");
   const [exportText, setExportText] = useState("");
@@ -412,6 +430,29 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
       onDone("netdisk");
     });
 
+  /** oplist 令牌系(含百度令牌路线):refresh token 走 cookie 参数,可选服务地址走 extra。 */
+  const submitOplist = (kind: string) =>
+    run(async () => {
+      const t = token.trim();
+      if (!t) throw new Error("请粘贴 refresh token");
+      const extra: Record<string, string> = {};
+      if (oplistApi.trim()) extra.oplist_api = oplistApi.trim();
+      // OneDrive 世纪互联版把 Graph 地址填在 server 里,直接作 base_url。
+      const base = kind === "onedrive" ? server.trim() : "";
+      await sourceLogin(kind, base, "", "", t, Object.keys(extra).length ? extra : null);
+      await nameActiveSource();
+      onDone("netdisk");
+    });
+
+  /** Cookie 系(115、百度 Cookie 路线):整段 Cookie 走 cookie 参数。 */
+  const submitCookieSource = (kind: string) =>
+    run(async () => {
+      if (!cookie.trim()) throw new Error("请粘贴 Cookie");
+      await sourceLogin(kind, "", "", "", cookie.trim());
+      await nameActiveSource();
+      onDone("netdisk");
+    });
+
   // ---------- 批量解析导入(两段式:先解析给用户核对,确认后才登录落盘) ----------
   const [blocks, setBlocks] = useState<Block[] | null>(null);
   const [fbUser, setFbUser] = useState("");
@@ -531,6 +572,39 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
       feiniu: ["飞牛影视", "填写服务器地址与账号后添加。"],
       anirss: ["Ani-RSS", "填写服务器地址与账号后添加。"],
       quark: ["夸克网盘", "推荐扫码登录；也可粘贴浏览器 Cookie。"],
+      onedrive: [
+        "OneDrive",
+        <>
+          在 <b>令牌服务</b>页面授权 OneDrive 后，把拿到的 <b>refresh token</b> 粘到下方。
+          世纪互联版可在高级里填对应的 Graph 地址。
+        </>,
+      ],
+      googledrive: [
+        "Google Drive",
+        <>在 <b>令牌服务</b>页面授权 Google Drive 后，把 <b>refresh token</b> 粘到下方。</>,
+      ],
+      dropbox: [
+        "Dropbox",
+        <>在 <b>令牌服务</b>页面授权 Dropbox 后，把 <b>refresh token</b> 粘到下方。</>,
+      ],
+      aliyundrive: [
+        "阿里云盘",
+        <>
+          在 <b>令牌服务</b>页面授权阿里云盘后，把 <b>refresh token</b> 粘到下方 ——
+          走开放平台，无需处理签名。
+        </>,
+      ],
+      baidu: [
+        "百度网盘",
+        <>
+          推荐用<b>授权令牌</b>（在令牌服务页授权后粘 refresh token）；也可粘浏览器
+          Cookie（含 BDUSS），但网页版取播放地址无官方接口、受风控限制。
+        </>,
+      ],
+      pan115: [
+        "115 网盘",
+        <>浏览器登录 115 后，复制整段 <b>Cookie</b>（含 UID/SEID）粘到下方。</>,
+      ],
       stremio: [
         "Stremio",
         <>
@@ -609,6 +683,132 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
         return creds();
       case "anirss":
         return creds(true);
+
+      case "onedrive":
+      case "googledrive":
+      case "dropbox":
+      case "aliyundrive":
+        return (
+          <>
+            {nameField(BUILTIN_SOURCES.find((s) => s.id === sel)?.label ?? "我的网盘")}
+            <div className="fld">
+              <label>Refresh Token</label>
+              <textarea
+                className="field"
+                rows={3}
+                spellCheck={false}
+                placeholder="在令牌服务页授权后得到的 refresh token"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+              />
+            </div>
+            <details className="as-adv">
+              <summary>高级设置</summary>
+              <div className="fld" style={{ marginTop: 10 }}>
+                <label>令牌服务地址（可选）</label>
+                <input
+                  className="field"
+                  placeholder="默认 https://api.oplist.org（国内可填 .org.cn 或自建地址）"
+                  value={oplistApi}
+                  onChange={(e) => setOplistApi(e.target.value)}
+                />
+                <p className="hint" style={{ marginTop: 6 }}>
+                  官方令牌服务不可用时，可改为国内实例或自建地址（OpenList-APIPages，
+                  可一键部署到 Cloudflare Workers）。
+                </p>
+              </div>
+              {sel === "onedrive" && (
+                <div className="fld" style={{ marginBottom: 0 }}>
+                  <label>Graph 地址（世纪互联版填）</label>
+                  <input
+                    className="field"
+                    placeholder="https://microsoftgraph.chinacloudapi.cn/v1.0"
+                    value={server}
+                    onChange={(e) => setServer(e.target.value)}
+                  />
+                </div>
+              )}
+            </details>
+          </>
+        );
+
+      case "pan115":
+        return (
+          <>
+            {nameField("我的 115")}
+            <p className="hint">浏览器登录 115 后复制整段 Cookie（含 UID/SEID）粘到下方。</p>
+            <div className="fld">
+              <label>Cookie</label>
+              <textarea
+                className="field"
+                rows={4}
+                spellCheck={false}
+                placeholder="UID=…; CID=…; SEID=…"
+                value={cookie}
+                onChange={(e) => setCookie(e.target.value)}
+              />
+            </div>
+          </>
+        );
+
+      case "baidu":
+        return (
+          <>
+            {nameField("我的百度网盘")}
+            <div className="seg" style={{ marginBottom: 14 }}>
+              {(["token", "cookie"] as const).map((w) => (
+                <span key={w} className={baiduWay === w ? "on" : ""} onClick={() => setBaiduWay(w)}>
+                  {w === "token" ? "授权令牌" : "Cookie"}
+                </span>
+              ))}
+            </div>
+            {baiduWay === "token" ? (
+              <>
+                <div className="fld">
+                  <label>Refresh Token</label>
+                  <textarea
+                    className="field"
+                    rows={3}
+                    spellCheck={false}
+                    placeholder="在令牌服务页授权百度网盘后得到的 refresh token"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                  />
+                </div>
+                <details className="as-adv">
+                  <summary>高级设置</summary>
+                  <div className="fld" style={{ marginTop: 10, marginBottom: 0 }}>
+                    <label>令牌服务地址（可选）</label>
+                    <input
+                      className="field"
+                      placeholder="默认 https://api.oplist.org"
+                      value={oplistApi}
+                      onChange={(e) => setOplistApi(e.target.value)}
+                    />
+                  </div>
+                </details>
+              </>
+            ) : (
+              <>
+                <p className="hint">
+                  浏览器登录百度网盘后复制整段 Cookie（含 BDUSS）粘到下方。网页版取播放地址
+                  无官方接口、受风控限制，能用令牌方式优先用令牌。
+                </p>
+                <div className="fld">
+                  <label>Cookie</label>
+                  <textarea
+                    className="field"
+                    rows={4}
+                    spellCheck={false}
+                    placeholder="BDUSS=…; STOKEN=…"
+                    value={cookie}
+                    onChange={(e) => setCookie(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+          </>
+        );
 
       case "stremio":
         return (
@@ -811,6 +1011,31 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
             disabled={busy}
             onClick={() => submitSource(sel as "openlist" | "feiniu" | "anirss")}
           >
+            {spin(label)}
+          </button>
+        );
+      case "onedrive":
+      case "googledrive":
+      case "dropbox":
+      case "aliyundrive":
+        return (
+          <button className="btn primary big" disabled={busy || !token.trim()} onClick={() => submitOplist(sel)}>
+            {spin(label)}
+          </button>
+        );
+      case "pan115":
+        return (
+          <button className="btn primary big" disabled={busy || !cookie.trim()} onClick={() => submitCookieSource("pan115")}>
+            {spin(label)}
+          </button>
+        );
+      case "baidu":
+        return baiduWay === "token" ? (
+          <button className="btn primary big" disabled={busy || !token.trim()} onClick={() => submitOplist("baidu")}>
+            {spin(label)}
+          </button>
+        ) : (
+          <button className="btn primary big" disabled={busy || !cookie.trim()} onClick={() => submitCookieSource("baidu")}>
             {spin(label)}
           </button>
         );

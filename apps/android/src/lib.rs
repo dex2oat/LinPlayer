@@ -24,9 +24,15 @@ use linplayer_core::config::{Account, AppConfig, Prefs};
 use linplayer_core::emby::{self, Item, LoginResult, Session};
 use linplayer_core::http;
 use linplayer_core::media::Track;
+use linplayer_core::source::aliyundrive::AliyunDriveBackend;
 use linplayer_core::source::anirss::AniRssBackend;
+use linplayer_core::source::baidu::BaiduBackend;
+use linplayer_core::source::dropbox::DropboxBackend;
 use linplayer_core::source::feiniu::FeiniuBackend;
+use linplayer_core::source::googledrive::GoogleDriveBackend;
+use linplayer_core::source::onedrive::OneDriveBackend;
 use linplayer_core::source::openlist::OpenListBackend;
+use linplayer_core::source::pan115::Pan115Backend;
 use linplayer_core::source::quark::QuarkBackend;
 use linplayer_core::source::stremio::StremioBackend;
 use linplayer_core::source::{MediaSourceBackend, SourceEntry, SourceKind, SourceServer};
@@ -193,6 +199,7 @@ async fn source_play(
         .resolve_play(&state.http, &server, &entry, None)
         .await
         .map_err(|e| e.message)?;
+    persist_rotated(&state, &kind, &backend);
     {
         // 播放器锁不能跨 await 持有(MutexGuard 不是 Send),所以解析完再取。
         let g = ensure_player(&ps)?;
@@ -223,6 +230,8 @@ async fn source_login(
     username: String,
     password: String,
     cookie: Option<String>,
+    // 与桌面端同构:令牌系源带 refresh_token 与可选 oplist 覆盖。additive。
+    extra: Option<HashMap<String, String>>,
 ) -> Result<(), String> {
     // 夸克 Cookie 模式无 base_url(固定云端 API),用 kind 名做稳定 id。
     let id = if base_url.trim().is_empty() {
@@ -236,7 +245,7 @@ async fn source_login(
         username: (!username.is_empty()).then_some(username),
         password: (!password.is_empty()).then_some(password),
         token: cookie.filter(|c| !c.is_empty()),
-        extra: HashMap::new(),
+        extra: extra.unwrap_or_default(),
     };
     let backend = source_backend(&state, &kind)?;
     // 列根目录以验证配置可用 —— 不验的话错地址也会"添加成功",进去才发现是空的。
@@ -1200,6 +1209,8 @@ async fn companion_call(
                 s("user"),
                 s("pass"),
                 Some(s("cookie")),
+                // 遥控网页这条路目前只加 Stremio,不需要令牌覆盖。
+                None,
             )
             .await?;
             app.emit("lp://accounts-changed", ()).ok();
@@ -1501,6 +1512,33 @@ fn source_backend(
         .ok_or_else(|| "该源类型暂未接入".to_string())
 }
 
+/// 后端轮换出的新凭据落盘。与 `apps/desktop/src/lib.rs::persist_rotated` 同构 ——
+/// 少了它,一次性 refresh_token 的源(oplist 系/阿里云盘/夸克扫码)重启后必掉登录且不报错。
+fn persist_rotated(
+    state: &State<'_, AppState>,
+    kind: &SourceKind,
+    backend: &Arc<dyn MediaSourceBackend>,
+) {
+    let Some((cur_kind, mut server)) = state.source.lock().unwrap().clone() else {
+        return;
+    };
+    if &cur_kind != kind {
+        return;
+    }
+    let Some(updates) = backend.take_rotated_credentials(&server.id) else {
+        return;
+    };
+    server.extra.extend(updates);
+    {
+        let mut cfg = state.config.lock().unwrap();
+        if let Some(acc) = cfg.accounts.iter_mut().find(|a| a.server == server.id) {
+            acc.source = Some(server.clone());
+        }
+        cfg.save();
+    }
+    *state.source.lock().unwrap() = Some((cur_kind, server));
+}
+
 #[tauri::command]
 async fn source_list_dir(
     state: State<'_, AppState>,
@@ -1508,10 +1546,28 @@ async fn source_list_dir(
 ) -> Result<Vec<SourceEntry>, String> {
     let (kind, server) = state.source.lock().unwrap().clone().ok_or("未登录源")?;
     let backend = source_backend(&state, &kind)?;
-    backend
+    let r = backend
         .list_dir(&state.http, &server, dir_id.as_deref())
         .await
-        .map_err(|e| e.message)
+        .map_err(|e| e.message);
+    persist_rotated(&state, &kind, &backend);
+    r
+}
+
+/// 源端全盘搜索。与桌面端同构;返回 Err 时前端退回本地过滤。
+#[tauri::command]
+async fn source_search(
+    state: State<'_, AppState>,
+    query: String,
+) -> Result<Vec<SourceEntry>, String> {
+    let (kind, server) = state.source.lock().unwrap().clone().ok_or("未登录源")?;
+    let backend = source_backend(&state, &kind)?;
+    let r = backend
+        .search(&state.http, &server, &query)
+        .await
+        .map_err(|e| e.message);
+    persist_rotated(&state, &kind, &backend);
+    r
 }
 
 /* ============================================================
@@ -1971,6 +2027,14 @@ pub fn run() {
             source_backends.insert(SourceKind::quark(), Arc::new(QuarkBackend::new()));
             // 与 apps/desktop/src/lib.rs 的同名表必须逐条对齐,漏一条那一端就静默不可用。
             source_backends.insert(SourceKind::stremio(), Arc::new(StremioBackend::new()));
+            source_backends.insert(SourceKind::onedrive(), Arc::new(OneDriveBackend::new()));
+            source_backends
+                .insert(SourceKind::googledrive(), Arc::new(GoogleDriveBackend::new()));
+            source_backends.insert(SourceKind::dropbox(), Arc::new(DropboxBackend::new()));
+            source_backends
+                .insert(SourceKind::aliyundrive(), Arc::new(AliyunDriveBackend::new()));
+            source_backends.insert(SourceKind::baidu(), Arc::new(BaiduBackend::new()));
+            source_backends.insert(SourceKind::pan115(), Arc::new(Pan115Backend::new()));
 
             // 有活跃账号 -> 用存盘凭据重建会话/源(重启免登)。Emby 与浏览型源互斥。
             let active = config.active_account();
@@ -2056,6 +2120,7 @@ pub fn run() {
             // --- 源 ---
             source_login,
             source_list_dir,
+            source_search,
             // --- 设置 / 数据 / 更新 ---
             data_paths,
             cache_size,

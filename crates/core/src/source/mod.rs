@@ -3,9 +3,17 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub mod aliyundrive;
 pub mod anirss;
+pub mod baidu;
+pub mod dropbox;
 pub mod feiniu;
+pub mod googledrive;
+pub mod onedrive;
 pub mod openlist;
+pub mod oplist;
+pub mod pan115;
+pub mod pan115_crypto;
 pub mod plugin_source;
 pub mod quark;
 pub mod quark_tv;
@@ -36,6 +44,12 @@ impl SourceKind {
     pub const ANIRSS: &'static str = "anirss";
     pub const FEINIU: &'static str = "feiniu";
     pub const STREMIO: &'static str = "stremio";
+    pub const ONEDRIVE: &'static str = "onedrive";
+    pub const GOOGLEDRIVE: &'static str = "googledrive";
+    pub const DROPBOX: &'static str = "dropbox";
+    pub const ALIYUNDRIVE: &'static str = "aliyundrive";
+    pub const BAIDU: &'static str = "baidu";
+    pub const PAN115: &'static str = "pan115";
 
     /// 插件源键前缀。插件贡献的源统一形如 `plugin:com.example.foo/mysrc`。
     const PLUGIN_PREFIX: &'static str = "plugin:";
@@ -44,6 +58,8 @@ impl SourceKind {
     pub const BUILTIN: &'static [&'static str] = &[
         Self::EMBY, Self::OPENLIST, Self::QUARK,
         Self::ANIRSS, Self::FEINIU, Self::STREMIO,
+        Self::ONEDRIVE, Self::GOOGLEDRIVE, Self::DROPBOX,
+        Self::ALIYUNDRIVE, Self::BAIDU, Self::PAN115,
     ];
 
     pub fn is_builtin(&self) -> bool {
@@ -74,6 +90,24 @@ impl SourceKind {
     }
     pub fn stremio() -> Self {
         Self::new(Self::STREMIO)
+    }
+    pub fn onedrive() -> Self {
+        Self::new(Self::ONEDRIVE)
+    }
+    pub fn googledrive() -> Self {
+        Self::new(Self::GOOGLEDRIVE)
+    }
+    pub fn dropbox() -> Self {
+        Self::new(Self::DROPBOX)
+    }
+    pub fn aliyundrive() -> Self {
+        Self::new(Self::ALIYUNDRIVE)
+    }
+    pub fn baidu() -> Self {
+        Self::new(Self::BAIDU)
+    }
+    pub fn pan115() -> Self {
+        Self::new(Self::PAN115)
     }
 
     /// Emby 是唯一的非「文件浏览型」源,全仓多处靠它分叉。
@@ -250,6 +284,34 @@ pub trait MediaSourceBackend: Send + Sync {
         entry: &SourceEntry,
         quality_id: Option<&str>,
     ) -> Result<ResolvedPlay, SourceError>;
+
+    /// 播放进度上报。有服务端观看记录的源(飞牛等)覆写它,纯网盘默认空实现。
+    ///
+    /// 调用方在播放中按既有节奏(5s 一拍)调用,并在停止时以 finished 再调一次。
+    /// 失败一律吞掉不打断播放 —— 进度没记上是小事,把正在看的片子打断是大事。
+    async fn report_progress(
+        &self,
+        _http: &reqwest::Client,
+        _server: &SourceServer,
+        _entry: &SourceEntry,
+        _position_secs: f64,
+        _duration_secs: f64,
+        _finished: bool,
+    ) -> Result<(), SourceError> {
+        Ok(())
+    }
+
+    /// **凭据轮换回写通道。** 返回 Some 表示该源的存盘凭据变了,调用方必须落盘。
+    ///
+    /// 存在的理由:trait 只拿得到 `&SourceServer`(只读),而 oplist 系与阿里云盘的
+    /// refresh_token 是**一次性的** —— 刷新一次旧值当场作废。不回写的话内存里能用,
+    /// 一重启就拿着死 token 去刷,表现为「用得好好的,重开就要重新授权」,且不报错。
+    ///
+    /// 调用方在每次 list_dir/search/resolve_play 之后取一次;返回的 map 并入
+    /// `SourceServer.extra` 后存盘。默认实现返回 None(凭据不轮换的源无需关心)。
+    fn take_rotated_credentials(&self, _server_id: &str) -> Option<HashMap<String, String>> {
+        None
+    }
 }
 
 // ---------- 各后端共用工具 ----------
@@ -323,7 +385,20 @@ mod tests {
             (SourceKind::anirss(), "anirss"),
             (SourceKind::feiniu(), "feiniu"),
             (SourceKind::stremio(), "stremio"),
+            (SourceKind::onedrive(), "onedrive"),
+            (SourceKind::googledrive(), "googledrive"),
+            (SourceKind::dropbox(), "dropbox"),
+            (SourceKind::aliyundrive(), "aliyundrive"),
+            (SourceKind::baidu(), "baidu"),
+            (SourceKind::pan115(), "pan115"),
         ];
+        // 这张表必须与 BUILTIN 一一对应 —— 新增源只加常量不补这里,
+        // 下面的逐条断言就完全跑不到它,等于没有守卫。
+        assert_eq!(
+            all.len(),
+            SourceKind::BUILTIN.len(),
+            "新增了内置源却没补进本测试表,线上表示无人把关"
+        );
         for (k, wire) in all {
             assert_eq!(
                 serde_json::to_string(&k).unwrap(),
@@ -352,16 +427,17 @@ mod tests {
         assert_eq!(k.as_plugin(), Some(("com.example.foo", "mysrc")));
         assert!(k.is_plugin() && !k.is_emby());
 
-        for builtin in [
-            SourceKind::emby(),
-            SourceKind::openlist(),
-            SourceKind::quark(),
-            SourceKind::anirss(),
-            SourceKind::feiniu(),
-            SourceKind::stremio(),
-        ] {
+        // 直接遍历 BUILTIN:任何新增内置源都自动纳入,不会漏。
+        for name in SourceKind::BUILTIN {
+            let builtin = SourceKind::new(*name);
+            assert!(builtin.is_builtin(), "{builtin} 不认自己是内置源");
             assert!(!builtin.is_plugin(), "内置源 {builtin} 被误判成插件源");
             assert_eq!(builtin.as_plugin(), None);
+        }
+        // 键重复会让后注册的后端悄悄顶掉前一个。
+        let mut seen = std::collections::HashSet::new();
+        for name in SourceKind::BUILTIN {
+            assert!(seen.insert(*name), "内置源键重复: {name}");
         }
 
         // 残缺键:少 src_id / 少 plugin_id / 没有分隔符,一律不许拆出来
@@ -386,7 +462,16 @@ mod tests {
             (SourceKind::anirss(), "Anirss"),
             (SourceKind::feiniu(), "Feiniu"),
             (SourceKind::stremio(), "Stremio"),
+            // 下面 6 个没有"老 enum"可兼容,但它们同样靠这个标签当**账号 id**
+            // (base_url 为空的源),所以一旦发版就同样不能再改。
+            (SourceKind::onedrive(), "Onedrive"),
+            (SourceKind::googledrive(), "Googledrive"),
+            (SourceKind::dropbox(), "Dropbox"),
+            (SourceKind::aliyundrive(), "Aliyundrive"),
+            (SourceKind::baidu(), "Baidu"),
+            (SourceKind::pan115(), "Pan115"),
         ];
+        assert_eq!(expected.len(), SourceKind::BUILTIN.len(), "新增源未补进本表");
         for (k, old_debug) in expected {
             assert_eq!(
                 k.legacy_debug_label(),
