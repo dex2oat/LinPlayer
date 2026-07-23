@@ -28,15 +28,30 @@ pub const ALL: &[PluginPermission] = &[
         description: "读取当前登录用户和服务器地址。" },
     PluginPermission { id: "emby.api", title: "调用 Emby 接口", dangerous: true,
         description: "以当前登录身份向 Emby 服务器发起任意 API 请求。" },
-    PluginPermission { id: "emby.credentials", title: "读取登录账号密码", dangerous: true,
-        description: "读取你添加服务器时填写的用户名与密码(用于代你登录配套网站)。" },
+    PluginPermission { id: "sources", title: "提供数据源", dangerous: true,
+        description: "向应用注册可浏览、搜索、播放的媒体源,出现在你的服务器列表里。" },
     PluginPermission { id: "extensions", title: "扩展界面", dangerous: false,
-        description: "向应用注册侧边栏入口、操作按钮、设置页等扩展点。" },
-    PluginPermission { id: "cfproxy", title: "CF 优选反代", dangerous: true,
-        description: "对你添加的服务器做 Cloudflare 优选 IP 测速,并启用本地反代改写其网络线路。" },
+        description: "向应用注册侧边栏入口、操作按钮、设置页等界面模块。" },
+    PluginPermission { id: "sandbox", title: "自定义界面", dangerous: true,
+        description: "在隔离沙箱里渲染插件自带的网页界面(拿不到应用本身的任何接口)。" },
     PluginPermission { id: "log", title: "写日志", dangerous: false,
         description: "输出调试日志(始终允许)。" },
 ];
+
+/// v1 有、v2 已删除的权限。**单独列出来是为了给用户一句人话**,
+/// 而不是让老插件撞上「未知权限: cfproxy」这种像是 App 出了 bug 的报错。
+///
+/// - `emby.credentials`:宿主不再持久化明文密码,插件要账密请自己弹表单存自己的 storage。
+/// - `cfproxy`:CF 优选反代本来就是宿主的活,包成插件是绕圈;改做宿主内置设置项。
+pub const REMOVED: &[(&str, &str)] = &[
+    ("emby.credentials", "宿主不再保存登录密码;请改为在插件自己的设置页里让用户填写"),
+    ("cfproxy", "CF 优选反代已改为应用内置功能,不再经由插件"),
+];
+
+/// 这个权限是不是 v2 里被删掉的。是的话返回给用户看的原因。
+pub fn removed_reason(id: &str) -> Option<&'static str> {
+    REMOVED.iter().find(|(k, _)| *k == id).map(|(_, why)| *why)
+}
 
 /// 始终授予、无需声明的权限。
 pub const IMPLICITLY_GRANTED: &[&str] = &["log"];
@@ -88,7 +103,24 @@ mod tests {
 
     #[test]
     fn known_permissions() {
-        assert!(is_known("emby.credentials"));
+        assert!(is_known("sources"));
+        assert!(is_known("sandbox"));
         assert!(!is_known("filesystem"));
+    }
+
+    /// v2 删掉的权限必须**同时**满足:不再是已知权限(manifest 校验会拒),
+    /// 且能给出一句人话原因(拒的时候别让用户以为是 App 坏了)。
+    /// 只删一半 —— 比如从 ALL 里删了却忘了进 REMOVED —— 老插件会撞上
+    /// 「未知权限: cfproxy」,看起来像 bug 而不是设计。
+    #[test]
+    fn removed_permissions_are_rejected_with_a_human_reason() {
+        for (id, _) in REMOVED {
+            assert!(!is_known(id), "{id} 已宣布删除,却还在 ALL 里 —— 会被继续放行");
+            let why = removed_reason(id).unwrap_or("");
+            assert!(!why.is_empty(), "{id} 被删了却没给原因");
+        }
+        assert_eq!(removed_reason("http"), None, "在用的权限不该被当成已删除");
+        assert!(removed_reason("emby.credentials").is_some());
+        assert!(removed_reason("cfproxy").is_some());
     }
 }

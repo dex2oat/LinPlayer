@@ -134,7 +134,7 @@ fn abs_thumb(base: &str, thumb: &str) -> String {
 #[async_trait::async_trait]
 impl MediaSourceBackend for OpenListBackend {
     fn kind(&self) -> SourceKind {
-        SourceKind::Openlist
+        SourceKind::openlist()
     }
 
     async fn list_dir(

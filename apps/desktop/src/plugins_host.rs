@@ -2,9 +2,11 @@
 //!
 //! - player:直连 mpv Player。
 //! - emby:走 config 里的当前登录账号(server/token)。
-//! - ui:发 `plugin://ui-request` 事件给前端;需返回值的(showForm 等)挂 oneshot 等前端
-//!   `plugin_ui_respond` 回填。React 宿主 UI 是下一步,这里把管道铺好即可。
-//! - cfproxy:最小(listServers 从账号列出);重活留待接 Phase 5 的 cf 控制器。
+//! - ui:发 `plugin://ui-request` 事件给前端;需返回值的(showForm/render 等)挂 oneshot
+//!   等前端 `plugin_ui_respond` 回填。
+//!
+//! v2 变化:删掉 cfproxy 通道(CF 优选改做宿主内置功能)和 emby.getCredentials
+//! (宿主不再持久化明文密码,插件要账密请自己弹表单存自己的 storage)。
 
 use std::sync::Arc;
 
@@ -37,7 +39,6 @@ impl PluginHost for DesktopPluginHost {
             "player" => self.player(method, args),
             "emby" => self.emby(method, args).await,
             "ui" => self.ui(plugin_id, method, args).await,
-            "cfproxy" => self.cfproxy(method, args),
             other => Err(format!("未知能力通道: {other}")),
         }
     }
@@ -48,6 +49,12 @@ impl PluginHost for DesktopPluginHost {
 
     fn extensions_changed(&self) {
         let _ = self.app.emit("plugin://extensions-changed", ());
+    }
+
+    fn sources_changed(&self, plugin_id: &str) {
+        // 重建源分派表要在 Tauri 的异步上下文里做(要拿 AppState 的锁),
+        // 这里只发信号,真正的重建在 lib.rs 的监听里。
+        let _ = self.app.emit("plugin://sources-changed", json!({ "pluginId": plugin_id }));
     }
 }
 
@@ -107,8 +114,6 @@ impl DesktopPluginHost {
                 "userId": account.user_id,
             })),
             "getCurrentUser" => Ok(json!({ "id": account.user_id, "name": account.user_name })),
-            // PoC 登录不持久化明文密码,凭据不可用(honest)。
-            "getCredentials" => Err("PoC 未持久化登录密码,凭据不可用".to_string()),
             "apiRequest" => {
                 let opts = args.into_iter().next().unwrap_or(Json::Null);
                 self.emby_api(&account.server, &account.token, opts).await
@@ -165,7 +170,7 @@ impl DesktopPluginHost {
         // 即发即忘:仅通知前端,立即返回。
         let fire_and_forget = matches!(
             method,
-            "showToast" | "updateProgress" | "closeProgress" | "openPage"
+            "showToast" | "updateProgress" | "closeProgress" | "openPage" | "render"
         );
         if fire_and_forget {
             let _ = self.app.emit(
@@ -187,29 +192,6 @@ impl DesktopPluginHost {
         rx.await.map_err(|_| "UI 请求未获前端响应".to_string())
     }
 
-    fn cfproxy(&self, method: &str, _args: Vec<Json>) -> Result<Json, String> {
-        // ponytail: 最小实现。listServers 从账号列出;测速/反代重活待接 Phase 5 cf 控制器。
-        match method {
-            "listServers" => {
-                let st = self.state();
-                let cfg = st.config.lock().unwrap();
-                let servers: Vec<Json> = cfg
-                    .accounts
-                    .iter()
-                    .map(|a| {
-                        let host = reqwest::Url::parse(&a.server)
-                            .ok()
-                            .and_then(|u| u.host_str().map(|s| s.to_string()))
-                            .unwrap_or_default();
-                        json!({ "id": a.server, "name": a.user_name, "host": host, "url": a.server, "active": false })
-                    })
-                    .collect();
-                Ok(json!(servers))
-            }
-            "getStatus" => Ok(json!({ "active": [] })),
-            _ => Ok(Json::Null),
-        }
-    }
 }
 
 /// 前端回填一次 UI 请求(showForm 的返回值等)。

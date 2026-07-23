@@ -11,9 +11,14 @@ use rquickjs::prelude::{Async, Rest};
 use rquickjs::{Coerced, Ctx, Exception, Function, Object, Persistent, Value};
 use serde_json::{json, Value as Json};
 
+use super::contributions::{Contribution, ContributionKind};
 use super::convert::{js_to_json, json_to_js};
-use super::extensions::{ExtensionType, RegisteredExtension};
 use super::state::{CtxState, JsOut, JsonVal, PersistentFn};
+
+/// `ctx.errors.unsupported()` 抛出的异常文案前缀。数据源桥按这个前缀把 JS 异常
+/// 还原成 `SourceError::unsupported()`(「该源不支持搜索」→ UI 退回本地过滤),
+/// 而不是当成一次真失败弹红字。
+pub const UNSUPPORTED_MARKER: &str = "__LP_UNSUPPORTED__";
 
 fn throw<'js>(ctx: &Ctx<'js>, msg: String) -> rquickjs::Error {
     Exception::throw_message(ctx, &msg)
@@ -74,6 +79,74 @@ fn lifecycle_fn<'js>(ctx: &Ctx<'js>, state: &Arc<CtxState>, name: &'static str) 
         st.lifecycle.lock().unwrap().insert(name.to_string(), p);
         Ok(())
     })
+}
+
+/// 给报错用的人话类型名。
+fn type_name_of(v: &Json) -> &'static str {
+    match v {
+        Json::Null => "null",
+        Json::Bool(_) => "布尔值",
+        Json::Number(_) => "数字",
+        Json::String(_) => "字符串",
+        Json::Array(_) => "数组",
+        Json::Object(_) => "对象",
+    }
+}
+
+/// 抽出描述对象里的函数存进 handler 表、原位换成 `{__handler__:id}`,然后注册成贡献点。
+/// 返回 `(贡献id, 是否新增)`。`ctx.extensions.register` 和 `ctx.sources.register` 共用。
+fn register_contribution<'js>(
+    ctx: &Ctx<'js>,
+    st: &Arc<CtxState>,
+    kind: ContributionKind,
+    descriptor: Value<'js>,
+) -> rquickjs::Result<(String, bool)> {
+    let mut newh: Vec<(String, PersistentFn)> = Vec::new();
+    let data = js_to_json(&descriptor, &mut |func| {
+        let id = st.next_handler_id();
+        newh.push((id.clone(), Persistent::save(ctx, func)));
+        id
+    });
+    /* ★ 描述必须是**对象**,而且必须有 id。
+       挡的是这一类真实错误:`ctx.extensions.register('panels', 'stats', {…})`
+       —— 多写了一个参数(它的签名是 (kind, 描述),而隔壁 ctx.sources.register 是
+       (源id, 描述),两个形状不一样,写混很自然)。descriptor 收到的是字符串
+       'stats',老代码照单全收:data 存成一个裸字符串、id 编一个 `ext_7`,
+       注册**成功**返回。表现是插件已启用、面板出现在 slot 列表里、
+       render 调用却永远返回 null —— 一路无声。
+       现在当场抛,把三十分钟的排查变成一行报错。 */
+    if !data.is_object() {
+        return Err(throw(
+            ctx,
+            format!(
+                "{}.register 的描述必须是一个对象;收到的是 {} —— \
+                 参数写多了?ctx.extensions.register(类型, 描述) / ctx.sources.register(源id, 描述)",
+                kind.id(),
+                type_name_of(&data)
+            ),
+        ));
+    }
+    {
+        let mut h = st.handlers.lock().unwrap();
+        for (id, p) in newh {
+            h.insert(id, p);
+        }
+    }
+    let Some(cid) = data.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
+        return Err(throw(
+            ctx,
+            format!("{}.register 的描述必须带一个非空的 id 字段", kind.id()),
+        ));
+    };
+    let registered = st.registry.register(Contribution {
+        plugin_id: st.plugin_id.clone(),
+        kind,
+        id: cid.clone(),
+        data,
+        from_manifest: false,
+    });
+    st.host.extensions_changed();
+    Ok((cid, registered))
 }
 
 pub fn install<'js>(ctx: &Ctx<'js>, state: &Arc<CtxState>, meta: &Json) -> rquickjs::Result<()> {
@@ -197,8 +270,12 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: &Arc<CtxState>, meta: &Json) -> rquic
     c.set("player", player)?;
 
     // ---- ctx.ui(全部需 ui)----
+    // `render` 是 v2 新增的声明式 UI 入口:插件交一棵 JSON 描述树,宿主用自己的
+    // React 组件渲染(桌面/手机/TV 各一套,TV 的遥控器焦点因此白拿)。
+    // 其余几个是它的糖 —— showForm/showList 本质就是预置形状的 render。
     let ui = Object::new(ctx.clone())?;
     for m in [
+        "render",
         "showToast", "showDialog", "showForm", "showList", "openPage",
         "showProgress", "updateProgress", "closeProgress",
     ] {
@@ -211,47 +288,28 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: &Arc<CtxState>, meta: &Json) -> rquic
     emby.set("getServerUrl", host_fn(ctx, state, Some("emby.read"), "emby", "getServerUrl")?)?;
     emby.set("getServerInfo", host_fn(ctx, state, Some("emby.read"), "emby", "getServerInfo")?)?;
     emby.set("getCurrentUser", host_fn(ctx, state, Some("emby.read"), "emby", "getCurrentUser")?)?;
-    emby.set("getCredentials", host_fn(ctx, state, Some("emby.credentials"), "emby", "getCredentials")?)?;
+    // v2 删除 getCredentials:宿主不再持久化明文密码。插件要账密请自己弹表单
+    // 存进自己的 storage(每插件隔离)。见 permission::REMOVED。
     emby.set("apiRequest", host_fn(ctx, state, Some("emby.api"), "emby", "apiRequest")?)?;
     c.set("emby", emby)?;
 
-    // ---- ctx.extensions ----
+    // ---- ctx.extensions:动态贡献 panels / actions / sandboxViews ----
+    // 权限**按贡献点类型各自校验**(见 ContributionKind::required_permission),
+    // 不是一个笼统的 "extensions" 通行证 —— 否则拿到 extensions 就能顺手注册
+    // 数据源和沙箱视图,而用户在授权弹窗里只看到「扩展界面」。
     let ext = Object::new(ctx.clone())?;
     {
         let st = state.clone();
         ext.set(
             "register",
-            Function::new(ctx.clone(), move |ctx: Ctx<'js>, type_str: String, descriptor: Value<'js>| -> rquickjs::Result<Value<'js>> {
-                st.require("extensions").map_err(|e| throw(&ctx, e))?;
-                let etype = ExtensionType::from_id(&type_str)
-                    .ok_or_else(|| throw(&ctx, format!("未知扩展点类型: {type_str}")))?;
-                // 抽出描述里的函数存进 handler 表,原位换成 {__handler__:id}。
-                let mut newh: Vec<(String, PersistentFn)> = Vec::new();
-                let data = js_to_json(&descriptor, &mut |func| {
-                    let id = st.next_handler_id();
-                    newh.push((id.clone(), Persistent::save(&ctx, func)));
-                    id
-                });
-                {
-                    let mut h = st.handlers.lock().unwrap();
-                    for (id, p) in newh {
-                        h.insert(id, p);
-                    }
-                }
-                let ext_id = data
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| format!("ext_{}", st.next_handler_id()));
-                let registered = st.registry.register(RegisteredExtension {
-                    plugin_id: st.plugin_id.clone(),
-                    type_: etype,
-                    id: ext_id.clone(),
-                    data,
-                    from_manifest: false,
-                });
-                st.host.extensions_changed();
-                json_to_js(&ctx, &json!({ "id": ext_id, "registered": registered }))
+            Function::new(ctx.clone(), move |ctx: Ctx<'js>, kind_str: String, descriptor: Value<'js>| -> rquickjs::Result<Value<'js>> {
+                let kind = ContributionKind::from_id(&kind_str)
+                    .ok_or_else(|| throw(&ctx, format!("未知贡献点类型: {kind_str}")))?;
+                // 只查 kind 自己要的那一条 —— 和 manifest 静态校验**同一把尺子**。
+                // 多查一条 "extensions" 会让「manifest 过了、运行时被拒」成为可能。
+                st.require(kind.required_permission()).map_err(|e| throw(&ctx, e))?;
+                let (id, registered) = register_contribution(&ctx, &st, kind, descriptor)?;
+                json_to_js(&ctx, &json!({ "id": id, "registered": registered }))
             })?,
         )?;
     }
@@ -259,11 +317,11 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: &Arc<CtxState>, meta: &Json) -> rquic
         let st = state.clone();
         ext.set(
             "unregister",
-            Function::new(ctx.clone(), move |ctx: Ctx<'js>, type_str: String, id: String| -> rquickjs::Result<()> {
+            Function::new(ctx.clone(), move |ctx: Ctx<'js>, kind_str: String, id: String| -> rquickjs::Result<()> {
                 st.require("extensions").map_err(|e| throw(&ctx, e))?;
-                let etype = ExtensionType::from_id(&type_str)
-                    .ok_or_else(|| throw(&ctx, format!("未知扩展点类型: {type_str}")))?;
-                st.registry.unregister(&st.plugin_id, etype, &id);
+                let kind = ContributionKind::from_id(&kind_str)
+                    .ok_or_else(|| throw(&ctx, format!("未知贡献点类型: {kind_str}")))?;
+                st.registry.unregister(&st.plugin_id, kind, &id);
                 st.host.extensions_changed();
                 Ok(())
             })?,
@@ -271,15 +329,76 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: &Arc<CtxState>, meta: &Json) -> rquic
     }
     c.set("extensions", ext)?;
 
-    // ---- ctx.cfproxy(全部需 cfproxy)----
-    let cf = Object::new(ctx.clone())?;
-    for m in [
-        "listServers", "getStatus", "openPanel", "speedTest", "disable",
-        "setSchedule", "restore", "teardown",
-    ] {
-        cf.set(m, host_fn(ctx, state, Some("cfproxy"), "cfproxy", m)?)?;
+    // ---- ctx.sources:插件即数据源 ----
+    // 三个函数就是一个完整数据源。宿主把它接进 MediaSourceBackend,于是浏览页 /
+    // 搜索 / 播放 / 外挂字幕 / 多清晰度 / 跨服聚合全部白拿 —— 零新页面零新命令。
+    //
+    //   ctx.sources.register("mysrc", { listDir, search, resolvePlay })
+    let sources = Object::new(ctx.clone())?;
+    {
+        let st = state.clone();
+        sources.set(
+            "register",
+            Function::new(ctx.clone(), move |ctx: Ctx<'js>, src_id: String, handlers: Value<'js>| -> rquickjs::Result<Value<'js>> {
+                st.require("sources").map_err(|e| throw(&ctx, e))?;
+                if src_id.trim().is_empty() {
+                    return Err(throw(&ctx, "数据源 id 不能为空".to_string()));
+                }
+                // 把 id 拍进描述对象,后面统一走 register_contribution 取 id。
+                let obj = handlers
+                    .as_object()
+                    .ok_or_else(|| throw(&ctx, "第二个参数必须是含 listDir/search/resolvePlay 的对象".to_string()))?
+                    .clone();
+                obj.set("id", src_id.clone())?;
+                let (id, registered) = register_contribution(
+                    &ctx,
+                    &st,
+                    ContributionKind::DataSources,
+                    obj.into_value(),
+                )?;
+                st.host.sources_changed(&st.plugin_id);
+                json_to_js(&ctx, &json!({ "id": id, "registered": registered }))
+            })?,
+        )?;
     }
-    c.set("cfproxy", cf)?;
+    {
+        let st = state.clone();
+        sources.set(
+            "unregister",
+            Function::new(ctx.clone(), move |ctx: Ctx<'js>, src_id: String| -> rquickjs::Result<()> {
+                st.require("sources").map_err(|e| throw(&ctx, e))?;
+                st.registry
+                    .unregister(&st.plugin_id, ContributionKind::DataSources, &src_id);
+                st.host.sources_changed(&st.plugin_id);
+                st.host.extensions_changed();
+                Ok(())
+            })?,
+        )?;
+    }
+    c.set("sources", sources)?;
+
+    // ---- ctx.util:纯函数小工具,无需权限 ----
+    // isVideoName 直接复用宿主那份扩展名表 —— 插件各自维护一份必然漂移,
+    // 而漂移的后果是「某种格式在内置源能播、在插件源里根本不显示」。
+    let util = Object::new(ctx.clone())?;
+    util.set(
+        "isVideoName",
+        Function::new(ctx.clone(), |name: Coerced<String>| -> rquickjs::Result<bool> {
+            Ok(crate::source::is_video_file_name(&name.0))
+        })?,
+    )?;
+    c.set("util", util)?;
+
+    // ---- ctx.errors:让插件表达「不支持」而不是「失败」 ----
+    let errors = Object::new(ctx.clone())?;
+    errors.set(
+        "unsupported",
+        Function::new(ctx.clone(), |ctx: Ctx<'js>, msg: Rest<Coerced<String>>| -> rquickjs::Result<Value<'js>> {
+            let extra = msg.0.first().map(|m| m.0.as_str()).unwrap_or("");
+            Err(throw(&ctx, format!("{UNSUPPORTED_MARKER}{extra}")))
+        })?,
+    )?;
+    c.set("errors", errors)?;
 
     // ---- ctx.sleep(无需权限,封顶 10s)----
     c.set(

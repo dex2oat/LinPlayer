@@ -8,6 +8,7 @@ import {
   IconCalendar,
   IconServer,
   IconSettings,
+  IconPlugin,
 } from "./icons";
 
 /** 路由 id。netdisk / anirss / addserver 是内部路由(不进侧栏):
@@ -19,6 +20,7 @@ export type PageId =
   | "downloads"
   | "rankings"
   | "servers"
+  | "plugins"
   | "settings"
   | "addserver"
   | "netdisk"
@@ -41,8 +43,11 @@ export const NAV: NavItem[] = [
   { id: "calendar", label: "追剧日历", icon: IconCalendar },
 ];
 
-/** 侧栏底部(管理区):服务器 / 设置。 */
+/** 侧栏底部(管理区):服务器 / 插件 / 设置。
+ *  插件从设置里的一个小面板提到这里 —— 它现在是市场 + 已装 + 源三个页签,
+ *  塞在设置的第 N 项里等于没人找得到。 */
 export const NAV_FOOT: NavItem[] = [
   { id: "servers", label: "服务器", icon: IconServer },
+  { id: "plugins", label: "插件", icon: IconPlugin },
   { id: "settings", label: "设置", icon: IconSettings },
 ];

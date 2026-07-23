@@ -26,6 +26,15 @@ pub trait PluginHost: Send + Sync {
 
     /// 扩展注册表发生变化 -> 通知前端重新拉取渲染。
     fn extensions_changed(&self) {}
+
+    /// 该插件贡献的数据源发生变化 -> 宿主重建它在源分派表里的条目。
+    ///
+    /// 跟 `extensions_changed` 分开是因为两者的代价差着量级:前者只是让前端重拉一次
+    /// JSON,后者要动 `HashMap<SourceKind, Arc<dyn MediaSourceBackend>>` 那张会被
+    /// 播放链路读的表。合成一个会让每次注册面板都去重建源表。
+    fn sources_changed(&self, plugin_id: &str) {
+        let _ = plugin_id;
+    }
 }
 
 /// 测试/无宿主环境用:所有平台能力返回 Null。

@@ -244,7 +244,7 @@ mod tests {
         assert_eq!(a.token, "t");
         assert!(a.lines.is_empty());
         assert!(!a.allow_insecure_tls, "缺字段必须默认严格校验 TLS,不能默认放行");
-        assert!(matches!(a.source_kind, crate::source::SourceKind::Emby));
+        assert!(a.source_kind.is_emby());
     }
 
     #[test]

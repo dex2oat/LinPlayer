@@ -44,16 +44,14 @@ pub struct Account {
     /// 仅对本服务器主机放行,不影响更新下载/WebDAV/其它主机。
     #[serde(default)]
     pub allow_insecure_tls: bool,
-    /// 源类型:emby(默认)/ openlist / quark / anirss / feiniu。
-    #[serde(default = "default_source_kind")]
+    /// 源类型:emby(默认)/ openlist / quark / anirss / feiniu / stremio,
+    /// 或插件贡献的 `plugin:<插件id>/<源id>`。是**开放键**,见 `source::SourceKind`。
+    /// `SourceKind::default()` 就是 emby,故直接 `#[serde(default)]` 即可。
+    #[serde(default)]
     pub source_kind: crate::source::SourceKind,
-    /// 浏览型源的连接凭据;source_kind==Emby 时为 None。
+    /// 浏览型源的连接凭据;source_kind 为 emby 时为 None。
     #[serde(default)]
     pub source: Option<crate::source::SourceServer>,
-}
-
-fn default_source_kind() -> crate::source::SourceKind {
-    crate::source::SourceKind::Emby
 }
 
 impl Account {
@@ -93,7 +91,7 @@ impl Account {
     }
 
     pub fn is_file_browse(&self) -> bool {
-        self.source_kind != crate::source::SourceKind::Emby
+        !self.source_kind.is_emby()
     }
 }
 
@@ -453,6 +451,13 @@ pub struct AppConfig {
     /// 这里存一份只是为了手机控制台能显示当前值(它读不到 WebView 的 localStorage)。
     #[serde(default)]
     pub theme: String,
+    /// 用户订阅的**第三方**插件源。官方源不在这里(它是编译期常量),
+    /// 否则官方源的 URL 一旦改动,老用户的配置文件里会永远钉着旧地址。
+    #[serde(default)]
+    pub plugin_sources: Vec<crate::plugins::PluginSource>,
+    /// 官方插件源开关。**可禁不可删**:删掉之后新用户开箱即空,再想找回来只能手打 URL。
+    #[serde(default = "yes")]
+    pub plugin_official_enabled: bool,
 }
 
 fn yes() -> bool {
@@ -948,7 +953,7 @@ mod tests {
         assert_eq!(cfg.accounts.len(), 1);
         let a = &cfg.accounts[0];
         assert_eq!(a.token, "t");
-        assert!(matches!(a.source_kind, crate::source::SourceKind::Emby), "老账号必须默认当 Emby");
+        assert!(a.source_kind.is_emby(), "老账号必须默认当 Emby");
         assert!(a.source.is_none());
         assert!(a.lines.is_empty());
     }

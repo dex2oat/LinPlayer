@@ -252,7 +252,24 @@ export type ServerLine = {
   remark: string | null;
 };
 
-export type SourceKind = "Emby" | "Openlist" | "Quark" | "Anirss" | "Feiniu" | "Stremio";
+/** 源类型。**线上格式是全小写裸字符串**(核层 `SourceKind` 是 serde(transparent) 的
+ *  newtype;在它还是 enum 的年代也是 rename_all="lowercase")。
+ *
+ *  ★ 这里曾经写成首字母大写的 "Emby" | "Openlist" | …,于是**每一处比较都恒为 false**、
+ *  每一次 sourceLogin 都送出一个后端不认识的 kind —— 而两边都不报错:
+ *  徽标显示成空、Ani-RSS 卡点进去落到网盘页、OpenList 登录静默失败。
+ *  Rust 侧 `source_kind_wire_strings_match_the_frontend_union` 现在钉着这个联合。
+ *
+ *  插件贡献的源是 `plugin:<插件id>/<源id>`,不在这个闭集合里 —— 所以是开放联合,
+ *  别改回 `Record<SourceKind, …>` 那种要求穷举的写法。 */
+export type SourceKind =
+  | "emby"
+  | "openlist"
+  | "quark"
+  | "anirss"
+  | "feiniu"
+  | "stremio"
+  | (string & {});
 
 /** 连通状态三态。unknown = 还没探过(按灰显示),与 down「探过确实不通」同色不同义。 */
 export type AccountStatus = "ok" | "reauth" | "down" | "unknown";
@@ -1156,12 +1173,32 @@ export const whisperDeps = () => invoke<WhisperDeps>("whisper_deps");
 export const whisperDownloadFfmpeg = () => invoke<string>("whisper_download_ffmpeg");
 
 // ---------- 插件 ----------
+/** 字段与核层 `PluginManager::list()` 一一对应 —— 这里漏一个字段,前端就会以为
+ *  「后端没透传」然后去写一段假的兜底逻辑([stale-waijie-lies] 那个坑)。 */
 export type PluginInfo = {
   id: string;
   name: string;
   version: string;
+  author: string;
+  description: string;
+  permissions: string[];
+  httpAllowedHosts: string[];
+  icon: string | null;
+  homepage: string | null;
+  /** loaded / disabled / error */
+  status: string;
   enabled: boolean;
-  [k: string]: unknown;
+  error: string | null;
+  /** 开发模式挂载(目录直接映射,改完存盘热重载)。 */
+  dev: boolean;
+  category: string;
+  apiVersion: number;
+  contributes: {
+    dataSources: number;
+    panels: number;
+    actions: number;
+    sandboxViews: number;
+  };
 };
 export const pluginList = () => invoke<PluginInfo[]>("plugin_list");
 export const pluginEnable = (id: string) => invoke<void>("plugin_enable", { id });
@@ -1170,6 +1207,138 @@ export const pluginDisable = (id: string) => invoke<void>("plugin_disable", { id
 export const pluginInstall = (path: string) =>
   invoke<Record<string, unknown>>("plugin_install", { path });
 export const pluginUninstall = (id: string) => invoke<void>("plugin_uninstall", { id });
+
+/** 原生文件选择器装 .ipk。返回 null = 用户取消。 */
+export const pluginPickInstall = () =>
+  invoke<Record<string, unknown> | null>("plugin_pick_install");
+/** 原生目录选择器挂一个开发中的插件目录(改完存盘即热重载)。返回 null = 取消。 */
+export const pluginPickDevDir = () =>
+  invoke<Record<string, unknown> | null>("plugin_pick_dev_dir");
+export const pluginReload = (id: string) => invoke<void>("plugin_reload", { id });
+/** 轮询开发模式插件的文件变化;true = 有插件被重载了,该刷新界面。 */
+export const pluginDevPoll = () => invoke<boolean>("plugin_dev_poll");
+
+/** 某类贡献点的全部条目。kind: dataSources / panels / actions / sandboxViews。 */
+export const pluginExtensions = (typeId: string) =>
+  invoke<Record<string, unknown>[]>("plugin_extensions", { typeId });
+/** 挂在某个 slot 的面板。slot 见 PANEL_SLOTS(home.stats/sidebar/settings/player.overlay/page)。 */
+export const pluginPanels = (slot: string) =>
+  invoke<PluginPanel[]>("plugin_panels", { slot });
+/** 已启用插件贡献的数据源(「添加服务器」页据此列出可选源)。 */
+export const pluginDataSources = () => invoke<PluginDataSource[]>("plugin_sources");
+
+/** 触发某贡献点的 handler(按钮点击等)。 */
+export const pluginTrigger = (
+  pluginId: string,
+  typeId: string,
+  extId: string,
+  args?: unknown[],
+) => invoke<unknown>("plugin_trigger", { pluginId, typeId, extId, args });
+/** 调 data 里某具名字段的 handler(面板的 render、表单的 submit)。 */
+export const pluginInvokeField = (
+  pluginId: string,
+  typeId: string,
+  extId: string,
+  field: string,
+  args?: unknown[],
+) => invoke<unknown>("plugin_invoke_field", { pluginId, typeId, extId, field, args });
+/** 回填一次需要返回值的 UI 请求(showForm/showDialog/showList/showProgress)。 */
+export const pluginUiRespond = (id: number, value: unknown) =>
+  invoke<void>("plugin_ui_respond", { id, value });
+
+export type PluginPanel = {
+  pluginId: string;
+  id: string;
+  data: Record<string, unknown>;
+  [k: string]: unknown;
+};
+export type PluginDataSource = {
+  /** 直接可当 SourceKind 用:`plugin:<插件id>/<源id>`。 */
+  kind: string;
+  pluginId: string;
+  sourceId: string;
+  name: string;
+  /** manifest 里声明的登录表单字段;null = 这个源不需要登录。 */
+  auth: { fields: PluginAuthField[] } | null;
+};
+export type PluginAuthField = {
+  id: string;
+  label?: string;
+  type?: string;
+  placeholder?: string;
+  required?: boolean;
+};
+
+// ---------- 插件市场 ----------
+/** 权限词表(人话说明)。**由核层透出**,前端不许抄一份 —— 抄了就会漏新权限。 */
+export type PluginPermissionInfo = {
+  id: string;
+  title: string;
+  description: string;
+  dangerous: boolean;
+};
+export const pluginPermissionCatalog = () =>
+  invoke<PluginPermissionInfo[]>("plugin_permission_catalog");
+
+export type PluginSource = {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  /** 官方源。**可禁不可删**。 */
+  builtin: boolean;
+};
+export type MarketVersion = {
+  version: string;
+  api_version: number;
+  min_app_version: string | null;
+  package_url: string;
+  /** null = 这个源没提供校验和,UI 要如实标出来。 */
+  sha256: string | null;
+  published_at: string | null;
+  changelog: string | null;
+};
+export type MarketPlugin = {
+  id: string;
+  name: string;
+  description: string;
+  author: string;
+  /** 构建期内联的 data URI,不会碎图也不额外发请求。 */
+  icon: string | null;
+  category: string | null;
+  tags: string[];
+  targets: string[];
+  permissions: string[];
+  contributes: Record<string, unknown> | null;
+  versions: MarketVersion[];
+  source_id: string;
+  source_name: string;
+  /** false = 第三方源,卡片上要打徽章。 */
+  from_builtin: boolean;
+};
+/** errors 是**按源**收集的:一个第三方源挂了不该让整个市场变成报错页。 */
+export type MarketList = {
+  plugins: MarketPlugin[];
+  errors: { source: string; error: string }[];
+  apiVersion: number;
+  cached: boolean;
+};
+
+export const pluginMarketSources = () => invoke<PluginSource[]>("plugin_market_sources");
+export const pluginMarketAddSource = (name: string, url: string) =>
+  invoke<PluginSource[]>("plugin_market_add_source", { name, url });
+export const pluginMarketRemoveSource = (id: string) =>
+  invoke<PluginSource[]>("plugin_market_remove_source", { id });
+export const pluginMarketToggleSource = (id: string, enabled: boolean) =>
+  invoke<PluginSource[]>("plugin_market_toggle_source", { id, enabled });
+export const pluginMarketList = (refresh?: boolean) =>
+  invoke<MarketList>("plugin_market_list", { refresh });
+/** 下载 → 校验 sha256 → 装。version 省略 = 当前宿主能装的最新版。 */
+export const pluginMarketInstall = (id: string, version?: string) =>
+  invoke<{ info: Record<string, unknown>; version: string; verified: boolean }>(
+    "plugin_market_install",
+    { id, version },
+  );
 
 // ---------- 代理 ----------
 export const getProxy = () => invoke<ProxyConfig>("get_proxy");

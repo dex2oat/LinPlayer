@@ -22,6 +22,8 @@ import NetdiskPage from "../pages/NetdiskPage";
 import ServersPage from "../pages/ServersPage";
 import AddServerPage from "../pages/AddServerPage";
 import SettingsPage from "../pages/SettingsPage";
+import PluginsPage from "../pages/PluginsPage";
+import { PluginUiHost } from "../components/PluginHost";
 import AniRssPage from "../pages/AniRssPage";
 import CalendarPage from "../pages/CalendarPage";
 import PageBoundary from "./PageBoundary";
@@ -200,6 +202,8 @@ export default function Shell({
             onBack={() => nav("servers")}
           />
         );
+      case "plugins":
+        return <PluginsPage />;
       case "settings":
         return <SettingsPage theme={theme} setTheme={setTheme} />;
     }
@@ -259,6 +263,10 @@ export default function Shell({
           </div>
         </div>
       </div>
+
+      {/* 插件弹出的 UI(toast/对话框/表单/列表/进度)。挂 Shell 是因为它必须
+          盖在任何一页之上,而且切页时不能被卸载 —— 插件那边的 await 还悬着。 */}
+      <PluginUiHost />
 
       {/* 搜索浮层挂在 Shell 而非 App:它要用 openDetail(点结果进详情,不是直接开播)和切服务器。 */}
       {searchOpen && (

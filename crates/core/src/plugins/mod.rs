@@ -6,15 +6,17 @@
 //!
 //! 无 Apple 目标 -> 只支持 runtime: js(data/addon 是 iOS App Store 合规专用,已砍)。
 
+pub mod assets;
+pub mod contributions;
 mod convert;
 mod ctx;
 mod engine;
-pub mod extensions;
 pub mod host;
 mod installer;
 pub mod manager;
 pub mod manifest;
 pub mod permission;
+pub mod registry_index;
 mod state;
 pub mod storage;
 mod worker;
@@ -22,8 +24,12 @@ mod worker;
 #[cfg(test)]
 mod hello_it;
 
-pub use extensions::{ExtensionRegistry, ExtensionType, RegisteredExtension};
+pub use assets::{content_type_for, resolve_asset, AssetError};
+pub use contributions::{Contribution, ContributionKind, ContributionRegistry};
+pub use ctx::UNSUPPORTED_MARKER;
+pub use state::SourceHostGrant;
 pub use host::{NoopHost, PluginHost};
 pub use manager::{PluginManager, PluginStatus, MAX_ENABLED};
 pub use manifest::PluginManifest;
 pub use permission::GrantedPermissions;
+pub use registry_index::{ParsedRegistry, PluginSource, RegistryPlugin, RegistryVersion};

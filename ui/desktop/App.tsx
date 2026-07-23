@@ -94,8 +94,10 @@ import {
   IconSun,
   IconVolume,
 } from "./app/icons";
+import { PluginSlot } from "./components/PluginHost";
 import "@shared/tokens.css";
 import "./theme/ui.css";
+import "./theme/plugins.css";
 import "./theme/player.css";
 
 type Panel = null | "eps" | "audio" | "sub" | "danmaku" | "super" | "line" | "version" | "speed" | "more";
@@ -1864,6 +1866,10 @@ export default function App() {
           )}
         </div>
       )}
+
+      {/* 插件的播放器叠加层(slot: player.overlay)。只在播放时挂,没插件贡献就整块不出。
+          放 player-layer 外面:OSD 淡出时插件的叠加内容不该跟着消失。 */}
+      {playing && <PluginSlot slot="player.overlay" className="pl-plugins" />}
 
       {/* toast 放 player-layer 外:OSD 淡出时提示还得看得见 */}
       {toast && <div className="toast">{toast}</div>}

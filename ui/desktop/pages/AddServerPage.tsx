@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import QRCode from "qrcode";
+import { listen } from "@tauri-apps/api/event";
 import {
   type BatchAddResult,
   type ParsedServerBlock,
@@ -13,11 +14,13 @@ import {
   quarkScanPoll,
   quarkScanStart,
   sourceLogin,
+  pluginDataSources,
+  type PluginDataSource,
   startupDeepLink,
   testConnection,
   updateAccount,
 } from "@shared/api";
-import { IconCloud, IconFile, IconServer } from "../app/icons";
+import { IconCloud, IconFile, IconPlugin, IconServer } from "../app/icons";
 import "./AddServerPage.css";
 
 /* ============================================================
@@ -36,7 +39,9 @@ type TypeId =
   | "anirss"
   | "stremio"
   | "batch"
-  | "qrsync";
+  | "qrsync"
+  /** 插件贡献的源:`plugin:<插件id>/<源id>`,直接就是 SourceKind。 */
+  | (string & {});
 
 /* Stremio 配置框的默认内容。预填官方 Cinemeta —— 它是免费的元数据 addon,
    不填任何东西根目录就是空的,新用户会以为源坏了。用户想换随时删掉重写。
@@ -166,9 +171,66 @@ export default function AddServerPage({ onDone, onBack }: Props) {
   const [exportText, setExportText] = useState("");
   const [probed, setProbed] = useState<ServerInfo | null>(null);
 
+  /* 插件贡献的数据源。**登录表单由 manifest 声明的字段现渲染** ——
+     不这样的话每接一个插件源都要回来改这个文件一次,「用户自己做插件自己用」
+     就成了空话。字段值单独存一份,别和上面那几个内置输入框混在一起
+     (内置的是共用的,插件的是每个源一套)。 */
+  const [pluginSources, setPluginSources] = useState<PluginDataSource[]>([]);
+  const [pluginForm, setPluginForm] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const load = () => pluginDataSources().then(setPluginSources).catch(() => setPluginSources([]));
+    load();
+    // 插件启用/停用后源会增减,不重新拉的话这一页会一直显示旧的那批。
+    const un = listen("plugin://sources-changed", load);
+    const un2 = listen("plugin://extensions-changed", load);
+    return () => {
+      un.then((f) => f());
+      un2.then((f) => f());
+    };
+  }, []);
+  // 切到别的源时把插件表单清空,免得上一个源填的账号串到下一个源里。
+  useEffect(() => setPluginForm({}), [sel]);
+
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [toast, setToast] = useState("");
+
+  /** 内置分组 + 插件贡献的源。插件源一组单列,并注明来自哪个插件。 */
+  const navGroups = useMemo(() => {
+    if (pluginSources.length === 0) return NAV;
+    return [
+      ...NAV,
+      {
+        sec: "插件源",
+        items: pluginSources.map((p) => ({
+          id: p.kind,
+          label: p.name,
+          icon: () => <IconPlugin size={16} />,
+        })),
+      },
+    ];
+  }, [pluginSources]);
+
+  /** 插件源登录:把声明式表单里的值按约定字段名喂给 source_login。
+   *  base_url 是核层唯一认得的定位字段(也是 $sourceServer 白名单令牌的来源),
+   *  剩下的一股脑塞 cookie 那个自由字段(核层原样透给插件的 server.token)。 */
+  const submitPluginSource = (p: PluginDataSource) =>
+    run(async () => {
+      const fields = p.auth?.fields ?? [];
+      const val = (id: string) => (pluginForm[id] ?? "").trim();
+      const known = new Set(["base_url", "username", "password"]);
+      const extra = fields
+        .filter((f) => !known.has(f.id))
+        .reduce<Record<string, string>>((m, f) => ({ ...m, [f.id]: val(f.id) }), {});
+      await sourceLogin(
+        p.kind,
+        val("base_url"),
+        val("username"),
+        val("password"),
+        Object.keys(extra).length ? JSON.stringify(extra) : null,
+      );
+      onDone("netdisk");
+    });
 
   async function run(fn: () => Promise<void>) {
     if (busy) return;
@@ -241,10 +303,10 @@ export default function AddServerPage({ onDone, onBack }: Props) {
       onDone();
     });
 
-  const submitSource = (kind: "Openlist" | "Feiniu" | "Anirss") =>
+  const submitSource = (kind: "openlist" | "feiniu" | "anirss") =>
     run(async () => {
       await sourceLogin(kind, server.trim(), username, password, null);
-      onDone(kind === "Anirss" ? "anirss" : "netdisk");
+      onDone(kind === "anirss" ? "anirss" : "netdisk");
     });
 
   /* Stremio 一个账号 = 一组 addon(catalog 来自元数据 addon、播放源来自另一个,
@@ -262,7 +324,7 @@ export default function AddServerPage({ onDone, onBack }: Props) {
       if (addons.length === 0) throw new Error("至少要填一个 addon 的 manifest 地址");
       const primary = addons[0];
       const rest = lines.filter((l) => l !== primary);
-      await sourceLogin("Stremio", primary, "", "", rest.join("\n") || null);
+      await sourceLogin("stremio", primary, "", "", rest.join("\n") || null);
       onDone("netdisk");
     });
 
@@ -306,7 +368,7 @@ export default function AddServerPage({ onDone, onBack }: Props) {
 
   const submitQuarkCookie = () =>
     run(async () => {
-      await sourceLogin("Quark", "", "", "", cookie);
+      await sourceLogin("quark", "", "", "", cookie);
       onDone("netdisk");
     });
 
@@ -391,7 +453,52 @@ export default function AddServerPage({ onDone, onBack }: Props) {
     </>
   );
 
+  /** 插件源的登录表单:字段全部来自 manifest 的 auth.fields。
+   *  插件没声明 auth 就是"不需要登录",直接给一个添加按钮。 */
+  function pluginPane(p: PluginDataSource) {
+    const fields = p.auth?.fields ?? [];
+    const missing = fields.some((f) => f.required && !(pluginForm[f.id] ?? "").trim());
+    return (
+      <>
+        <h4>{p.name}</h4>
+        <p className="hint">
+          由插件「{p.pluginId}」提供。
+          {fields.length === 0 && "这个源不需要登录,直接添加即可。"}
+        </p>
+        {fields.map((f) => (
+          <div key={f.id} className="fld">
+            <label>
+              {f.label ?? f.id}
+              {f.required ? "" : "(可选)"}
+            </label>
+            <input
+              className="field"
+              type={f.type === "password" ? "password" : "text"}
+              placeholder={f.placeholder ?? (f.id === "base_url" ? "https://" : "")}
+              value={pluginForm[f.id] ?? ""}
+              onChange={(e) => setPluginForm((m) => ({ ...m, [f.id]: e.target.value }))}
+            />
+          </div>
+        ))}
+        <div className="as-actions">
+          <button
+            className="btn primary"
+            disabled={busy || missing}
+            onClick={() => submitPluginSource(p)}
+          >
+            {spin("添加")}
+          </button>
+        </div>
+      </>
+    );
+  }
+
   function pane() {
+    /* 插件源的表单在 switch 之前拦掉 —— 它的 id 是运行时才知道的
+       `plugin:<插件id>/<源id>`,写不进 case 常量里。 */
+    const plug = pluginSources.find((p) => p.kind === sel);
+    if (plug) return pluginPane(plug);
+
     switch (sel) {
       case "emby":
         return (
@@ -429,12 +536,12 @@ export default function AddServerPage({ onDone, onBack }: Props) {
 
       case "openlist":
       case "feiniu":
-      case "anirss": {
+      case "anirss": {  // eslint-disable-line no-fallthrough
         const meta = {
-          openlist: { title: "OpenList", kind: "Openlist" as const, optional: false },
-          feiniu: { title: "飞牛影视", kind: "Feiniu" as const, optional: false },
-          anirss: { title: "Ani-RSS", kind: "Anirss" as const, optional: true },
-        }[sel];
+          openlist: { title: "OpenList", kind: "openlist" as const, optional: false },
+          feiniu: { title: "飞牛影视", kind: "feiniu" as const, optional: false },
+          anirss: { title: "Ani-RSS", kind: "anirss" as const, optional: true },
+        }[sel as "openlist" | "feiniu" | "anirss"];
         return (
           <>
             <h4>{meta.title}</h4>
@@ -687,7 +794,7 @@ export default function AddServerPage({ onDone, onBack }: Props) {
         <div className="cbody">
           <div className="md">
             <div className="mdnav">
-              {NAV.map((g) => (
+              {navGroups.map((g) => (
                 <div key={g.sec}>
                   <div className="sec">{g.sec}</div>
                   {g.items.map((it) => (

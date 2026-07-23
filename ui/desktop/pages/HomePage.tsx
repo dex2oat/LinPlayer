@@ -24,6 +24,7 @@ import {
 } from "@shared/api";
 import { AdminMenuItems, useIsAdmin } from "../lib/admin";
 import Poster from "../components/Poster";
+import { PluginSlot } from "../components/PluginHost";
 import {
   IconCheck,
   IconChevronLeft,
@@ -455,6 +456,9 @@ export default function HomePage({
               </Rail>
             </section>
           )}
+
+          {/* 插件面板(slot: home.stats)。没插件挂上来时整块不渲染 —— 连标题都不出。 */}
+          <PluginSlot slot="home.stats" className="hm-plugins" />
 
           {/* 媒体库入口行:loading 时先出骨架(和下面每个轨道同款),不要等 views() 回来才凭空冒出来。 */}
           {loading && (

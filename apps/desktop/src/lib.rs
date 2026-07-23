@@ -1,4 +1,10 @@
 mod imgcache;
+mod pluginassets;
+mod pluginmarket;
+/* 命令必须用**裸名字**注册进 generate_handler! —— 写成 `pluginmarket::xxx` 虽然 Tauri
+   也认,但 api_contract_tests 那道守门测试只按裸标识符比对,路径形式会被它当成
+   「没注册」。宁可它误报,也不能让它漏报。 */
+use pluginmarket::*;
 use linplayer_mpv as mpv; // 提成共享 crate(crates/mpv):安卓壳也要用同一份
 mod plugins_host;
 mod shaders;
@@ -33,6 +39,7 @@ use linplayer_core::source::openlist::OpenListBackend;
 use linplayer_core::source::quark::QuarkBackend;
 use linplayer_core::source::quark_tv;
 use linplayer_core::source::stremio::StremioBackend;
+use linplayer_core::source::plugin_source::PluginSourceBackend;
 use linplayer_core::source::{MediaSourceBackend, SourceEntry, SourceKind, SourceServer};
 use mpv::{Player, Status};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -93,8 +100,39 @@ struct AppState {
     pending_update: Mutex<Option<linplayer_core::update::UpdateInfo>>,
 }
 
-fn plugins_mgr(state: &AppState) -> Result<Arc<PluginManager>, String> {
+pub(crate) fn plugins_mgr(state: &AppState) -> Result<Arc<PluginManager>, String> {
     state.plugins.get().cloned().ok_or_else(|| "插件系统未就绪".to_string())
+}
+
+/// 把「用户已为每个插件配置的全部源地址」同步进各插件的 `$sourceServer` 展开表。
+///
+/// 不调这个,manifest 里写了 `$sourceServer` 的插件源会展开成空 = 一个请求都发不出去
+/// (fail-closed)。**必须在每次账号变动后调**:登录、删除、导入配置、启动。
+///
+/// 整体替换而非追加 —— 用户删掉一个源之后那台机器必须立刻不再可达。
+fn sync_plugin_source_grants(state: &AppState) {
+    let Some(mgr) = state.plugins.get() else { return };
+    let mut per_plugin: HashMap<String, Vec<String>> = HashMap::new();
+    {
+        let cfg = state.config.lock().unwrap();
+        for a in &cfg.accounts {
+            if let Some((plugin_id, _)) = a.source_kind.as_plugin() {
+                if let Some(src) = a.source.as_ref() {
+                    per_plugin
+                        .entry(plugin_id.to_string())
+                        .or_default()
+                        .push(src.base_url.clone());
+                }
+            }
+        }
+    }
+    // 已启用但一个源都没配的插件也要显式清空,否则上一轮的授权会留着。
+    for (plugin_id, _, _) in mgr.data_sources() {
+        per_plugin.entry(plugin_id).or_default();
+    }
+    for (plugin_id, urls) in per_plugin {
+        mgr.set_source_grants(&plugin_id, &urls);
+    }
 }
 
 /// 诊断日志。旧版直接往 %TEMP% 根丢 linplayer_poc.log —— 现在收进自己的 logs/。
@@ -373,7 +411,7 @@ fn set_active_server(state: State<'_, AppState>, server_id: String) -> Result<()
     };
     if account.is_file_browse() {
         let server = account.source.clone().ok_or("该源缺少登录凭据,请重新登录")?;
-        *state.source.lock().unwrap() = Some((account.source_kind, server));
+        *state.source.lock().unwrap() = Some((account.source_kind.clone(), server));
         *state.session.lock().unwrap() = None;
     } else {
         *state.session.lock().unwrap() = Some(Session {
@@ -649,7 +687,7 @@ fn account_info_with(
         active_line: a.active_line,
         line_url: a.direct_line_url().to_string(),
         allow_insecure_tls: a.allow_insecure_tls,
-        source_kind: a.source_kind,
+        source_kind: a.source_kind.clone(),
         is_file_browse: a.is_file_browse(),
     }
 }
@@ -2973,11 +3011,23 @@ fn danmaku_load_local(path: String) -> Result<Vec<DanmakuComment>, String> {
 // ---------- 文件浏览型源命令(网盘/追番)----------
 fn source_backend(
     state: &State<'_, AppState>,
-    kind: SourceKind,
+    kind: &SourceKind,
 ) -> Result<Arc<dyn MediaSourceBackend>, String> {
+    // 插件源:**现建现用,不进静态表**。PluginSourceBackend 是无状态的
+    // (只有 plugin_id + src_id + Weak),建一个的成本可忽略;而往这张会被播放链路读的
+    // 表里动态增删要引入锁和生命周期同步,是白挨的复杂度。
+    // 插件被禁用时自然失效 —— 贡献点注册表里查不到,调用直接报错。
+    if let Some((plugin_id, src_id)) = kind.as_plugin() {
+        let mgr = plugins_mgr(state)?;
+        return Ok(Arc::new(PluginSourceBackend::new(
+            plugin_id,
+            src_id,
+            Arc::downgrade(&mgr),
+        )));
+    }
     state
         .source_backends
-        .get(&kind)
+        .get(kind)
         .cloned()
         .ok_or_else(|| "该源类型暂未接入".to_string())
 }
@@ -2993,7 +3043,7 @@ async fn source_login(
 ) -> Result<(), String> {
     // 夸克 Cookie 模式无 base_url(固定云端 API),用 kind 名做稳定 id。
     let id = if base_url.trim().is_empty() {
-        format!("{kind:?}")
+        kind.legacy_debug_label()
     } else {
         base_url.clone()
     };
@@ -3005,7 +3055,7 @@ async fn source_login(
         token: cookie.filter(|c| !c.is_empty()),
         extra: HashMap::new(),
     };
-    let backend = source_backend(&state, kind)?;
+    let backend = source_backend(&state, &kind)?;
     // 列根目录以验证登录可用
     backend
         .list_dir(&state.http, &server, None)
@@ -3016,8 +3066,8 @@ async fn source_login(
         let mut cfg = state.config.lock().unwrap();
         cfg.upsert(Account {
             server: server.id.clone(),
-            user_name: server.username.clone().unwrap_or_else(|| format!("{kind:?}")),
-            source_kind: kind,
+            user_name: server.username.clone().unwrap_or_else(|| kind.legacy_debug_label()),
+            source_kind: kind.clone(),
             source: Some(server.clone()),
             ..Default::default()
         });
@@ -3025,6 +3075,8 @@ async fn source_login(
     }
     *state.source.lock().unwrap() = Some((kind, server));
     *state.session.lock().unwrap() = None; // 切到源 → 上一个 Emby 会话作废
+    // 插件源:把用户刚填的地址喂进 `$sourceServer` 展开表,否则插件发不出请求。
+    sync_plugin_source_grants(&state);
     Ok(())
 }
 
@@ -3034,7 +3086,7 @@ async fn source_list_dir(
     dir_id: Option<String>,
 ) -> Result<Vec<SourceEntry>, String> {
     let (kind, server) = state.source.lock().unwrap().clone().ok_or("未登录源")?;
-    let backend = source_backend(&state, kind)?;
+    let backend = source_backend(&state, &kind)?;
     backend
         .list_dir(&state.http, &server, dir_id.as_deref())
         .await
@@ -3053,7 +3105,7 @@ async fn source_play(
     *state.scrobble_ctx.lock().unwrap() = None; // 源播放非 Emby,清 Trakt scrobble 上下文
     *state.wh_ctx.lock().unwrap() = None; // 同理清观看记录上下文,别把网盘进度记到上一部 Emby 片上
     let (kind, server) = state.source.lock().unwrap().clone().ok_or("未登录源")?;
-    let backend = source_backend(&state, kind)?;
+    let backend = source_backend(&state, &kind)?;
     let entry = SourceEntry {
         id: entry_id,
         name: entry_name,
@@ -3136,7 +3188,7 @@ async fn quark_scan_poll(
         token: None,
         extra,
     };
-    *state.source.lock().unwrap() = Some((SourceKind::Quark, server));
+    *state.source.lock().unwrap() = Some((SourceKind::quark(), server));
     Ok(true)
 }
 
@@ -3166,7 +3218,7 @@ async fn source_watchdog(state: State<'_, AppState>, pos: f64) -> Result<bool, S
         return Ok(false);
     }
     state.resign_count.fetch_add(1, Ordering::Relaxed);
-    let backend = source_backend(&state, kind)?;
+    let backend = source_backend(&state, &kind)?;
     let entry = SourceEntry {
         id: entry_id,
         name: entry_name,
@@ -3206,7 +3258,7 @@ type Json = serde_json::Value;
 /// 取(ani-rss 后端 + 当前服务器)。当前活跃源不是 ani-rss 时直接报错 —— 管理接口只对 ani-rss 有意义。
 fn anirss_ctx(state: &State<'_, AppState>) -> Result<(Arc<AniRssBackend>, SourceServer), String> {
     let (kind, server) = state.source.lock().unwrap().clone().ok_or("未登录源")?;
-    if kind != SourceKind::Anirss {
+    if kind != SourceKind::anirss() {
         return Err("当前源不是 Ani-RSS".to_string());
     }
     Ok((state.anirss.clone(), server))
@@ -4380,10 +4432,109 @@ async fn plugin_invoke_field(
         .await
 }
 
-/// 取某类型全部扩展(前端渲染 homeStats/sidebarItems 等)。
+/// 取某类贡献点全部条目(dataSources / panels / actions / sandboxViews)。
 #[tauri::command]
 fn plugin_extensions(state: State<'_, AppState>, type_id: String) -> Result<Vec<serde_json::Value>, String> {
     Ok(plugins_mgr(&state)?.extensions_by_type(&type_id))
+}
+
+/// 取挂在某个 slot 的全部面板。首页/侧栏/播放器叠加层各自只关心自己那一撮,
+/// 让前端拉全量再过滤等于每个位置都要重复一遍 slot 常量。
+#[tauri::command]
+fn plugin_panels(state: State<'_, AppState>, slot: String) -> Result<Vec<serde_json::Value>, String> {
+    Ok(plugins_mgr(&state)?.panels_in_slot(&slot))
+}
+
+/// 当前所有已启用插件贡献的数据源。「添加服务器」页据此列出可选的插件源。
+#[tauri::command]
+fn plugin_sources(state: State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
+    let mgr = plugins_mgr(&state)?;
+    // 把 manifest 里声明的 auth 表单字段一并带上 —— 前端要靠它渲染通用登录表单,
+    // 否则每接一个插件源都得改前端。
+    let decls = mgr.extensions_by_type(linplayer_core::plugins::ContributionKind::DataSources.id());
+    Ok(mgr
+        .data_sources()
+        .into_iter()
+        .map(|(plugin_id, src_id, name)| {
+            let auth = decls
+                .iter()
+                .find(|d| d["pluginId"] == plugin_id.as_str() && d["id"] == src_id.as_str())
+                .and_then(|d| d["data"].get("auth").cloned());
+            serde_json::json!({
+                "kind": linplayer_core::source::SourceKind::plugin(&plugin_id, &src_id).as_str(),
+                "pluginId": plugin_id,
+                "sourceId": src_id,
+                "name": name,
+                "auth": auth,
+            })
+        })
+        .collect())
+}
+
+/// 用原生文件选择器挑一个 .ipk 装上。
+///
+/// 走 Rust 侧的 `tauri_plugin_dialog`(已在 `.plugin(tauri_plugin_dialog::init())` 注册),
+/// **不加 `@tauri-apps/plugin-dialog` 前端依赖、不动 capabilities** —— 后者是本仓库
+/// 已知的坑(窗口写操作漏放行导致全屏静默失效那次)。
+/// 返回 None 表示用户取消。
+#[tauri::command]
+async fn plugin_pick_install(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<serde_json::Value>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .add_filter("LinPlayer 插件", &["ipk", "zip"])
+        .pick_file(move |p| {
+            let _ = tx.send(p);
+        });
+    let picked = rx.await.map_err(|_| "文件选择器未返回".to_string())?;
+    let Some(path) = picked else { return Ok(None) };
+    let path = path.into_path().map_err(|e| format!("路径无效: {e}"))?;
+    plugins_mgr(&state)?
+        .install_ipk(&path.to_string_lossy())
+        .map(Some)
+}
+
+/// 开发模式:挑一个**本地目录**直接挂上,不复制文件。改完存盘即可重载。
+#[tauri::command]
+async fn plugin_pick_dev_dir(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<serde_json::Value>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |p| {
+        let _ = tx.send(p);
+    });
+    let picked = rx.await.map_err(|_| "目录选择器未返回".to_string())?;
+    let Some(path) = picked else { return Ok(None) };
+    let path = path.into_path().map_err(|e| format!("路径无效: {e}"))?;
+    plugins_mgr(&state)?
+        .install_dev_dir(&path.to_string_lossy())
+        .map(Some)
+}
+
+/// 重载一个插件(禁用 -> 重读 manifest -> 重新启用)。
+#[tauri::command]
+async fn plugin_reload(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    plugins_mgr(&state)?.reload(&id).await
+}
+
+/// 轮询开发模式插件的入口文件是否变了,变了的自动重载,返回被重载的 id。
+///
+/// `ponytail:` 轮询 mtime 而不是上 `notify` crate —— 零新依赖,开发模式插件通常
+/// 就一两个。真嫌慢再换 notify。前端在插件页开着时每秒调一次。
+#[tauri::command]
+async fn plugin_dev_poll(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let mgr = plugins_mgr(&state)?;
+    let changed = mgr.dev_plugins_changed();
+    for id in &changed {
+        let _ = mgr.reload(id).await;
+    }
+    Ok(changed)
 }
 
 /// 前端回填一次 ctx.ui 请求(showForm 的返回值等)。value=null 视为取消。
@@ -4469,16 +4620,16 @@ pub fn run() {
 
     // 源后端注册表(长驻,持各自 token 缓存)。逐 Phase 增量接入更多源。
     let mut source_backends: HashMap<SourceKind, Arc<dyn MediaSourceBackend>> = HashMap::new();
-    source_backends.insert(SourceKind::Openlist, Arc::new(OpenListBackend::new()));
+    source_backends.insert(SourceKind::openlist(), Arc::new(OpenListBackend::new()));
     // ani-rss 建一次、两处引用同一实例:注册表里当 dyn 走浏览/播放,AppState.anirss 里当具体类型
     // 走管理接口。clone 只加引用计数(不复制 token_cache),故两条路共用同一份登录令牌。
     let anirss = Arc::new(AniRssBackend::new());
-    source_backends.insert(SourceKind::Anirss, anirss.clone());
-    source_backends.insert(SourceKind::Feiniu, Arc::new(FeiniuBackend::new()));
-    source_backends.insert(SourceKind::Quark, Arc::new(QuarkBackend::new()));
+    source_backends.insert(SourceKind::anirss(), anirss.clone());
+    source_backends.insert(SourceKind::feiniu(), Arc::new(FeiniuBackend::new()));
+    source_backends.insert(SourceKind::quark(), Arc::new(QuarkBackend::new()));
     // ★ 这张表安卓侧(apps/android/src/lib.rs)有一份**独立的拷贝**。只加这边,
     //   安卓上的表现是「源加得进去、点进去报『该源类型暂未接入』」,而且编译全绿。
-    source_backends.insert(SourceKind::Stremio, Arc::new(StremioBackend::new()));
+    source_backends.insert(SourceKind::stremio(), Arc::new(StremioBackend::new()));
 
     // 有活跃账号 -> 用存盘凭据重建会话/源(重启免登)。
     // 活跃的是 Emby 就装 session,是浏览型源就装 source —— 两者互斥,别同时留着。
@@ -4491,7 +4642,7 @@ pub fn run() {
     });
     let source = active
         .filter(|a| a.is_file_browse())
-        .and_then(|a| a.source.clone().map(|s| (a.source_kind, s)));
+        .and_then(|a| a.source.clone().map(|s| (a.source_kind.clone(), s)));
 
     // 下载目录:数据根下的 downloads/。旧实现放 exe 同级 —— 装进 Program Files 就写不动。
     let download = tauri::async_runtime::block_on(
@@ -4502,7 +4653,7 @@ pub fn run() {
     let _ = std::fs::remove_file(app_log_path());
     let _ = std::fs::remove_file(mpv::mpv_log_path());
 
-    let builder = imgcache::register(tauri::Builder::default());
+    let builder = pluginassets::register(imgcache::register(tauri::Builder::default()));
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -4621,6 +4772,7 @@ pub fn run() {
             let host = plugins_host::make_host(app.handle().clone());
             let mgr = PluginManager::new(base, host);
             let _ = app.state::<AppState>().plugins.set(mgr.clone());
+            sync_plugin_source_grants(&app.state::<AppState>());
             tauri::async_runtime::spawn(async move { mgr.init().await });
             Ok(())
         })
@@ -4852,7 +5004,19 @@ pub fn run() {
             plugin_invoke_field,
             plugin_ui_respond,
             plugin_extensions,
-            plugin_ui_respond
+            plugin_panels,
+            plugin_sources,
+            plugin_pick_install,
+            plugin_pick_dev_dir,
+            plugin_reload,
+            plugin_dev_poll,
+            plugin_permission_catalog,
+            plugin_market_sources,
+            plugin_market_add_source,
+            plugin_market_remove_source,
+            plugin_market_toggle_source,
+            plugin_market_list,
+            plugin_market_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -4898,6 +5062,50 @@ mod api_contract_tests {
     ///
     /// 这条把占位项钉成一份白名单:接好了一个就从名单里删一个,新加占位必须显式登记。
     /// 名单和代码对不上就红,不用再靠人眼扫 UI。
+    /// 源类型的**线上字符串**必须和 api.ts 的 `SourceKind` 联合完全对上。
+    ///
+    /// 2026-07-23 抓到:api.ts 里写的是首字母大写的 `"Emby" | "Openlist" | …`,
+    /// 而线上格式一直是全小写。后果全部**静默**——
+    ///   · `sourceLogin("Openlist", …)` 送出一个后端不认识的 kind;
+    ///   · 服务器卡的类型徽标 `KIND_LABEL[a.source_kind]` 恒 undefined,六张卡全空白;
+    ///   · `a.source_kind === "Anirss"` 恒 false,Ani-RSS 卡点进去落到网盘页。
+    /// 两边都不报错,只是功能不对 —— 正是 [[stale-waijie-lies]] 那一类。
+    /// TS 那边没有测试环境,就让 Rust 当这份跨语言契约的守门人。
+    #[test]
+    fn source_kind_wire_strings_match_the_frontend_union() {
+        use linplayer_core::source::SourceKind;
+        let ts = include_str!("../../../ui/shared/api.ts");
+        let start = ts
+            .find("export type SourceKind =")
+            .expect("api.ts 里找不到 SourceKind 类型声明 —— 改名了就同步改这条测试");
+        let block = &ts[start..start + ts[start..].find(';').expect("SourceKind 声明没有结尾分号")];
+
+        let quoted: Vec<&str> = block
+            .match_indices('"')
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>()
+            .chunks(2)
+            .filter(|c| c.len() == 2)
+            .map(|c| &block[c[0] + 1..c[1]])
+            .collect();
+
+        for kind in SourceKind::BUILTIN {
+            assert!(
+                quoted.contains(kind),
+                "api.ts 的 SourceKind 联合里没有 {kind:?}(实际有 {quoted:?})—— \
+                 少一个成员意味着前端拿它做的每一次比较都恒为 false、每一次 sourceLogin \
+                 都会送出后端不认识的值,而且两边都不报错"
+            );
+        }
+        // 反向:联合里不能出现后端根本不认的值(比如首字母大写的老写法)。
+        for q in &quoted {
+            assert!(
+                SourceKind::new(*q).is_builtin(),
+                "api.ts 的 SourceKind 里有个后端不认识的成员 {q:?}"
+            );
+        }
+    }
+
     /// CI 里写死的产物路径,必须跟 tauri.conf.json 的 `mainBinaryName` 一致。
     ///
     /// d9a24706 加 mainBinaryName 把产物从 `app` 改名成 `LinPlayer` 时,**只同步了
@@ -5206,17 +5414,51 @@ mod api_contract_tests {
             .filter(|s| !s.is_empty() && !s.starts_with("//"))
             .collect();
 
-        // 抠 invoke<...>("cmd") / invoke("cmd") 里的命令名
+        /* 抠 invoke<...>("cmd") / invoke("cmd") 里的命令名。
+           ★ 第一版是 `rest.find('(')` 再用「中间有没有 ; 或换行」判断是不是调用。
+           泛型里出现**内联对象类型**时会踩空:
+               invoke<{ info: X; version: string }>("plugin_market_install", …)
+           泛型里的 `;` 让它直接 continue —— 那条命令就**悄悄不受这道闸门保护**了。
+           2026-07-23 实测:我一次漏注册 7 条命令,它只报出 6 条,漏的正是这一条。
+           现在按尖括号配对真跳泛型;`invoke` 之后第一个非空字符必须是 `<` 或 `(`,
+           注释/import 里的 "invoke" 字样自然排除,也不再怕换行和分号。 */
         let mut names: Vec<&str> = Vec::new();
         for (i, _) in api_ts.match_indices("invoke") {
             let rest = &api_ts[i + "invoke".len()..];
-            // 跳过泛型参数,定位到左括号
-            let Some(lp) = rest.find('(') else { continue };
-            if rest[..lp].contains(';') || rest[..lp].contains('\n') {
-                continue; // 不是调用(如 import/注释里的 invoke 字样)
+            let Some((mut pos, mut c)) = rest.char_indices().find(|(_, c)| !c.is_whitespace())
+            else {
+                continue;
+            };
+            if c == '<' {
+                let mut depth = 0i32;
+                let mut closed = None;
+                for (j, ch) in rest[pos..].char_indices() {
+                    match ch {
+                        '<' => depth += 1,
+                        '>' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                closed = Some(pos + j + 1);
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let Some(after_generic) = closed else { continue };
+                let Some((k, ch)) = rest[after_generic..]
+                    .char_indices()
+                    .find(|(_, ch)| !ch.is_whitespace())
+                else {
+                    continue;
+                };
+                pos = after_generic + k;
+                c = ch;
             }
-            let after = &rest[lp + 1..];
-            let after = after.trim_start();
+            if c != '(' {
+                continue; // 不是调用
+            }
+            let after = rest[pos + 1..].trim_start();
             let Some(q) = after.strip_prefix('"') else { continue };
             let Some(end) = q.find('"') else { continue };
             names.push(&q[..end]);

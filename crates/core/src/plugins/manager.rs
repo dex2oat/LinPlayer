@@ -7,11 +7,13 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value as Json};
 
-use super::extensions::{handler_ref, ExtensionRegistry, ExtensionType, HandlerRef, RegisteredExtension};
+use super::assets;
+use super::contributions::{handler_ref, Contribution, ContributionKind, ContributionRegistry, HandlerRef};
 use super::host::PluginHost;
 use super::installer;
 use super::manifest::PluginManifest;
 use super::permission::GrantedPermissions;
+use super::state::SourceHostGrant;
 use super::storage::PluginStorage;
 use super::worker::{PluginWorker, StartReq};
 
@@ -41,6 +43,21 @@ struct Record {
     entry_path: PathBuf,
     status: PluginStatus,
     error: Option<String>,
+    /// 开发模式:直接挂本地目录,不复制文件,改完存盘即重载。
+    dev: bool,
+    /// 入口文件 mtime,开发模式热重载靠它判变化。
+    entry_mtime: Option<u128>,
+}
+
+/// 入口文件的修改时间(毫秒)。取不到就 None —— 取不到时一律不判「变了」,
+/// 免得每轮都无脑重载。
+fn mtime_of(path: &std::path::Path) -> Option<u128> {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis())
 }
 
 struct State {
@@ -53,10 +70,13 @@ pub struct PluginManager {
     plugins_root: PathBuf,
     data_root: PathBuf,
     state_file: PathBuf,
-    registry: Arc<ExtensionRegistry>,
+    registry: Arc<ContributionRegistry>,
     host: Arc<dyn PluginHost>,
     worker: PluginWorker,
     state: Mutex<State>,
+    /// 每插件一份的 `$sourceServer` 展开表。**引擎持同一个 Arc**,所以用户新配一个源
+    /// 之后不必重启插件引擎,写这里就立刻生效。
+    source_grants: Mutex<HashMap<String, Arc<Mutex<Vec<SourceHostGrant>>>>>,
 }
 
 impl PluginManager {
@@ -71,14 +91,15 @@ impl PluginManager {
             plugins_root,
             data_root,
             state_file: base_dir.join("plugins_state.json"),
-            registry: Arc::new(ExtensionRegistry::new()),
+            registry: Arc::new(ContributionRegistry::new()),
             host,
             worker: PluginWorker::spawn(),
             state: Mutex::new(State { records: HashMap::new(), enabled, approved }),
+            source_grants: Mutex::new(HashMap::new()),
         })
     }
 
-    pub fn registry(&self) -> Arc<ExtensionRegistry> {
+    pub fn registry(&self) -> Arc<ContributionRegistry> {
         self.registry.clone()
     }
 
@@ -122,6 +143,8 @@ impl PluginManager {
                                 entry_path: p.entry_path,
                                 status: PluginStatus::Disabled,
                                 error: None,
+                                dev: false,
+                                entry_mtime: None,
                             },
                         );
                     }
@@ -152,6 +175,10 @@ impl PluginManager {
                     "status": r.status.as_str(),
                     "enabled": st.enabled.contains(&r.manifest.id),
                     "error": r.error,
+                    "dev": r.dev,
+                    "category": r.manifest.category,
+                    "apiVersion": r.manifest.api_version,
+                    "contributes": contributes_summary(&r.manifest),
                 })
             })
             .collect()
@@ -174,6 +201,8 @@ impl PluginManager {
                 entry_path: p.entry_path,
                 status: PluginStatus::Disabled,
                 error: None,
+                dev: false,
+                entry_mtime: None,
             },
         );
         drop(st);
@@ -212,18 +241,18 @@ impl PluginManager {
             self.data_root.join(&manifest.id),
         ));
 
-        // 先注册 manifest 静态声明的扩展点(handler 为具名全局函数)。
-        for decl in &manifest.extensions {
-            let ext_id = decl
+        // 先注册 manifest 静态声明的贡献点(handler 为具名全局函数)。
+        for decl in &manifest.contributions {
+            let cid = decl
                 .data
                 .get("id")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("static_{}", decl.type_.id()));
-            self.registry.register(RegisteredExtension {
+                .unwrap_or_else(|| format!("static_{}", decl.kind.id()));
+            self.registry.register(Contribution {
                 plugin_id: manifest.id.clone(),
-                type_: decl.type_,
-                id: ext_id,
+                kind: decl.kind,
+                id: cid,
                 data: decl.data.clone(),
                 from_manifest: true,
             });
@@ -238,13 +267,25 @@ impl PluginManager {
                 storage,
                 host: self.host.clone(),
                 registry: self.registry.clone(),
+                source_hosts: self.grants_slot(id),
             })
             .await;
 
         match start {
             Ok(()) => {
-                let _ = self.worker.run_lifecycle(id, "onEnable").await;
-                self.set_status(id, PluginStatus::Enabled, None);
+                /* ★ onEnable 抛出的错**必须留下来**。第一版是 `let _ = …`:
+                   插件在 onEnable 里踩到权限拒绝/写错一行,注册到一半就中断,
+                   而界面上它是「已启用、无错误」—— 面板永远空白、数据源少一半,
+                   没有任何线索。现在照旧保持启用(已经注册上的那部分是能用的),
+                   但把错误挂到记录上让用户看得见。 */
+                match self.worker.run_lifecycle(id, "onEnable").await {
+                    Ok(_) => self.set_status(id, PluginStatus::Enabled, None),
+                    Err(e) => self.set_status(
+                        id,
+                        PluginStatus::Error,
+                        Some(format!("插件初始化(onEnable)出错,功能可能不完整:{e}")),
+                    ),
+                }
                 self.host.extensions_changed();
                 Ok(())
             }
@@ -293,11 +334,11 @@ impl PluginManager {
         ext_id: &str,
         args: Json,
     ) -> Result<Json, String> {
-        let etype = ExtensionType::from_id(type_id).ok_or_else(|| format!("未知扩展点类型: {type_id}"))?;
+        let kind = ContributionKind::from_id(type_id).ok_or_else(|| format!("未知贡献点类型: {type_id}"))?;
         let ext = self
             .registry
-            .find(plugin_id, etype, ext_id)
-            .ok_or_else(|| format!("扩展不存在: {plugin_id}/{type_id}/{ext_id}"))?;
+            .find(plugin_id, kind, ext_id)
+            .ok_or_else(|| format!("贡献点不存在: {plugin_id}/{type_id}/{ext_id}"))?;
         self.invoke_handler_value(plugin_id, ext.data.get("handler"), args).await
     }
 
@@ -310,11 +351,11 @@ impl PluginManager {
         field: &str,
         args: Json,
     ) -> Result<Json, String> {
-        let etype = ExtensionType::from_id(type_id).ok_or_else(|| format!("未知扩展点类型: {type_id}"))?;
+        let kind = ContributionKind::from_id(type_id).ok_or_else(|| format!("未知贡献点类型: {type_id}"))?;
         let ext = self
             .registry
-            .find(plugin_id, etype, ext_id)
-            .ok_or_else(|| format!("扩展不存在: {plugin_id}/{type_id}/{ext_id}"))?;
+            .find(plugin_id, kind, ext_id)
+            .ok_or_else(|| format!("贡献点不存在: {plugin_id}/{type_id}/{ext_id}"))?;
         self.invoke_handler_value(plugin_id, ext.data.get(field), args).await
     }
 
@@ -336,12 +377,194 @@ impl PluginManager {
         self.worker.fire_event(event, data);
     }
 
-    /// 取某类型全部扩展的前端渲染 JSON。
+    /// 取某类贡献的前端渲染 JSON。
     pub fn extensions_by_type(&self, type_id: &str) -> Vec<Json> {
-        match ExtensionType::from_id(type_id) {
-            Some(t) => self.registry.by_type(t).iter().map(|e| e.to_json()).collect(),
+        match ContributionKind::from_id(type_id) {
+            Some(k) => self.registry.by_kind(k).iter().map(|e| e.to_json()).collect(),
             None => vec![],
         }
+    }
+
+    /// 取挂在某个 slot 的全部 panels(首页/侧栏/播放器叠加层各自只关心自己那一撮)。
+    pub fn panels_in_slot(&self, slot: &str) -> Vec<Json> {
+        self.registry.panels_in_slot(slot).iter().map(|e| e.to_json()).collect()
+    }
+
+    // ---- lpplugin:// 静态资源 ----
+
+    /// 解析 `lpplugin://<插件id>/<rel>` 到磁盘文件。
+    ///
+    /// **只有已启用的插件可读** —— 装了没启用的插件不该能被一个 iframe 拉起来,
+    /// 否则「禁用」这个动作就没有实际约束力。
+    pub fn asset_path(&self, plugin_id: &str, rel: &str) -> Result<PathBuf, assets::AssetError> {
+        let dir = {
+            let st = self.state.lock().unwrap();
+            if !st.enabled.contains(plugin_id) {
+                return Err(assets::AssetError::NotEnabled);
+            }
+            st.records
+                .get(plugin_id)
+                .map(|r| r.dir.clone())
+                .ok_or(assets::AssetError::NotEnabled)?
+        };
+        assets::resolve_asset(&dir, rel)
+    }
+
+    // ---- 开发模式 ----
+
+    /// 把一个**本地目录**直接当插件装上(不复制文件)。改完源码存盘即可重载。
+    ///
+    /// 跟 `install_ipk` 的区别就是不搬文件 —— 这样「自己写插件自己用」的循环
+    /// 从「改代码→打包→安装→启用」缩成「改代码→存盘」。
+    pub fn install_dev_dir(&self, dir: &str) -> Result<Json, String> {
+        let path = std::path::Path::new(dir);
+        let p = installer::load_from_dir(path)?;
+        let id = p.manifest.id.clone();
+        let entry_mtime_src = p.entry_path.clone();
+        let summary = json!({
+            "id": id, "name": p.manifest.name, "version": p.manifest.version, "dev": true
+        });
+        {
+            let mut st = self.state.lock().unwrap();
+            // 同 install_ipk:换了源就强制重新授权,防新清单悄悄提权。
+            st.enabled.remove(&id);
+            st.approved.remove(&id);
+            st.records.insert(
+                id.clone(),
+                Record {
+                    manifest: p.manifest,
+                    dir: p.dir,
+                    entry_path: p.entry_path,
+                    status: PluginStatus::Disabled,
+                    error: None,
+                    dev: true,
+                    entry_mtime: mtime_of(&entry_mtime_src),
+                },
+            );
+        }
+        self.persist();
+        Ok(summary)
+    }
+
+    /// 开发模式插件的入口文件是否变了(mtime)。变了就该重载。
+    ///
+    /// `ponytail:` 轮询 mtime 而不是上 `notify` crate —— 零新依赖,
+    /// 而开发模式插件通常就一两个。真嫌慢再换 notify。
+    pub fn dev_plugins_changed(&self) -> Vec<String> {
+        let snapshot: Vec<(String, PathBuf, Option<u128>)> = {
+            let st = self.state.lock().unwrap();
+            st.records
+                .values()
+                .filter(|r| r.dev)
+                .map(|r| (r.manifest.id.clone(), r.entry_path.clone(), r.entry_mtime))
+                .collect()
+        };
+        let mut changed = Vec::new();
+        for (id, path, known) in snapshot {
+            let now = mtime_of(&path);
+            if now.is_some() && now != known {
+                let mut st = self.state.lock().unwrap();
+                if let Some(r) = st.records.get_mut(&id) {
+                    r.entry_mtime = now;
+                }
+                changed.push(id);
+            }
+        }
+        changed
+    }
+
+    /// 重载一个插件(禁用 -> 重扫 manifest -> 重新启用)。开发模式热重载走这里。
+    pub async fn reload(self: &Arc<Self>, id: &str) -> Result<(), String> {
+        let was_enabled = self.state.lock().unwrap().enabled.contains(id);
+        if was_enabled {
+            self.disable(id).await;
+        }
+        // manifest 可能也改了,重新读一遍。
+        let dir = self
+            .state
+            .lock()
+            .unwrap()
+            .records
+            .get(id)
+            .map(|r| r.dir.clone())
+            .ok_or_else(|| format!("插件不存在: {id}"))?;
+        let p = installer::load_from_dir(&dir)?;
+        {
+            let mut st = self.state.lock().unwrap();
+            if let Some(r) = st.records.get_mut(id) {
+                r.manifest = p.manifest;
+                r.entry_path = p.entry_path;
+                r.entry_mtime = mtime_of(&r.entry_path);
+                r.error = None;
+            }
+        }
+        if was_enabled {
+            self.enable(id).await
+        } else {
+            Ok(())
+        }
+    }
+
+    // ---- 数据源桥 ----
+
+    /// 取(或建)某插件的 `$sourceServer` 展开槽。引擎和 manager 共用同一个 Arc。
+    fn grants_slot(&self, plugin_id: &str) -> Arc<Mutex<Vec<SourceHostGrant>>> {
+        self.source_grants
+            .lock()
+            .unwrap()
+            .entry(plugin_id.to_string())
+            .or_default()
+            .clone()
+    }
+
+    /// 用「用户已为该插件配置的全部源地址」整体替换它的 `$sourceServer` 展开表。
+    ///
+    /// **整体替换而不是追加** —— 用户删掉一个源之后,那台机器必须立刻不再可达;
+    /// 追加语义会让已删除的地址一直留着,是个只增不减的越权口子。
+    pub fn set_source_grants(&self, plugin_id: &str, base_urls: &[String]) {
+        let grants: Vec<SourceHostGrant> = base_urls
+            .iter()
+            .filter_map(|u| SourceHostGrant::from_base_url(u))
+            .collect();
+        *self.grants_slot(plugin_id).lock().unwrap() = grants;
+    }
+
+    /// 当前所有已启用插件贡献的数据源:`(插件id, 源id, 展示名)`。
+    pub fn data_sources(&self) -> Vec<(String, String, String)> {
+        self.registry
+            .by_kind(ContributionKind::DataSources)
+            .into_iter()
+            .map(|c| {
+                let name = c
+                    .data
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&c.id)
+                    .to_string();
+                (c.plugin_id, c.id, name)
+            })
+            .collect()
+    }
+
+    /// 调某数据源的一个方法(listDir / search / resolvePlay)。
+    ///
+    /// 走 `invoke_extension_field`:三个方法就是 dataSources 贡献描述里的三个字段,
+    /// 复用既有的 handler 派发,不新开一条通路。
+    pub async fn call_source(
+        &self,
+        plugin_id: &str,
+        src_id: &str,
+        method: &str,
+        args: Json,
+    ) -> Result<Json, String> {
+        self.invoke_extension_field(
+            plugin_id,
+            ContributionKind::DataSources.id(),
+            src_id,
+            method,
+            args,
+        )
+        .await
     }
 
     // ---- 内部 ----
@@ -367,6 +590,17 @@ impl PluginManager {
         });
         let _ = std::fs::write(&self.state_file, payload.to_string());
     }
+}
+
+/// 卡片上的能力徽章:「提供 1 个数据源、2 个面板」。市场不下载包就能展示。
+fn contributes_summary(m: &PluginManifest) -> Json {
+    let count = |k: ContributionKind| m.contributions.iter().filter(|c| c.kind == k).count();
+    json!({
+        "dataSources": count(ContributionKind::DataSources),
+        "panels": count(ContributionKind::Panels),
+        "actions": count(ContributionKind::Actions),
+        "sandboxViews": count(ContributionKind::SandboxViews),
+    })
 }
 
 fn perms_approved(st: &State, id: &str) -> bool {

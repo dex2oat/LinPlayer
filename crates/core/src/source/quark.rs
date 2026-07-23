@@ -226,7 +226,7 @@ impl QuarkBackend {
 #[async_trait::async_trait]
 impl MediaSourceBackend for QuarkBackend {
     fn kind(&self) -> SourceKind {
-        SourceKind::Quark
+        SourceKind::quark()
     }
 
     async fn list_dir(

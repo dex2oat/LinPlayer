@@ -257,7 +257,7 @@ fn episode_of(e: &SourceEntry) -> f64 {
 #[async_trait::async_trait]
 impl MediaSourceBackend for AniRssBackend {
     fn kind(&self) -> SourceKind {
-        SourceKind::Anirss
+        SourceKind::anirss()
     }
 
     async fn list_dir(

@@ -43,15 +43,22 @@ type Props = {
   onEnter?: (src?: "netdisk" | "anirss") => void;
 };
 
-/* 类型徽标(草稿 .badge:Emby/夸克/OpenList/飞牛/RSS)。写死 "Emby" 会让六张卡全是 Emby。 */
-const KIND_LABEL: Record<SourceKind, string> = {
-  Emby: "Emby",
-  Openlist: "OpenList",
-  Quark: "夸克",
-  Anirss: "RSS",
-  Feiniu: "飞牛",
-  Stremio: "Stremio",
+/* 类型徽标(草稿 .badge:Emby/夸克/OpenList/飞牛/RSS)。写死 "Emby" 会让六张卡全是 Emby。
+   ★ 键必须是**小写**的线上值。写成 "Emby"/"Openlist" 的那版一个都命中不了,
+     六张卡的徽标全是空白 —— 而且不报错,看着只像是"设计上就没有徽标"。 */
+const KIND_LABEL: Record<string, string> = {
+  emby: "Emby",
+  openlist: "OpenList",
+  quark: "夸克",
+  anirss: "RSS",
+  feiniu: "飞牛",
+  stremio: "Stremio",
 };
+
+/** 插件贡献的源是 `plugin:<插件id>/<源id>`,不在上表里 —— 统一打「插件」。 */
+function kindLabel(k: SourceKind): string {
+  return KIND_LABEL[k] ?? (String(k).startsWith("plugin:") ? "插件" : String(k));
+}
 
 /* 状态点 = **连通健康**,不是「选中」(选中看 .sv-cur-tag「当前」角标)。
    down(探过确实不通) 与 unknown(还没探过) 同色不同义 —— 颜色相同不代表可以合并,
@@ -204,7 +211,7 @@ export default function ServersPage({ activeServer, onChanged, onGoAdd, onEnter 
         await reload();
       }
       // 草稿 L1216:点 Emby 卡 → 进首页;点网盘/文件源卡 → 进文件浏览。
-      onEnter?.(a.is_file_browse ? (a.source_kind === "Anirss" ? "anirss" : "netdisk") : undefined);
+      onEnter?.(a.is_file_browse ? (a.source_kind === "anirss" ? "anirss" : "netdisk") : undefined);
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -322,7 +329,7 @@ export default function ServersPage({ activeServer, onChanged, onGoAdd, onEnter 
                     {/* 草稿 pin 25:名称下方显示备注,**不显示线路地址**(避免暴露隐私)。 */}
                     <span className="sv-rm">{a.remark || "无备注"}</span>
                   </div>
-                  <span className="sv-type">{KIND_LABEL[a.source_kind]}</span>
+                  <span className="sv-type">{kindLabel(a.source_kind)}</span>
                   {active && <span className="sv-cur-tag">当前</span>}
                 </div>
               );

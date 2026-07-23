@@ -179,7 +179,7 @@ async fn source_play(
     // 源播放非 Emby,清 Trakt/Bangumi 上下文 —— 不清会把网盘进度记到上一部 Emby 片上。
     *state.scrobble_ctx.lock().unwrap() = None;
     let (kind, server) = state.source.lock().unwrap().clone().ok_or("未登录源")?;
-    let backend = source_backend(&state, kind)?;
+    let backend = source_backend(&state, &kind)?;
     let entry = SourceEntry {
         id: entry_id,
         name: entry_name,
@@ -226,7 +226,7 @@ async fn source_login(
 ) -> Result<(), String> {
     // 夸克 Cookie 模式无 base_url(固定云端 API),用 kind 名做稳定 id。
     let id = if base_url.trim().is_empty() {
-        format!("{kind:?}")
+        kind.legacy_debug_label()
     } else {
         base_url.clone()
     };
@@ -238,7 +238,7 @@ async fn source_login(
         token: cookie.filter(|c| !c.is_empty()),
         extra: HashMap::new(),
     };
-    let backend = source_backend(&state, kind)?;
+    let backend = source_backend(&state, &kind)?;
     // 列根目录以验证配置可用 —— 不验的话错地址也会"添加成功",进去才发现是空的。
     backend
         .list_dir(&state.http, &server, None)
@@ -248,8 +248,8 @@ async fn source_login(
         let mut cfg = state.config.lock().unwrap();
         cfg.upsert(Account {
             server: server.id.clone(),
-            user_name: server.username.clone().unwrap_or_else(|| format!("{kind:?}")),
-            source_kind: kind,
+            user_name: server.username.clone().unwrap_or_else(|| kind.legacy_debug_label()),
+            source_kind: kind.clone(),
             source: Some(server.clone()),
             ..Default::default()
         });
@@ -647,7 +647,7 @@ fn set_active_server(state: State<'_, AppState>, server_id: String) -> Result<()
     };
     if account.is_file_browse() {
         let server = account.source.clone().ok_or("该源缺少登录凭据,请重新登录")?;
-        *state.source.lock().unwrap() = Some((account.source_kind, server));
+        *state.source.lock().unwrap() = Some((account.source_kind.clone(), server));
         *state.session.lock().unwrap() = None;
     } else {
         *state.session.lock().unwrap() = Some(Session {
@@ -855,7 +855,7 @@ fn account_info_with(
         active_line: a.active_line,
         line_url: a.direct_line_url().to_string(),
         allow_insecure_tls: a.allow_insecure_tls,
-        source_kind: a.source_kind,
+        source_kind: a.source_kind.clone(),
         is_file_browse: a.is_file_browse(),
     }
 }
@@ -1482,11 +1482,21 @@ async fn account_icon(state: State<'_, AppState>, server_id: String) -> Result<S
 
 fn source_backend(
     state: &State<'_, AppState>,
-    kind: SourceKind,
+    kind: &SourceKind,
 ) -> Result<Arc<dyn MediaSourceBackend>, String> {
+    // 插件源:**现建现用,不进静态表**。PluginSourceBackend 是无状态的
+    // (只有 plugin_id + src_id + Weak),建一个的成本可忽略;而往这张会被播放链路读的
+    // 表里动态增删要引入锁和生命周期同步,是白挨的复杂度。
+    // 插件被禁用时自然失效 —— 贡献点注册表里查不到,调用直接报错。
+    // 安卓端插件系统尚未接入(本轮范围只做桌面,见 docs/PLUGINS_V2_PLAN.md D2)。
+    // 明确报错而不是回落成「该源类型暂未接入」—— 后者会让人以为是内置源没写,
+    // 而真实原因是这个端根本还没有插件宿主。
+    if kind.is_plugin() {
+        return Err("安卓端暂未接入插件系统,该源无法使用".to_string());
+    }
     state
         .source_backends
-        .get(&kind)
+        .get(kind)
         .cloned()
         .ok_or_else(|| "该源类型暂未接入".to_string())
 }
@@ -1497,7 +1507,7 @@ async fn source_list_dir(
     dir_id: Option<String>,
 ) -> Result<Vec<SourceEntry>, String> {
     let (kind, server) = state.source.lock().unwrap().clone().ok_or("未登录源")?;
-    let backend = source_backend(&state, kind)?;
+    let backend = source_backend(&state, &kind)?;
     backend
         .list_dir(&state.http, &server, dir_id.as_deref())
         .await
@@ -1955,12 +1965,12 @@ pub fn run() {
             // 源后端注册表(长驻,持各自 token 缓存)。
             let mut source_backends: HashMap<SourceKind, Arc<dyn MediaSourceBackend>> =
                 HashMap::new();
-            source_backends.insert(SourceKind::Openlist, Arc::new(OpenListBackend::new()));
-            source_backends.insert(SourceKind::Anirss, Arc::new(AniRssBackend::new()));
-            source_backends.insert(SourceKind::Feiniu, Arc::new(FeiniuBackend::new()));
-            source_backends.insert(SourceKind::Quark, Arc::new(QuarkBackend::new()));
+            source_backends.insert(SourceKind::openlist(), Arc::new(OpenListBackend::new()));
+            source_backends.insert(SourceKind::anirss(), Arc::new(AniRssBackend::new()));
+            source_backends.insert(SourceKind::feiniu(), Arc::new(FeiniuBackend::new()));
+            source_backends.insert(SourceKind::quark(), Arc::new(QuarkBackend::new()));
             // 与 apps/desktop/src/lib.rs 的同名表必须逐条对齐,漏一条那一端就静默不可用。
-            source_backends.insert(SourceKind::Stremio, Arc::new(StremioBackend::new()));
+            source_backends.insert(SourceKind::stremio(), Arc::new(StremioBackend::new()));
 
             // 有活跃账号 -> 用存盘凭据重建会话/源(重启免登)。Emby 与浏览型源互斥。
             let active = config.active_account();
@@ -1972,7 +1982,7 @@ pub fn run() {
             });
             let source = active
                 .filter(|a| a.is_file_browse())
-                .and_then(|a| a.source.clone().map(|s| (a.source_kind, s)));
+                .and_then(|a| a.source.clone().map(|s| (a.source_kind.clone(), s)));
 
             let download = tauri::async_runtime::block_on(
                 linplayer_core::download::DownloadManager::new(

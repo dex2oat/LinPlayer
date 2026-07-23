@@ -8,16 +8,17 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value as Json;
 use tokio::sync::{mpsc, oneshot};
 
 use super::engine::PluginEngine;
-use super::extensions::ExtensionRegistry;
+use super::contributions::ContributionRegistry;
 use super::host::PluginHost;
 use super::manifest::PluginManifest;
 use super::permission::GrantedPermissions;
+use super::state::SourceHostGrant;
 use super::storage::PluginStorage;
 
 pub struct StartReq {
@@ -26,7 +27,9 @@ pub struct StartReq {
     pub granted: GrantedPermissions,
     pub storage: Arc<PluginStorage>,
     pub host: Arc<dyn PluginHost>,
-    pub registry: Arc<ExtensionRegistry>,
+    pub registry: Arc<ContributionRegistry>,
+    /// `$sourceServer` 展开表。manager 持同一个 Arc,配置源时直接写,无需重启引擎。
+    pub source_hosts: Arc<Mutex<Vec<SourceHostGrant>>>,
 }
 
 enum Cmd {
@@ -105,6 +108,7 @@ fn run(mut rx: mpsc::UnboundedReceiver<Cmd>) {
                         req.storage,
                         req.host,
                         req.registry,
+                        req.source_hosts,
                     )
                     .await;
                     let out = match r {

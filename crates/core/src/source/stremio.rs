@@ -784,7 +784,7 @@ fn stream_entry(
 #[async_trait::async_trait]
 impl MediaSourceBackend for StremioBackend {
     fn kind(&self) -> SourceKind {
-        SourceKind::Stremio
+        SourceKind::stremio()
     }
 
     async fn list_dir(

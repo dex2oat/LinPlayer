@@ -296,7 +296,7 @@ impl FeiniuBackend {
 #[async_trait::async_trait]
 impl MediaSourceBackend for FeiniuBackend {
     fn kind(&self) -> SourceKind {
-        SourceKind::Feiniu
+        SourceKind::feiniu()
     }
 
     async fn list_dir(

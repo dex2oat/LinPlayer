@@ -379,7 +379,7 @@ export function VersionRow({
       /* ★ 只聚合 Emby。网盘 / OpenList / 飞牛没有 MediaSource 这个概念,
          要聚合就得逐个探测文件在不在 —— 为一行选择器做这件事不划算。 */
       const accs = (await listAccounts().catch(() => [] as AccountInfo[])).filter(
-        (a) => a.source_kind === "Emby",
+        (a) => a.source_kind === "emby",
       );
       if (!alive) return;
       setAccounts(accs);

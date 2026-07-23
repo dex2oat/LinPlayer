@@ -100,3 +100,7 @@ export const IconMenu = ({ size = 20, className }: P) =>
 /** 已看/未看勾(海报右键菜单的「标记已看」)。 */
 export const IconCheck = ({ size = 20, className }: P) =>
   svg(size, className, <path d="m4 12.5 5 5L20 6.5" />);
+export const IconPlugin = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="M9 3v3.5a1.5 1.5 0 0 1-3 0V3" /><path d="M18 3v3.5a1.5 1.5 0 0 1-3 0V3" /><rect x="4" y="6.5" width="16" height="8" rx="2" /><path d="M12 14.5V21" /></>);
+export const IconShield = ({ size = 20, className }: P) =>
+  svg(size, className, <><path d="M12 3l7 3v5.5c0 4.4-2.9 8.2-7 9.5-4.1-1.3-7-5.1-7-9.5V6l7-3z" /><path d="m9 12 2.2 2.2L15.5 10" /></>);

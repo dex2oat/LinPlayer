@@ -14,11 +14,11 @@ use serde_json::{json, Value as Json};
 
 use super::convert::{js_value_to_json, json_to_js};
 use super::ctx::install;
-use super::extensions::ExtensionRegistry;
+use super::contributions::ContributionRegistry;
 use super::host::PluginHost;
 use super::manifest::PluginManifest;
 use super::permission::GrantedPermissions;
-use super::state::CtxState;
+use super::state::{CtxState, SourceHostGrant};
 use super::storage::PluginStorage;
 
 const MEMORY_LIMIT: usize = 64 * 1024 * 1024;
@@ -64,7 +64,8 @@ impl PluginEngine {
         granted: GrantedPermissions,
         storage: Arc<PluginStorage>,
         host: Arc<dyn PluginHost>,
-        registry: Arc<ExtensionRegistry>,
+        registry: Arc<ContributionRegistry>,
+        source_hosts: Arc<Mutex<Vec<SourceHostGrant>>>,
     ) -> Result<Self, String> {
         let rt = AsyncRuntime::new().map_err(|e| format!("建 QuickJS 运行时失败: {e}"))?;
         rt.set_memory_limit(MEMORY_LIMIT).await;
@@ -92,6 +93,7 @@ impl PluginEngine {
             plugin_id: manifest.id.clone(),
             permissions: granted,
             allowed_hosts: manifest.http_allowed_hosts.clone(),
+            source_hosts,
             http,
             storage,
             host,

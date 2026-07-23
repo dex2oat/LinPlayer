@@ -67,11 +67,6 @@ import {
   setCrossServerResume,
   getWritebackSettings,
   setWritebackSettings,
-  pluginList,
-  pluginEnable,
-  pluginDisable,
-  pluginInstall,
-  pluginUninstall,
   getUpdateSettings,
   setUpdateSettings,
   checkUpdate,
@@ -90,7 +85,6 @@ import {
   IconRefresh,
   IconHeart,
   IconInfo,
-  IconSettings,
   IconSearch,
 } from "../app/icons";
 
@@ -1970,141 +1964,6 @@ function AccountPane() {
 /* 追剧日历已提到侧栏(用户 2026-07-16「不需要放在设置里面」),原 CalendarPane 移除。 */
 
 /* ============================================================
-   其它 · 插件
-   包格式是 **.ipk**(core installer.rs:「.ipk(就是 zip,含 manifest.json + main.js)」),
-   不是 .lpk —— 提示语别写错,用户会照着去找文件。
-   安装后核层默认**禁用**,要用户自己开(权限得先过目)。
-
-   ponytail: 用路径输入框而非文件选择器 —— @tauri-apps/plugin-dialog 不在依赖里,
-   为一个安装入口拉一个 npm + Rust 插件不值。要原生选择器就先装那个依赖。
-   ============================================================ */
-type Plugin = {
-  id: string;
-  name: string;
-  version: string;
-  author?: string;
-  description?: string;
-  enabled: boolean;
-  error?: string | null;
-};
-function PluginsPane() {
-  const f = useFlash();
-  const [list, setList] = useState<Plugin[] | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [path, setPath] = useState("");
-
-  const load = () =>
-    pluginList()
-      .then((l) => setList(l as unknown as Plugin[]))
-      .catch((e) => {
-        setList([]);
-        f.err(e);
-      });
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  async function toggle(p: Plugin) {
-    if (busy) return;
-    setBusy(p.id);
-    try {
-      await (p.enabled ? pluginDisable(p.id) : pluginEnable(p.id));
-      await load();
-      f.ok(p.enabled ? "已停用" : "已启用");
-    } catch (e) {
-      f.err(e);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function install() {
-    const p = path.trim();
-    if (busy || !p) return;
-    setBusy("install");
-    try {
-      const info = (await pluginInstall(p)) as unknown as Plugin;
-      await load();
-      setPath("");
-      f.ok(`已安装 ${info.name ?? ""} —— 默认停用,确认权限后再启用`);
-    } catch (e) {
-      f.err(e);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function uninstall(p: Plugin) {
-    if (busy) return;
-    setBusy(p.id);
-    try {
-      await pluginUninstall(p.id);
-      await load();
-      f.ok("已卸载");
-    } catch (e) {
-      f.err(e);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  return (
-    <div className="mdpane">
-      <h4>插件</h4>
-      <p className="hint">安装 .ipk 插件包,并管理已装插件的启用 / 停用。</p>
-
-      {list == null ? (
-        <div className="empty" style={{ padding: "28px 0" }}>
-          <span className="spinner" />
-        </div>
-      ) : list.length === 0 ? (
-        <div className="empty" style={{ padding: "28px 0" }}>
-          还没有安装插件 —— 在下方填 .ipk 路径安装。
-        </div>
-      ) : (
-        list.map((p) => (
-          <div className="st-card" key={p.id}>
-            <div className="setrow">
-              <span className="l">
-                <span className="t">{p.name}</span>
-                <span className="d">
-                  v{p.version}
-                  {p.author ? " · " + p.author : ""}
-                  {p.error ? ` · 加载出错:${p.error}` : ""}
-                </span>
-              </span>
-              <span className="ctl" style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <Sw on={p.enabled} disabled={busy === p.id} onChange={() => toggle(p)} />
-                <button className="btn" disabled={busy === p.id} onClick={() => uninstall(p)}>
-                  卸载
-                </button>
-              </span>
-            </div>
-          </div>
-        ))
-      )}
-
-      <h4 style={{ marginTop: 18 }}>安装插件</h4>
-      <p className="hint">填 .ipk 文件的完整路径。安装后默认停用,确认权限后再启用。</p>
-      <div className="st-copyrow">
-        <input
-          className="field"
-          placeholder="D:\插件\com.example.plugin.ipk"
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && install()}
-        />
-        <button className="btn primary" disabled={!!busy || !path.trim()} onClick={install}>
-          {busy === "install" ? "安装中…" : "安装"}
-        </button>
-      </div>
-      <div className="st-actions">{f.node}</div>
-    </div>
-  );
-}
-
-/* ============================================================
    其它 · 更新 · 备份 · 关于
    ============================================================ */
 /* ============================================================
@@ -2586,7 +2445,6 @@ const SECTIONS: { sec: string; items: ItemDef[] }[] = [
   {
     sec: "其它",
     items: [
-      { id: "plugins", label: "插件", icon: <IconSettings size={16} /> },
       { id: "storage", label: "存储与数据目录", icon: <IconFile size={16} /> },
       { id: "about", label: "更新 · 备份 · 关于", icon: <IconInfo size={16} /> },
     ],
@@ -2669,7 +2527,6 @@ export default function SettingsPage({ theme, setTheme }: Props) {
             {active === "proxy" && <ProxyPane />}
             {active === "sync" && <SyncPane />}
             {active === "account" && <AccountPane />}
-            {active === "plugins" && <PluginsPane />}
             {active === "storage" && <StoragePane />}
             {active === "about" && <AboutPane />}
           </div>
