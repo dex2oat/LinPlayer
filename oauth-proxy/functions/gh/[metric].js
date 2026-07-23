@@ -1,7 +1,7 @@
 // GET /gh/:metric — 自建 shields.io endpoint 徽章，绕开 shields 公共 GitHub token 池
 // （它经常「Unable to select next GitHub token from pool」把 stars/release/downloads 打成灰色）。
 //
-// :metric ∈ stars | stable | prerelease | downloads
+// :metric ∈ stars | stable | prerelease | downloads | license
 //
 // 可选环境变量（Cloudflare Pages → Settings → Environment variables，建议 Encrypted）：
 //   GITHUB_TOKEN  任意 read-only PAT（无 scope 即可）。不配也能跑，但匿名限 60 次/小时/IP，
@@ -16,6 +16,7 @@
 //   stable:     https://img.shields.io/endpoint?url=https://291277.xyz/gh/stable&label=stable
 //   prerelease: https://img.shields.io/endpoint?url=https://291277.xyz/gh/prerelease&label=pre-release
 //   downloads:  https://img.shields.io/endpoint?url=https://291277.xyz/gh/downloads&logo=github&label=downloads
+//   license:    https://img.shields.io/endpoint?url=https://291277.xyz/gh/license&label=license
 
 const REPO = 'zzzwannasleep/LinPlayer';
 
@@ -26,6 +27,7 @@ export async function onRequestGet({ params, env, waitUntil }) {
     stable: 'blue',
     prerelease: 'orange',
     downloads: 'green',
+    license: 'blue',
   };
   if (!(metric in cfg)) return badge(metric, 'unknown metric', 'lightgrey');
   const kvKey = `badge:v1:${metric}`;
@@ -53,16 +55,29 @@ export async function onRequestGet({ params, env, waitUntil }) {
       if (!r.ok) throw 0;
       const rel = (await r.json()).find((x) => !x.draft);
       message = rel ? rel.tag_name : 'none';
+    } else if (metric === 'license') {
+      const r = await gh('');
+      if (!r.ok) throw 0;
+      const lic = (await r.json()).license;
+      message = (lic && (lic.spdx_id || lic.name)) || 'none';
+      if (message === 'NOASSERTION') message = 'unknown';
     } else {
-      // downloads: 累加所有 release 全部 asset 的下载数，翻页取全
-      let total = 0;
-      for (let page = 1; page <= 20; page++) {
-        const r = await gh(`/releases?per_page=100&page=${page}`);
-        if (!r.ok) throw 0;
-        const list = await r.json();
-        for (const rel of list) for (const a of rel.assets || []) total += a.download_count || 0;
-        if (list.length < 100) break;
+      // downloads: 累加所有 release 全部 asset 的下载数。先拉第 1 页拿 Link 头的总页数，
+      // 其余页并行拉 —— 串行翻页（本仓库 5 页 ≈ 7s）会被 shields 判超时变灰。
+      const first = await gh('/releases?per_page=100&page=1');
+      if (!first.ok) throw 0;
+      const lists = [await first.json()];
+      const last = Math.min(parseLastPage(first.headers.get('link')), 20); // 20 页封顶,防跑飞
+      if (last > 1) {
+        const rest = await Promise.all(
+          Array.from({ length: last - 1 }, (_, i) =>
+            gh(`/releases?per_page=100&page=${i + 2}`).then((r) => (r.ok ? r.json() : [])),
+          ),
+        );
+        lists.push(...rest);
       }
+      let total = 0;
+      for (const list of lists) for (const rel of list) for (const a of rel.assets || []) total += a.download_count || 0;
       message = compact(total);
     }
     // 成功:把好值存进 KV(后台写,不拖响应),供下次 GitHub 抽风时兜底。
@@ -82,7 +97,13 @@ export async function onRequestGet({ params, env, waitUntil }) {
 }
 
 function labelFor(m) {
-  return { stars: 'Stars', stable: 'stable', prerelease: 'pre-release', downloads: 'downloads' }[m] || m;
+  return { stars: 'Stars', stable: 'stable', prerelease: 'pre-release', downloads: 'downloads', license: 'license' }[m] || m;
+}
+
+// 从 GitHub 分页的 Link 头里取 rel="last" 的页码；没有说明只有 1 页。
+function parseLastPage(link) {
+  const m = link && link.match(/[?&]page=(\d+)[^>]*>;\s*rel="last"/);
+  return m ? parseInt(m[1], 10) : 1;
 }
 
 // 1234 → 1.2k，对齐 shields downloads 的缩写风格
