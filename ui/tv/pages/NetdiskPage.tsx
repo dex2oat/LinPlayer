@@ -105,7 +105,22 @@ export default function NetdiskPage({ go }: { session: LoginResult; go: (r: Rout
                 disabled={!e.is_dir && !e.is_video}
                 onEnter={() => void enter(e)}
               >
-                <Icon n={e.is_dir ? "folder" : "file"} className="ic ic-c" />
+                {/* 有封面就画封面。网盘源基本不给 thumb_url,但 Stremio 这类元数据源
+                    每一行都是一部片 —— 全靠片名认片在电视上太费眼。 */}
+                {e.thumb_url ? (
+                  <img
+                    src={e.thumb_url}
+                    alt=""
+                    loading="lazy"
+                    style={THUMB}
+                    /* 封面挂了就把它藏掉,别在行首留一个破图图标。 */
+                    onError={(ev) => {
+                      ev.currentTarget.style.display = "none";
+                    }}
+                  />
+                ) : (
+                  <Icon n={e.is_dir ? "folder" : "file"} className="ic ic-c" />
+                )}
                 <div style={{ flex: 1, minWidth: 0, fontSize: 21 }}>{e.name}</div>
                 <div style={{ fontSize: 17, color: "var(--tv-ink-3)", flex: "none" }}>
                   {e.is_dir ? "文件夹" : fmtSize(e.size)}
@@ -128,4 +143,15 @@ const ROW: CSSProperties = {
   padding: "20px 24px",
   borderRadius: 14,
   background: "#161a20",
+};
+
+/** 行内小封面。宽高写死 → 有没有图行高都一样,列表不会因为图片陆续加载而抖。
+ *  海报是 2:3,按 48×72 给;非海报(剧集缩略图 16:9)用 cover 裁到同一框里。 */
+const THUMB: CSSProperties = {
+  width: 48,
+  height: 72,
+  flex: "none",
+  borderRadius: 6,
+  objectFit: "cover",
+  background: "#0d1117",
 };

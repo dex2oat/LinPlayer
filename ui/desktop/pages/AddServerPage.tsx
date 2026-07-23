@@ -34,8 +34,14 @@ type TypeId =
   | "quark"
   | "feiniu"
   | "anirss"
+  | "stremio"
   | "batch"
   | "qrsync";
+
+/* Stremio 配置框的默认内容。预填官方 Cinemeta —— 它是免费的元数据 addon,
+   不填任何东西根目录就是空的,新用户会以为源坏了。用户想换随时删掉重写。
+   ★ 只预填元数据 addon,不预置任何播放源 addon —— 装什么播放源是用户自己的事。 */
+const STREMIO_DEFAULT = "https://v3-cinemeta.strem.io/manifest.json\n";
 
 /* ★ api.ts 里的 ParsedServerBlock 类型与 Rust 侧 server_batch::ParsedServerBlock **对不上**
    (那边写的是 name/urls/remark,核层实际是 username/password/lines/danmaku_lines)。
@@ -84,6 +90,10 @@ const NAV: { sec: string; items: { id: TypeId; label: string; icon: () => ReactN
       { id: "feiniu", label: "飞牛影视", icon: () => <IconCloud size={16} /> },
       { id: "anirss", label: "Ani-RSS", icon: () => <IconCloud size={16} /> },
     ],
+  },
+  {
+    sec: "插件协议",
+    items: [{ id: "stremio", label: "Stremio", icon: () => <IconServer size={16} /> }],
   },
   {
     sec: "批量",
@@ -150,6 +160,7 @@ export default function AddServerPage({ onDone, onBack }: Props) {
   const [password, setPassword] = useState("");
   const [note, setNote] = useState("");
   const [cookie, setCookie] = useState("");
+  const [stremio, setStremio] = useState(STREMIO_DEFAULT);
   const [batchText, setBatchText] = useState("");
   const [qrPayload, setQrPayload] = useState("");
   const [exportText, setExportText] = useState("");
@@ -234,6 +245,25 @@ export default function AddServerPage({ onDone, onBack }: Props) {
     run(async () => {
       await sourceLogin(kind, server.trim(), username, password, null);
       onDone(kind === "Anirss" ? "anirss" : "netdisk");
+    });
+
+  /* Stremio 一个账号 = 一组 addon(catalog 来自元数据 addon、播放源来自另一个,
+     Stremio 本来就是这么组合的),所以是多行输入而不是单个地址。
+     核层约定(见 crates/core/src/source/stremio.rs 顶部注释):
+       base_url = 第一个 addon(同时当账号 id,所以要挑稳定的)
+       cookie   = 其余行原样带过去,核层再拆 `server=` 与追加 addon。 */
+  const submitStremio = () =>
+    run(async () => {
+      const lines = stremio
+        .split("\n")
+        .map((s) => s.trim())
+        .filter((s) => s && !s.startsWith("#"));
+      const addons = lines.filter((l) => !/^server\s*=/i.test(l));
+      if (addons.length === 0) throw new Error("至少要填一个 addon 的 manifest 地址");
+      const primary = addons[0];
+      const rest = lines.filter((l) => l !== primary);
+      await sourceLogin("Stremio", primary, "", "", rest.join("\n") || null);
+      onDone("netdisk");
     });
 
   // ---------- 夸克:扫码 / Cookie 两种方式 ----------
@@ -422,6 +452,48 @@ export default function AddServerPage({ onDone, onBack }: Props) {
           </>
         );
       }
+
+      case "stremio":
+        return (
+          <>
+            <h4>Stremio</h4>
+            <p className="hint">
+              每行一个 addon 的 <b>manifest.json</b> 地址。第一行会作为这个账号的标识，
+              建议放元数据 addon（如已预填的 Cinemeta）。
+            </p>
+            <div className="fld">
+              <label>Addon 列表</label>
+              <textarea
+                className="field"
+                rows={7}
+                spellCheck={false}
+                placeholder={
+                  "https://v3-cinemeta.strem.io/manifest.json\n" +
+                  "https://opensubtitles-v3.strem.io/manifest.json\n" +
+                  "server=http://192.168.1.10:11470"
+                }
+                value={stremio}
+                onChange={(e) => setStremio(e.target.value)}
+              />
+            </div>
+            <p className="hint">
+              只提供元数据的 addon（Cinemeta 等）不出播放源，要能播必须再加至少一个
+              <b> stream 类 addon</b>。<br />
+              返回 <b>直链</b> 的播放源可直接播；返回 <b>种子（infoHash）</b>的需要一台
+              Stremio 流媒体服务器 —— 自建了就单起一行填
+              <code> server=http://地址:11470</code>，没填的种子源会在列表里置灰并注明原因，不会静默消失。
+            </p>
+            <div className="as-actions">
+              <button
+                className="btn primary"
+                disabled={busy || !stremio.trim()}
+                onClick={submitStremio}
+              >
+                {spin("添加")}
+              </button>
+            </div>
+          </>
+        );
 
       case "quark":
         return (

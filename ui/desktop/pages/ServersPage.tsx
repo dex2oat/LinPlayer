@@ -50,6 +50,7 @@ const KIND_LABEL: Record<SourceKind, string> = {
   Quark: "夸克",
   Anirss: "RSS",
   Feiniu: "飞牛",
+  Stremio: "Stremio",
 };
 
 /* 状态点 = **连通健康**,不是「选中」(选中看 .sv-cur-tag「当前」角标)。

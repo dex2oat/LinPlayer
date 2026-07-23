@@ -28,6 +28,7 @@ use linplayer_core::source::anirss::AniRssBackend;
 use linplayer_core::source::feiniu::FeiniuBackend;
 use linplayer_core::source::openlist::OpenListBackend;
 use linplayer_core::source::quark::QuarkBackend;
+use linplayer_core::source::stremio::StremioBackend;
 use linplayer_core::source::{MediaSourceBackend, SourceEntry, SourceKind, SourceServer};
 use linplayer_core::sync::{bangumi, trakt};
 use std::collections::HashMap;
@@ -155,23 +156,108 @@ async fn play(
     Ok(resume_secs)
 }
 
-/* ponytail: 本地下载文件与网盘/聚合源的起播先不接。
-   两者都要先把「下载索引 / 源解析」这两条链路在安卓上跑通,而现在连 Emby 直连
-   都还没上过真机 —— 先证明画面和声音出得来,再铺开源类型。
+/* ponytail: 本地下载文件的起播先不接 —— 它还要先把下载索引这条链路在安卓上跑通。
    保持明确报错而不是假装成功:假装成功的表现是黑屏等一个永远不来的 status。 */
 #[tauri::command]
 fn play_local(_id: String, _resume_secs: f64) -> Result<f64, String> {
     Err("安卓端暂不支持播放本地下载文件".to_string())
 }
 
+/// 解析源文件为直链并用 mpv 播放(带逐流 headers)。返回起播秒数。
+///
+/// 与 `apps/desktop/src/lib.rs` 的同名命令同构。桌面那边多做两件安卓没有的事:
+/// `apply_playback_defaults`(硬解/杜比档位是桌面设置项)和观看记录上下文。
 #[tauri::command]
-fn source_play(
-    _entry_id: String,
-    _entry_name: String,
-    _resume_secs: f64,
-    _raw: Option<serde_json::Value>,
+async fn source_play(
+    state: State<'_, AppState>,
+    ps: State<'_, PlayerState>,
+    entry_id: String,
+    entry_name: String,
+    resume_secs: f64,
+    raw: Option<serde_json::Value>,
 ) -> Result<f64, String> {
-    Err("安卓端暂不支持播放网盘/聚合源".to_string())
+    // 源播放非 Emby,清 Trakt/Bangumi 上下文 —— 不清会把网盘进度记到上一部 Emby 片上。
+    *state.scrobble_ctx.lock().unwrap() = None;
+    let (kind, server) = state.source.lock().unwrap().clone().ok_or("未登录源")?;
+    let backend = source_backend(&state, kind)?;
+    let entry = SourceEntry {
+        id: entry_id,
+        name: entry_name,
+        is_dir: false,
+        is_video: true,
+        size: None,
+        thumb_url: None,
+        raw, // 透传源原始数据(Stremio 的 stream 对象、ani-rss 外挂字幕等靠它)
+    };
+    let resolved = backend
+        .resolve_play(&state.http, &server, &entry, None)
+        .await
+        .map_err(|e| e.message)?;
+    {
+        // 播放器锁不能跨 await 持有(MutexGuard 不是 Send),所以解析完再取。
+        let g = ensure_player(&ps)?;
+        let p = g.as_ref().unwrap();
+        let _ = p.take_error_eof(); // 清历史失效标志
+        p.load_with_headers(
+            &resolved.url,
+            resume_secs,
+            &resolved.http_headers,
+            resolved.user_agent_override.as_deref(),
+        )?;
+        p.set_pause(false);
+        // 外挂字幕必须 load 之后逐条 sub-add:它们不在容器里,track-list 看不到。
+        for sub in &resolved.subtitles {
+            p.add_subtitle(&sub.url, sub.title.as_deref().unwrap_or("字幕"));
+        }
+    }
+    *ps.playback.lock().unwrap() = None; // 源播放不走 Emby 上报
+    Ok(resume_secs)
+}
+
+/// 添加/切换一个浏览型源。与 `apps/desktop/src/lib.rs::source_login` 同构。
+#[tauri::command]
+async fn source_login(
+    state: State<'_, AppState>,
+    kind: SourceKind,
+    base_url: String,
+    username: String,
+    password: String,
+    cookie: Option<String>,
+) -> Result<(), String> {
+    // 夸克 Cookie 模式无 base_url(固定云端 API),用 kind 名做稳定 id。
+    let id = if base_url.trim().is_empty() {
+        format!("{kind:?}")
+    } else {
+        base_url.clone()
+    };
+    let server = SourceServer {
+        id,
+        base_url,
+        username: (!username.is_empty()).then_some(username),
+        password: (!password.is_empty()).then_some(password),
+        token: cookie.filter(|c| !c.is_empty()),
+        extra: HashMap::new(),
+    };
+    let backend = source_backend(&state, kind)?;
+    // 列根目录以验证配置可用 —— 不验的话错地址也会"添加成功",进去才发现是空的。
+    backend
+        .list_dir(&state.http, &server, None)
+        .await
+        .map_err(|e| e.message)?;
+    {
+        let mut cfg = state.config.lock().unwrap();
+        cfg.upsert(Account {
+            server: server.id.clone(),
+            user_name: server.username.clone().unwrap_or_else(|| format!("{kind:?}")),
+            source_kind: kind,
+            source: Some(server.clone()),
+            ..Default::default()
+        });
+        cfg.save();
+    }
+    *state.source.lock().unwrap() = Some((kind, server));
+    *state.session.lock().unwrap() = None; // 切到源 → 上一个 Emby 会话作废
+    Ok(())
 }
 
 #[tauri::command]
@@ -1101,6 +1187,25 @@ async fn companion_call(
             Ok(json!({ "ok": true, "name": r.user_name }))
         }
 
+        /* 加浏览型源(目前手机页只开了 Stremio 一种)。
+           ★ 电视上加源只能走这条路:遥控器打一行 URL 已经很痛,Stremio 还是**多行**配置。
+             TV 的 OnboardingPage 明确把「打字」判成非主路径,不给它开表单。 */
+        "source_login" => {
+            let kind: SourceKind = serde_json::from_value(json!(s("kind")))
+                .map_err(|_| format!("不认识的源类型: {}", s("kind")))?;
+            source_login(
+                app.state::<AppState>(),
+                kind,
+                s("base_url"),
+                s("user"),
+                s("pass"),
+                Some(s("cookie")),
+            )
+            .await?;
+            app.emit("lp://accounts-changed", ()).ok();
+            Ok(json!({ "ok": true }))
+        }
+
         /* 手机上打字搜片 —— 这是遥控器最痛的场景,所以搜的是**全部服务器**,
            省得用户先切服再搜。点结果时把 server 一起带回来。 */
         "search" => {
@@ -1854,6 +1959,8 @@ pub fn run() {
             source_backends.insert(SourceKind::Anirss, Arc::new(AniRssBackend::new()));
             source_backends.insert(SourceKind::Feiniu, Arc::new(FeiniuBackend::new()));
             source_backends.insert(SourceKind::Quark, Arc::new(QuarkBackend::new()));
+            // 与 apps/desktop/src/lib.rs 的同名表必须逐条对齐,漏一条那一端就静默不可用。
+            source_backends.insert(SourceKind::Stremio, Arc::new(StremioBackend::new()));
 
             // 有活跃账号 -> 用存盘凭据重建会话/源(重启免登)。Emby 与浏览型源互斥。
             let active = config.active_account();
@@ -1937,6 +2044,7 @@ pub fn run() {
             sync_lines,
             account_icon,
             // --- 源 ---
+            source_login,
             source_list_dir,
             // --- 设置 / 数据 / 更新 ---
             data_paths,

@@ -32,6 +32,7 @@ use linplayer_core::source::feiniu::FeiniuBackend;
 use linplayer_core::source::openlist::OpenListBackend;
 use linplayer_core::source::quark::QuarkBackend;
 use linplayer_core::source::quark_tv;
+use linplayer_core::source::stremio::StremioBackend;
 use linplayer_core::source::{MediaSourceBackend, SourceEntry, SourceKind, SourceServer};
 use mpv::{Player, Status};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -4475,6 +4476,9 @@ pub fn run() {
     source_backends.insert(SourceKind::Anirss, anirss.clone());
     source_backends.insert(SourceKind::Feiniu, Arc::new(FeiniuBackend::new()));
     source_backends.insert(SourceKind::Quark, Arc::new(QuarkBackend::new()));
+    // ★ 这张表安卓侧(apps/android/src/lib.rs)有一份**独立的拷贝**。只加这边,
+    //   安卓上的表现是「源加得进去、点进去报『该源类型暂未接入』」,而且编译全绿。
+    source_backends.insert(SourceKind::Stremio, Arc::new(StremioBackend::new()));
 
     // 有活跃账号 -> 用存盘凭据重建会话/源(重启免登)。
     // 活跃的是 Emby 就装 session,是浏览型源就装 source —— 两者互斥,别同时留着。

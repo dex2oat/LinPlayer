@@ -8,6 +8,7 @@ pub mod feiniu;
 pub mod openlist;
 pub mod quark;
 pub mod quark_tv;
+pub mod stremio;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 #[serde(rename_all = "lowercase")]
@@ -18,6 +19,7 @@ pub enum SourceKind {
     Quark,
     Anirss,
     Feiniu,
+    Stremio,
 }
 
 /// 浏览返回的一行:文件夹或文件。
@@ -200,5 +202,25 @@ mod tests {
         assert!(is_video_file_name("a.mp4"));
         assert!(!is_video_file_name("cover.jpg"));
         assert!(!is_video_file_name("无扩展名"));
+    }
+
+    /// SourceKind 的线上表示就是**配置文件里的字面量**和**前端 api.ts 的联合类型**。
+    /// 变体名大小写写歪一个字母,老配置就读不回来(掉账号),前端的 KIND_LABEL 也对不上。
+    /// 这条钉的是「加变体时顺手把两端对齐」。
+    #[test]
+    fn kind_wire_format_is_lowercase() {
+        let all = [
+            (SourceKind::Emby, "emby"),
+            (SourceKind::Openlist, "openlist"),
+            (SourceKind::Quark, "quark"),
+            (SourceKind::Anirss, "anirss"),
+            (SourceKind::Feiniu, "feiniu"),
+            (SourceKind::Stremio, "stremio"),
+        ];
+        for (k, wire) in all {
+            assert_eq!(serde_json::to_string(&k).unwrap(), format!("\"{wire}\""));
+            let back: SourceKind = serde_json::from_str(&format!("\"{wire}\"")).unwrap();
+            assert_eq!(back, k, "{wire} 反序列化不回原变体 —— 老配置会掉账号");
+        }
     }
 }

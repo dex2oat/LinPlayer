@@ -252,7 +252,7 @@ export type ServerLine = {
   remark: string | null;
 };
 
-export type SourceKind = "Emby" | "Openlist" | "Quark" | "Anirss" | "Feiniu";
+export type SourceKind = "Emby" | "Openlist" | "Quark" | "Anirss" | "Feiniu" | "Stremio";
 
 /** 连通状态三态。unknown = 还没探过(按灰显示),与 down「探过确实不通」同色不同义。 */
 export type AccountStatus = "ok" | "reauth" | "down" | "unknown";
