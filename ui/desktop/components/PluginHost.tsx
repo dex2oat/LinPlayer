@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { pluginInvokeField, pluginPanels, pluginUiRespond, type PluginPanel } from "@shared/api";
+import { formTree, listTree } from "@shared/plugin-ui";
 import PluginView, { type FormValues } from "./PluginView";
 
 /* ============================================================
@@ -44,43 +45,6 @@ type Pending =
   | { id: number; kind: "dialog"; title: string; message: string; okText: string; cancelText: string }
   | { id: number; kind: "form"; title: string; description: string; tree: unknown; submitText: string }
   | { id: number; kind: "list"; title: string; tree: unknown };
-
-/** `ctx.ui.showForm({fields:[…]})` 是 render 的糖 —— 折成同一棵描述树,
- *  这样表单控件的样式/主题只有一套实现。 */
-function formTree(args: Record<string, unknown>): unknown {
-  const fields = Array.isArray(args.fields) ? args.fields : [];
-  return {
-    t: "col",
-    children: fields.map((f) => {
-      const o = (f ?? {}) as Record<string, unknown>;
-      const type = String(o.type ?? "text");
-      if (type === "switch" || type === "bool")
-        return { t: "switch", id: o.id, label: o.label ?? o.id, value: o.value };
-      if (type === "select")
-        return { t: "select", id: o.id, label: o.label, value: o.value, options: o.options };
-      return {
-        t: "input",
-        id: o.id,
-        label: o.label,
-        placeholder: o.placeholder,
-        value: o.value,
-        password: type === "password",
-        multiline: type === "textarea",
-      };
-    }),
-  };
-}
-
-function listTree(args: Record<string, unknown>): unknown {
-  const items = Array.isArray(args.items) ? args.items : [];
-  return {
-    t: "list",
-    items: items.map((it) => {
-      const o = (it ?? {}) as Record<string, unknown>;
-      return { id: String(o.id ?? o.value ?? o.title ?? ""), title: o.title ?? o.label, subtitle: o.subtitle, handler: "pick" };
-    }),
-  };
-}
 
 export function PluginUiHost() {
   const [toast, setToast] = useState<string | null>(null);
@@ -254,6 +218,10 @@ type SlotProps = {
   className?: string;
   /** 只画这个插件贡献的面板(插件详情页里的「设置」标签用)。 */
   onlyPlugin?: string;
+  /** 再收窄到某一条贡献(整页打开单个面板时用)。 */
+  onlyId?: string;
+  /** 不画面板自带的标题。整页打开时页头已经写了一遍,再画就是重复。 */
+  hideTitle?: boolean;
 };
 
 /**
@@ -262,14 +230,20 @@ type SlotProps = {
  * 没有插件挂上来时**什么都不渲染**(连标题都不画)—— 一个空的
  * 「插件面板」标题栏比没有更糟。
  */
-export function PluginSlot({ slot, title, className, onlyPlugin }: SlotProps) {
+export function PluginSlot({ slot, title, className, onlyPlugin, onlyId, hideTitle }: SlotProps) {
   const [panels, setPanels] = useState<PluginPanel[]>([]);
 
   const load = useCallback(() => {
     pluginPanels(slot)
-      .then((ps) => setPanels(onlyPlugin ? ps.filter((p) => p.pluginId === onlyPlugin) : ps))
+      .then((ps) =>
+        setPanels(
+          ps.filter(
+            (p) => (!onlyPlugin || p.pluginId === onlyPlugin) && (!onlyId || p.id === onlyId),
+          ),
+        ),
+      )
       .catch(() => setPanels([]));
-  }, [slot, onlyPlugin]);
+  }, [slot, onlyPlugin, onlyId]);
 
   useEffect(() => {
     load();
@@ -283,18 +257,29 @@ export function PluginSlot({ slot, title, className, onlyPlugin }: SlotProps) {
     <div className={className}>
       {title && <div className="rowlab"><span className="h">{title}</span></div>}
       {panels.map((p) => (
-        <PanelBody key={`${p.pluginId}/${p.id}`} panel={p} />
+        <PanelBody key={`${p.pluginId}/${p.id}`} panel={p} hideTitle={hideTitle} />
       ))}
     </div>
   );
 }
 
-function PanelBody({ panel }: { panel: PluginPanel }) {
+function PanelBody({ panel, hideTitle }: { panel: PluginPanel; hideTitle?: boolean }) {
   const key = `${panel.pluginId}/${panel.id}`;
   const pushed = useRendered(key);
   const [pulled, setPulled] = useState<unknown>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const handler = String(panel.data?.handler ?? "render");
+  /* 要调的是**字段名**,不是字段的值。
+     核层 `invoke_extension_field(…, field)` 拿 field 去 `data[field]` 里取 handler 描述,
+     再由 handler_ref 决定怎么调(字符串 = 全局函数名,{__handler__} = 动态注册的函数)。
+
+     ★ 原来写的是 `String(panel.data?.handler ?? "render")` —— 把**值**当成了字段名:
+       - manifest 声明 `handler: "renderGreeting"` → 去查 data["renderGreeting"],不存在;
+       - 运行时注册 `handler: 某函数`     → String() 出来是 "[object Object]";
+       两种都落到 HandlerRef::None,返回 Ok(Null),**面板永远空白且不报错**。
+       P1 的端到端演示插件碰巧写的是 `render: 函数`,是唯一能歪打正着的形状,
+       所以那一轮没暴露。Rust 侧的集成测试走 trigger_extension(直接取 data["handler"]),
+       也绕开了这段。 */
+  const handler = panel.data?.handler !== undefined ? "handler" : "render";
 
   const pull = useCallback(() => {
     pluginInvokeField(panel.pluginId, "panels", panel.id, handler)
@@ -320,7 +305,7 @@ function PanelBody({ panel }: { panel: PluginPanel }) {
       .finally(() => setBusy(null));
   };
 
-  const title = String(panel.data?.title ?? "");
+  const title = hideTitle ? "" : String(panel.data?.title ?? "");
   return (
     <div className="pg-panel">
       {title && <div className="pv-text title">{title}</div>}

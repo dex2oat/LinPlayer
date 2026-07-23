@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { resolvePluginAssetUrl } from "@shared/api";
 import { sanitizeTree, initialFormState, type PluginNode } from "@shared/plugin-ui";
 
 /* ============================================================
@@ -68,7 +69,23 @@ export default function PluginView({ raw, onAction, busy, empty, onValues }: Pro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tree]);
 
-  if (!tree) return empty ? <div className="pv-empty">{empty}</div> : null;
+  if (!tree) {
+    /* ★ 「插件交了东西、但一个节点都画不出来」和「插件什么都没交」是两回事,
+       以前都画成一片空白。空白是这个系统里最贵的失败模式:插件作者看不出
+       自己写错了什么,日志里也没有痕迹。最常见的两种写错都落在这条分支上 ——
+       返回 `{metrics:[...]}` 这类旧形状(没有 t 字段),或者输入控件漏了 id。 */
+    const gaveSomething = !!raw && typeof raw === "object";
+    if (gaveSomething)
+      return (
+        <div className="pv-empty">
+          这个插件返回的界面描述看不懂,一个节点都画不出来。
+          <br />
+          常见原因:根节点缺 <code>t</code> 字段(旧版插件的 <code>{"{metrics:[…]}"}</code> 形状),
+          或者输入控件的键写成了 <code>key</code> 而不是 <code>id</code>。
+        </div>
+      );
+    return empty ? <div className="pv-empty">{empty}</div> : null;
+  }
 
   const set = (id: string, v: string | boolean) =>
     setValues((s) => {
@@ -130,7 +147,10 @@ export default function PluginView({ raw, onAction, busy, empty, onValues }: Pro
           <img
             key={key}
             className="pv-img"
-            src={n.src}
+            /* 插件写的是 `lpplugin://<id>/<路径>`(文档也这么教)。那个字符串
+               只在 Linux 上碰巧能用 —— Windows 的 WebView2 不认这个 scheme,
+               直接是坏图且不报错。这里换成当前平台真取得到的 URL。 */
+            src={resolvePluginAssetUrl(n.src)}
             alt={n.alt ?? ""}
             style={n.height ? { height: n.height } : undefined}
           />

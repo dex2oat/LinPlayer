@@ -278,3 +278,22 @@
 .pv-li:disabled { cursor: default; }
 .pv-li b { font-size: 13px; font-weight: 580; color: var(--ink); }
 .pv-li span { font-size: 11.5px; color: var(--ink-3); }
+
+/* ── 插件整页界面(slot: page / sidebar 的面板,以及 iframe 逃生舱)─────────── */
+.pgview { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.pgview-bar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 4px 14px; flex: none;
+}
+.pgview-bar .ttl { display: flex; flex-direction: column; line-height: 1.25; }
+.pgview-bar .ttl b { font-size: 17px; }
+.pgview-bar .ttl span { font-size: 12px; opacity: .6; }
+.pgview-body { flex: 1; min-height: 0; overflow: auto; }
+/* 逃生舱撑满剩余空间。**必须给显式高度** —— iframe 的默认高度是 150px，
+   放进 flex 容器里不给 min-height:0 的话会被内容顶出滚动条。 */
+.pgview-frame {
+  flex: 1; min-height: 0; width: 100%; border: 0;
+  border-radius: 12px; background: var(--bg-2, #1a1c20);
+}
+.pg-views { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.pg-views h5 { width: 100%; margin: 0 0 2px; }

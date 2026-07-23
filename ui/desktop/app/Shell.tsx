@@ -23,6 +23,7 @@ import ServersPage from "../pages/ServersPage";
 import AddServerPage from "../pages/AddServerPage";
 import SettingsPage from "../pages/SettingsPage";
 import PluginsPage from "../pages/PluginsPage";
+import PluginViewPage, { type PluginViewRef } from "../pages/PluginViewPage";
 import { PluginUiHost } from "../components/PluginHost";
 import AniRssPage from "../pages/AniRssPage";
 import CalendarPage from "../pages/CalendarPage";
@@ -57,6 +58,14 @@ export default function Shell({
   const { theme, setTheme, toggle } = useTheme();
   const [page, setPage] = useState<PageId>("home");
   const [collapsed, setCollapsed] = useState(false);
+  /* 当前打开的插件整页界面(侧栏的插件入口 / 插件详情页的「打开」都写它)。
+     插件被停用时这里会留着一个指向不存在贡献点的引用 —— PluginSlot 查不到就画空,
+     不会崩,用户点返回即可。 */
+  const [pluginView, setPluginView] = useState<PluginViewRef | null>(null);
+  const openPluginView = (v: PluginViewRef) => {
+    setPluginView(v);
+    setPage("pluginview");
+  };
   const [libTarget, setLibTarget] = useState<Item | null>(null);
   const [detailStack, setDetailStack] = useState<Item[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
@@ -203,7 +212,14 @@ export default function Shell({
           />
         );
       case "plugins":
-        return <PluginsPage />;
+        return <PluginsPage onOpenView={openPluginView} />;
+      case "pluginview":
+        // 直接把 page 切过来但没设 view(不该发生)时退回插件页,别白屏。
+        return pluginView ? (
+          <PluginViewPage view={pluginView} onBack={() => nav("plugins")} />
+        ) : (
+          <PluginsPage onOpenView={openPluginView} />
+        );
       case "settings":
         return <SettingsPage theme={theme} setTheme={setTheme} />;
     }
@@ -215,6 +231,8 @@ export default function Shell({
         <Sidebar
           page={page}
           onNav={nav}
+          onOpenPluginView={openPluginView}
+          activePluginView={page === "pluginview" ? pluginView : null}
           collapsed={collapsed}
           onToggleCollapse={() => setCollapsed((v) => !v)}
           activeServer={session.server}

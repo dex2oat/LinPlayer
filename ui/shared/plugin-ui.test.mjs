@@ -2,7 +2,7 @@
      npx tsx ui/shared/plugin-ui.test.mjs
    这棵树是**插件写的、不可信的数据**,下面每条断言都对应一个真实攻击/崩溃面。 */
 import assert from "node:assert/strict";
-import { sanitizeTree, initialFormState, MAX_DEPTH, MAX_NODES } from "./plugin-ui.ts";
+import { sanitizeTree, initialFormState, formTree, listTree, MAX_DEPTH, MAX_NODES } from "./plugin-ui.ts";
 
 // ---- 正常树原样通过 ----
 const ok = sanitizeTree({
@@ -118,3 +118,78 @@ assert.deepEqual(initialFormState(null), {});
 assert.equal(sanitizeTree({ t: "switch", id: "on", value: true }), null);
 
 console.log("plugin-ui: 全部通过");
+
+/* ============================================================
+   showForm 的字段名契约。
+   ------------------------------------------------------------
+   这一段存在的理由:宿主自带的参考示例(crates/core/src/plugins/hello_it.rs)
+   一度教插件作者写 `{ key: 'name', default: '小明' }`,而真实映射读的是
+   `id` / `value` —— 于是照抄官方示例写出来的设置表单**一片空白**,
+   编译绿、单测绿、日志干净。那个集成测试用假 host 硬编码返回值,
+   压根没跑到这段映射。
+   ============================================================ */
+
+{
+  const tree = sanitizeTree(
+    formTree({
+      fields: [
+        { id: "user", label: "用户名", type: "text", value: "老王" },
+        { id: "pass", label: "密码", type: "password" },
+        { id: "bio", label: "简介", type: "textarea" },
+        { id: "lang", label: "语言", type: "select", value: "zh",
+          options: [{ value: "zh", label: "中文" }, { value: "en", label: "English" }] },
+        { id: "on", label: "开关", type: "switch", value: true },
+      ],
+    }),
+  );
+  assert.notEqual(tree, null, "正常的 fields 必须能画出来");
+  assert.equal(tree.children.length, 5, "五个字段一个都不能被消毒掉");
+
+  const [user, pass, bio, lang, on] = tree.children;
+  assert.equal(user.t, "input");
+  assert.equal(user.id, "user");
+  assert.equal(user.value, "老王", "value 是初始值的键");
+  assert.equal(pass.password, true, "type:password 要映射成 password 标志");
+  assert.equal(bio.multiline, true, "type:textarea 要映射成 multiline");
+  assert.equal(lang.t, "select");
+  assert.equal(lang.options.length, 2);
+  assert.equal(on.t, "switch");
+  assert.equal(on.value, true);
+
+  // 初值收集:这就是按钮点下去时交给插件的那个对象。
+  const init = initialFormState(tree);
+  assert.equal(init.user, "老王");
+  assert.equal(init.lang, "zh");
+  assert.equal(init.on, true);
+}
+
+{
+  // ★ 反过来:写成 v1 的 key/default,这个控件**必须**整个消失。
+  //   我们不做兼容 —— 兼容了就等于两套字段名并存,下一个人照样写错。
+  //   但它必须是「明显没了」而不是「画出来但值不对」。
+  const tree = sanitizeTree(formTree({ fields: [{ key: "name", label: "称呼", default: "小明" }] }));
+  assert.equal(tree, null, "键写成 key 的字段没有 id,整棵树应为空(而不是画出一个空框)");
+}
+
+{
+  // showList:选中回的是 id
+  const tree = sanitizeTree(listTree({ items: [
+    { id: "a", title: "第一项", subtitle: "副标题" },
+    { title: "没有 id 的用标题兜底" },
+  ] }));
+  assert.notEqual(tree, null);
+  assert.equal(tree.t, "list");
+  assert.equal(tree.items.length, 2);
+  assert.equal(tree.items[0].id, "a");
+  assert.equal(tree.items[0].handler, "pick", "点击要能回到宿主的选择回调");
+  assert.equal(tree.items[1].id, "没有 id 的用标题兜底");
+}
+
+{
+  // 空 fields / 畸形入参不能炸,也不该画出一个空壳。
+  assert.equal(sanitizeTree(formTree({})), null);
+  assert.equal(sanitizeTree(formTree({ fields: "不是数组" })), null);
+  assert.equal(sanitizeTree(listTree({ items: null })), null);
+}
+
+console.log("  ok  showForm/showList 字段名契约(id/value,不认 key/default)");

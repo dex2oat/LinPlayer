@@ -9,7 +9,10 @@ import {
   setActiveServer,
 } from "@shared/api";
 import { type PageId, NAV, NAV_FOOT, type NavItem } from "./nav";
-import { IconMenu, IconPlus, IconSun, IconMoon } from "./icons";
+import { IconMenu, IconPlus, IconSun, IconMoon, IconPlugin } from "./icons";
+import { pluginPanels, type PluginPanel } from "@shared/api";
+import { listen } from "@tauri-apps/api/event";
+import type { PluginViewRef } from "../pages/PluginViewPage";
 import ServerIcon from "../components/ServerIcon";
 
 type Props = {
@@ -23,6 +26,10 @@ type Props = {
   onSwitched: () => void;
   theme: "dark" | "light";
   onToggleTheme: () => void;
+  /** 打开某个插件的整页界面。 */
+  onOpenPluginView: (v: PluginViewRef) => void;
+  /** 当前正开着的插件界面(用来高亮对应的侧栏项)。 */
+  activePluginView: PluginViewRef | null;
 };
 
 /* 状态点三态(草稿标注 3/25)。
@@ -48,8 +55,14 @@ export default function Sidebar({
   onSwitched,
   theme,
   onToggleTheme,
+  onOpenPluginView,
+  activePluginView,
 }: Props) {
   const [accounts, setAccounts] = useState<AccountInfo[] | null>(null);
+  /* 插件挂在 `sidebar` 槽位的面板 —— 它们就是侧栏里的额外入口。
+     这个槽位在核层和 manifest 校验里一直是合法的,但前端从来没渲染过,
+     于是插件挂上去永远看不见(「不报错,只是不显示」)。 */
+  const [pluginNav, setPluginNav] = useState<PluginPanel[]>([]);
   const [dd, setDd] = useState(false);
   const [ctx, setCtx] = useState<{ x: number; y: number; acc: AccountInfo } | null>(null);
   const [err, setErr] = useState("");
@@ -138,6 +151,13 @@ export default function Sidebar({
       setErr(`删除失败:${e}`);
     }
   }
+
+  useEffect(() => {
+    const load = () => pluginPanels("sidebar").then(setPluginNav).catch(() => setPluginNav([]));
+    load();
+    const un = listen("plugin://extensions-changed", load);
+    return () => void un.then((f) => f());
+  }, []);
 
   const item = (n: NavItem) => {
     const Icon = n.icon;
@@ -238,7 +258,34 @@ export default function Sidebar({
         )}
       </div>
 
-      <div className="nav">{NAV.map(item)}</div>
+      <div className="nav">
+        {NAV.map(item)}
+        {pluginNav.map((p) => {
+          const title = String(p.data?.title ?? p.id);
+          const on = activePluginView?.pluginId === p.pluginId && activePluginView?.id === p.id;
+          return (
+            <button
+              key={`${p.pluginId}/${p.id}`}
+              className={`nav-item${on ? " on" : ""}`}
+              onClick={() =>
+                onOpenPluginView({
+                  pluginId: p.pluginId,
+                  kind: "panel",
+                  id: p.id,
+                  title,
+                  slot: "sidebar",
+                })
+              }
+              title={`${title}（插件）`}
+            >
+              <span className="nav-ic">
+                <IconPlugin size={19} />
+              </span>
+              <span className="nav-label">{title}</span>
+            </button>
+          );
+        })}
+      </div>
       <div className="nav-spring" />
       <div className="nav-foot">
         {NAV_FOOT.map(item)}

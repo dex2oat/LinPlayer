@@ -354,4 +354,81 @@ mod tests {
         assert!(parse_registry("{}").is_err());
         assert!(parse_registry("не json").is_err());
     }
+
+    /// **官方仓库 `tools/build.py` 真实产出的形状**,一字未改地钉在这里。
+    ///
+    /// 这是跨仓库契约的唯一守门人:插件仓库在另一个 repo,它的构建脚本和这里的
+    /// serde 结构对不上时,两边都不会报错 —— 市场只是显示 0 个插件。
+    /// 2026-07-23 就发生过:构建脚本把 author 写成 `{"name": ...}` 对象(v1 形状),
+    /// 8 条插件**全部**被静默跳过。
+    ///
+    /// 改这里的字段名之前,先去改 `LinplayerPluginsRepository/tools/build.py`。
+    #[test]
+    fn the_real_official_registry_shape_parses_with_nothing_skipped() {
+        let raw = r##"{
+  "schemaVersion": 2,
+  "plugins": [
+    {
+      "id": "com.linplayer.m3u",
+      "name": "M3U 直播源",
+      "description": "填一个 m3u / m3u8 播放列表地址",
+      "author": "LinPlayer",
+      "category": "source",
+      "tags": ["直播", "iptv"],
+      "targets": ["pc"],
+      "permissions": ["sources", "http", "storage"],
+      "versions": [
+        {
+          "version": "1.0.0",
+          "api_version": 2,
+          "package_url": "https://raw.githubusercontent.com/zzzwannasleep/LinplayerPluginsRepository/main/packages/com.linplayer.m3u-1.0.0.ipk",
+          "sha256": "e9419f4a0e2b5d973d385f8cd077b3ad445337ff0e1976c70d2e1a99abee8b84"
+        }
+      ],
+      "icon": "data:image/svg+xml;base64,PHN2Zy8+",
+      "contributes": {
+        "dataSources": [
+          { "id": "playlist", "name": "M3U 直播源",
+            "auth": { "fields": [ { "id": "base_url", "label": "播放列表地址", "type": "url", "required": true } ] } }
+        ]
+      },
+      "homepage": "https://github.com/zzzwannasleep/LinplayerPluginsRepository"
+    }
+  ]
+}"##;
+
+        let parsed = parse_registry(raw).expect("官方 registry 必须能解析");
+        assert_eq!(parsed.skipped, 0, "一条都不该被跳过 —— 跳过是静默的,市场只会显示 0 个插件");
+        assert_eq!(parsed.plugins.len(), 1);
+
+        let p = &parsed.plugins[0];
+        assert_eq!(p.author, "LinPlayer", "author 是字符串;v1 的对象形式会让整条被跳过");
+        assert_eq!(p.category.as_deref(), Some("source"));
+        assert_eq!(
+            p.permissions,
+            vec!["sources", "http", "storage"],
+            "权限摘要要在索引里 —— 市场不下包就能把权限列给用户看"
+        );
+        assert!(
+            p.icon.as_deref().unwrap_or("").starts_with("data:image/"),
+            "图标是构建期内联的 data URI,不是外链"
+        );
+        assert!(p.contributes.is_some(), "贡献点摘要要能透出来");
+
+        let v = p.best_version(2).expect("apiVersion 2 的宿主必须能选到这一版");
+        assert_eq!(v.version, "1.0.0");
+        assert_eq!(v.api_version, 2);
+        assert!(
+            v.package_url.ends_with(".ipk"),
+            "package_url 是 snake_case,写成 packageUrl 会被 serde 静默忽略"
+        );
+        assert_eq!(
+            v.sha256.as_deref().map(str::len),
+            Some(64),
+            "sha256 必须在,安装时要逐字节校验"
+        );
+
+        // 更旧的宿主(apiVersion 1)不该被喂到 v2 的包
+        assert!(p.best_version(1).is_none(), "apiVersion 高于宿主的版本不能被选中");
+    }
 }

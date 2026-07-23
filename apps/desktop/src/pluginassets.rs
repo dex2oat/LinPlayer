@@ -27,13 +27,21 @@ pub fn register<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         |ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>>, responder: UriSchemeResponder| {
             let app = ctx.app_handle().clone();
             let uri = request.uri().clone();
-            // Windows 上这是个真 http URL(host = 插件 id);其它平台是 lpplugin://<id>/...。
-            // 两边都能从 host + path 拼回来。
-            let host = uri.host().unwrap_or_default().to_string();
-            let path = uri.path().to_string();
+            // ★ 插件 id 从 **path** 的第一段取,**不能**从 host 取。
+            //
+            // 原来的写法是 `uri.host()`,注释还写着「Windows 上 host = 插件 id」——
+            // 那是错的。Windows 上 Tauri 把自定义协议映射成
+            // `http://lpplugin.localhost/<插件id>/<路径>`,host 是 "lpplugin.localhost";
+            // Linux 上前端拼出来的是 `lpplugin://localhost/<插件id>/<路径>`,host 是
+            // "localhost"。两边都不是插件 id,于是**所有**插件资源(图标、逃生舱页面)
+            // 一律 403 —— 而且是「不报错,只是白屏」。
+            //
+            // 同仓库的 `lpimg` 从第一天起就只认 path(见 imgcache.rs),这里是唯一的
+            // 偏离。现已对齐。
+            let (plugin_id, rel) = split_asset_path(uri.path());
 
             tauri::async_runtime::spawn(async move {
-                let resp = match load(&app, &host, &path) {
+                let resp = match load(&app, &plugin_id, &rel) {
                     Ok((bytes, mime)) => Response::builder()
                         .status(StatusCode::OK)
                         .header(header::CONTENT_TYPE, mime)
@@ -64,6 +72,18 @@ pub fn register<R: Runtime>(builder: Builder<R>) -> Builder<R> {
     )
 }
 
+/// `/com.example.foo/view/index.html` -> `("com.example.foo", "view/index.html")`。
+///
+/// 纯字符串逻辑,单独拆出来是为了能直接单测 —— 要构造一个真的 UriSchemeContext
+/// 得拉起整个 Tauri app,那种测试没人会写,于是这段就永远没人测。
+fn split_asset_path(path: &str) -> (String, String) {
+    let p = path.trim_start_matches('/');
+    match p.split_once('/') {
+        Some((id, rest)) => (id.to_string(), rest.to_string()),
+        None => (p.to_string(), String::new()),
+    }
+}
+
 fn load<R: Runtime>(
     app: &tauri::AppHandle<R>,
     plugin_id: &str,
@@ -78,4 +98,44 @@ fn load<R: Runtime>(
     let mime = content_type_for(&file);
     let bytes = std::fs::read(&file).map_err(|_| AssetError::NotFound)?;
     Ok((bytes, mime))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 两个平台的 URL 形状不同,但**插件 id 永远是 path 的第一段**。
+    /// 按 host 解析的旧写法在两边都拿不到插件 id(Windows 是 "lpplugin.localhost",
+    /// Linux 是 "localhost"),表现为所有插件图标和逃生舱页面静默 403。
+    #[test]
+    fn plugin_id_comes_from_the_first_path_segment_on_every_platform() {
+        // Windows: http://lpplugin.localhost/<id>/<rel>
+        // Linux/macOS: lpplugin://localhost/<id>/<rel>
+        // 两者交给 uri.path() 之后都是同一个字符串:
+        let (id, rel) = split_asset_path("/com.example.foo/view/index.html");
+        assert_eq!(id, "com.example.foo");
+        assert_eq!(rel, "view/index.html");
+
+        let (id, rel) = split_asset_path("/com.example.foo/icon.svg");
+        assert_eq!(id, "com.example.foo");
+        assert_eq!(rel, "icon.svg");
+    }
+
+    /// 只给插件 id、没有文件路径时,rel 是空串 —— 交给 resolve_asset 去拒
+    /// (它对空路径回 Forbidden),而不是在这里当成某个默认文件放行。
+    #[test]
+    fn a_bare_plugin_id_yields_an_empty_relative_path() {
+        assert_eq!(split_asset_path("/com.example.foo"), ("com.example.foo".into(), String::new()));
+        assert_eq!(split_asset_path("/"), (String::new(), String::new()));
+        assert_eq!(split_asset_path(""), (String::new(), String::new()));
+    }
+
+    /// 穿越交给 resolve_asset 挡(它有三道防线并且已单测),这里只负责切分 ——
+    /// 但切分本身不能把 `..` 吃掉或规范化,否则下游就看不到它了。
+    #[test]
+    fn traversal_is_passed_through_untouched_for_the_resolver_to_reject() {
+        let (id, rel) = split_asset_path("/com.example.foo/../../secret");
+        assert_eq!(id, "com.example.foo");
+        assert_eq!(rel, "../../secret", "切分不该悄悄规范化路径");
+    }
 }

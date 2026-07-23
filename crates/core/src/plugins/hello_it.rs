@@ -35,17 +35,26 @@ const HELLO_MANIFEST: &str = r#"{
   }
 }"#;
 
+// ★ 这段 JS 是插件作者能照抄的**唯一官方样板**,所以它必须和真实前端对得上。
+//   两处曾经是错的,而且错得完全静默:
+//     1. 面板 handler 返回 `{metrics:[...]}` —— 那是 v1 形状。v2 的渲染器
+//        (`ui/shared/plugin-ui.ts::sanitizeTree`)按 `t` 字段分派,没有 `t` 的对象
+//        走 default 分支返回 null,**面板画出来是一片空白**;
+//     2. showForm 的字段写 `key` / `default` —— 真实映射(`formTree`)读的是
+//        `id` / `value`,没有 `id` 的控件会被整棵消毒掉,**表单一片空白**。
+//   两处都不报错、不进日志。而本文件的 TestHost 是硬编码返回值的假宿主,
+//   从来没跑到那两段映射 —— 编译绿、单测绿、功能坏。
 const HELLO_MAIN: &str = r#"
 'use strict';
 async function homeMetric() {
   var name = (await ctx.storage.get('name')) || 'World';
-  return { metrics: [{ label: '问候', value: 'Hello, ' + name }] };
+  return { t: 'col', children: [ { t: 'stat', label: '问候', value: 'Hello, ' + name } ] };
 }
 async function openSettings() {
   var name = (await ctx.storage.get('name')) || '';
   var values = await ctx.ui.showForm({
     title: 'Hello 设置',
-    fields: [ { key: 'name', label: '称呼', type: 'text', default: name } ],
+    fields: [ { id: 'name', label: '称呼', type: 'text', value: name } ],
     submitLabel: '保存', cancelLabel: '取消'
   });
   if (!values) return;
@@ -120,8 +129,12 @@ async fn hello_plugin_full_lifecycle() {
         .trigger_extension("com.linplayer.hello", "panels", "hello", json!([]))
         .await
         .unwrap();
-    assert_eq!(r["metrics"][0]["label"], "问候");
-    assert_eq!(r["metrics"][0]["value"], "Hello, World");
+    // 断言按**真实渲染器认得的形状**来 —— 断在一个渲染器根本不认的形状上,
+    // 等于测试和界面各说各话。
+    assert_eq!(r["t"], "col");
+    assert_eq!(r["children"][0]["t"], "stat");
+    assert_eq!(r["children"][0]["label"], "问候");
+    assert_eq!(r["children"][0]["value"], "Hello, World");
 
     // 触发设置页(manifest 静态贡献,具名 handler openSettings)->
     // showForm 返回 {name:小明} -> storage.set -> 重注册。
@@ -134,7 +147,7 @@ async fn hello_plugin_full_lifecycle() {
         .trigger_extension("com.linplayer.hello", "panels", "hello", json!([]))
         .await
         .unwrap();
-    assert_eq!(r2["metrics"][0]["value"], "Hello, 小明");
+    assert_eq!(r2["children"][0]["value"], "Hello, 小明");
 
     // 禁用 -> 贡献清空。
     mgr.disable("com.linplayer.hello").await;

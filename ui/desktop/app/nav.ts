@@ -11,8 +11,8 @@ import {
   IconPlugin,
 } from "./icons";
 
-/** 路由 id。netdisk / anirss / addserver 是内部路由(不进侧栏):
- *  netdisk·anirss 登录对应源后进入。calendar 已提到侧栏(用户 2026-07-16)。 */
+/** 路由 id。netdisk / anirss / addserver / pluginview 是内部路由(不进侧栏):
+ *  netdisk·anirss 登录对应源后进入;pluginview 由侧栏的插件入口或插件详情页打开。 */
 export type PageId =
   | "home"
   | "library"
@@ -25,7 +25,8 @@ export type PageId =
   | "addserver"
   | "netdisk"
   | "anirss"
-  | "calendar";
+  | "calendar"
+  | "pluginview";
 
 export type NavItem = {
   id: PageId;

@@ -1540,6 +1540,41 @@ function IMG_BASE(): string {
   return imgBase;
 }
 
+/* ---------- 插件自带文件的 URL(`lpplugin` 协议) ----------
+   插件目录里的图标、逃生舱页面都从这里取。后端见 apps/desktop/src/pluginassets.rs。
+
+   ★ 和 lpimg 一样,前缀因平台而异,必须用 convertFileSrc 取:
+     Windows 是 `http://lpplugin.localhost/`,Linux 是 `lpplugin://localhost/`。
+     插件 id 和相对路径拼在**路径**里(后端只认 path 的第一段做插件 id,不看 host ——
+     host 在两个平台上都不是插件 id)。 */
+let pluginBase: string | null = null;
+function PLUGIN_BASE(): string {
+  // 惰性求值的理由同 IMG_BASE:模块顶层直接算会在 Tauri 未注入时抛在加载期,整屏纯黑。
+  if (pluginBase === null) pluginBase = convertFileSrc("", "lpplugin");
+  return pluginBase;
+}
+
+/** 插件目录内某个文件的可用 URL。 */
+export function pluginAssetUrl(pluginId: string, rel: string): string {
+  return `${PLUGIN_BASE()}${pluginId}/${rel.replace(/^\/+/, "")}`;
+}
+
+/**
+ * 把插件描述树里写的 `lpplugin://<插件id>/<相对路径>` 换成当前平台真正取得到的 URL。
+ *
+ * 插件作者写的是协议原样(文档也是这么教的),但那个字符串**只在 Linux 上碰巧能用**;
+ * Windows 上 WebView2 根本不认 `lpplugin://` 这个 scheme,`<img src>` 直接是坏图,
+ * 而且没有任何报错 —— 又一个「不报错,只是不显示」。
+ * 其它协议(https / data:)原样返回。
+ */
+export function resolvePluginAssetUrl(url: string): string {
+  if (!url.startsWith("lpplugin://")) return url;
+  const rest = url.slice("lpplugin://".length).replace(/^\/+/, "");
+  const slash = rest.indexOf("/");
+  if (slash <= 0) return url; // 只有插件 id 没有文件名,原样丢回去让它坏得明显
+  return pluginAssetUrl(rest.slice(0, slash), rest.slice(slash + 1));
+}
+
 /** session 形参保留:换服务器/重登时 session 变 → React 会重算 src → 图片跟着换。
  *  真去掉它,调用点就没有依赖能触发重渲染了(而且不报错,只是图不刷新)。 */
 function imgUrl(_session: LoginResult, itemId: string, kind: string, q: string): string {

@@ -16,6 +16,7 @@ import {
   pluginMarketSources,
   pluginMarketToggleSource,
   pluginPanels,
+  pluginExtensions,
   pluginPermissionCatalog,
   pluginPickDevDir,
   pluginPickInstall,
@@ -34,6 +35,7 @@ import {
 } from "../app/icons";
 import { Sw } from "../components/PluginView";
 import { PluginSlot } from "../components/PluginHost";
+import type { PluginViewRef } from "./PluginViewPage";
 
 /* ============================================================
    插件 —— 市场 + 已装 + 源订阅,一页三栏。
@@ -94,7 +96,7 @@ function initials(name: string) {
   return name.trim().slice(0, 2) || "?";
 }
 
-export default function PluginsPage() {
+export default function PluginsPage({ onOpenView }: { onOpenView?: (v: PluginViewRef) => void }) {
   const [tab, setTab] = useState<Tab>("market");
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("");
@@ -402,6 +404,7 @@ export default function PluginsPage() {
 
       {detail && (
         <DetailDrawer
+          onOpenView={onOpenView}
           market={detail.market}
           local={detail.local}
           hostApi={hostApi}
@@ -764,6 +767,7 @@ function SourcesTab({
 
 function DetailDrawer({
   market, local, hostApi, permById, busy, onClose, onInstall, onEnable, onDisable, onUninstall,
+  onOpenView,
 }: {
   market?: MarketPlugin;
   local?: PluginInfo;
@@ -775,18 +779,44 @@ function DetailDrawer({
   onEnable: (p: PluginInfo) => void;
   onDisable: (p: PluginInfo) => void;
   onUninstall: (p: PluginInfo) => void;
+  onOpenView?: (v: PluginViewRef) => void;
 }) {
   const [pane, setPane] = useState<Pane>("about");
   /* 插件自己的设置面板(slot: settings)放在**这里**而不是设置页的某个二级标签 ——
      用户找「这个插件怎么配」的第一反应是点开这个插件,VS Code 也是这么做的。
      插件没贡献设置面板时这个标签整个不出现。 */
   const [hasSettings, setHasSettings] = useState(false);
+  /* 「整页」形态的贡献:slot 为 page 的面板 + 沙箱视图。
+     它们不像 home.stats / settings 那样有个天然的落点,得有人给个入口,
+     否则声明了也永远打不开 —— 这两类以前就是这个状态。 */
+  const [views, setViews] = useState<PluginViewRef[]>([]);
   useEffect(() => {
-    if (!local?.enabled) { setHasSettings(false); return; }
+    if (!local?.enabled) { setHasSettings(false); setViews([]); return; }
     pluginPanels("settings")
       .then((ps) => setHasSettings(ps.some((p) => p.pluginId === local.id)))
       .catch(() => setHasSettings(false));
-  }, [local?.id, local?.enabled]);
+
+    Promise.all([pluginPanels("page"), pluginExtensions("sandboxViews")])
+      .then(([pages, sandboxes]) => {
+        const mine: PluginViewRef[] = pages
+          .filter((p) => p.pluginId === local.id)
+          .map((p) => ({
+            pluginId: local.id, kind: "panel" as const, id: p.id,
+            title: String(p.data?.title ?? p.id), slot: "page", pluginName: local.name,
+          }));
+        for (const c of sandboxes) {
+          if (c.pluginId !== local.id) continue;
+          const d = (c.data ?? {}) as Record<string, unknown>;
+          mine.push({
+            pluginId: local.id, kind: "sandbox", id: String(c.id ?? ""),
+            title: String(d.title ?? c.id ?? "自定义界面"),
+            entry: String(d.entry ?? "index.html"), pluginName: local.name,
+          });
+        }
+        setViews(mine);
+      })
+      .catch(() => setViews([]));
+  }, [local?.id, local?.enabled, local?.name]);
   const name = market?.name ?? local?.name ?? "";
   const icon = market?.icon ?? local?.icon ?? null;
   const author = market?.author ?? local?.author ?? "";
@@ -844,6 +874,22 @@ function DetailDrawer({
         <div className="bd scroll">
           {pane === "settings" && local && (
             <PluginSlot slot="settings" onlyPlugin={local.id} />
+          )}
+
+          {pane === "about" && !!views.length && onOpenView && (
+            <div className="pg-views">
+              <h5>这个插件自带的界面</h5>
+              {views.map((v) => (
+                <button
+                  key={`${v.kind}/${v.id}`}
+                  type="button"
+                  className="btn sm"
+                  onClick={() => { onClose(); onOpenView(v); }}
+                >
+                  打开「{v.title}」{v.kind === "sandbox" ? "（插件自绘）" : ""}
+                </button>
+              ))}
+            </div>
           )}
 
           {pane === "about" && (

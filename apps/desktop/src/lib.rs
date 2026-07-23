@@ -110,6 +110,27 @@ pub(crate) fn plugins_mgr(state: &AppState) -> Result<Arc<PluginManager>, String
 /// (fail-closed)。**必须在每次账号变动后调**:登录、删除、导入配置、启动。
 ///
 /// 整体替换而非追加 —— 用户删掉一个源之后那台机器必须立刻不再可达。
+/// 在**已落盘账号的基础上**临时追加一条 `$sourceServer` 授权。
+///
+/// 给 `source_login` 的验证请求用:那一刻账号还没入库,只按 config 算的话新地址不在里面。
+/// 非插件源直接跳过(它们的出网走宿主自己的 http 客户端,不受插件白名单管)。
+fn grant_plugin_source_host(state: &AppState, kind: &SourceKind, base_url: &str) {
+    let Some((plugin_id, _)) = kind.as_plugin() else { return };
+    let Some(mgr) = state.plugins.get() else { return };
+    let mut urls: Vec<String> = {
+        let cfg = state.config.lock().unwrap();
+        cfg.accounts
+            .iter()
+            .filter(|a| a.source_kind.as_plugin().map(|(p, _)| p == plugin_id).unwrap_or(false))
+            .filter_map(|a| a.source.as_ref().map(|s| s.base_url.clone()))
+            .collect()
+    };
+    if !base_url.trim().is_empty() && !urls.iter().any(|u| u == base_url) {
+        urls.push(base_url.to_string());
+    }
+    mgr.set_source_grants(plugin_id, &urls);
+}
+
 fn sync_plugin_source_grants(state: &AppState) {
     let Some(mgr) = state.plugins.get() else { return };
     let mut per_plugin: HashMap<String, Vec<String>> = HashMap::new();
@@ -3056,11 +3077,23 @@ async fn source_login(
         extra: HashMap::new(),
     };
     let backend = source_backend(&state, &kind)?;
+
+    // ★ 插件源:**先授权再验证**。
+    //
+    // 下面那次 list_dir 是插件的第一次出网,而 `$sourceServer` 白名单令牌要展开成
+    // 用户刚填的这个地址 —— 授权原本写在整个函数末尾(账号落盘之后),于是验证请求
+    // 撞上「域名不在白名单内」,**任何需要 $sourceServer 的插件数据源都永远添加不上**。
+    // 也就是「用户自己填地址」的那一整类,正是插件数据源最主要的形态。
+    //
+    // P1 的端到端演示插件没撞上,因为它的 listDir 返回写死数据、一个请求都不发。
+    grant_plugin_source_host(&state, &kind, &server.base_url);
+
     // 列根目录以验证登录可用
-    backend
-        .list_dir(&state.http, &server, None)
-        .await
-        .map_err(|e| e.message)?;
+    if let Err(e) = backend.list_dir(&state.http, &server, None).await {
+        // 验证没过就不该留下授权 —— 按已落盘的账号重算一遍,把刚才那条临时的撤掉。
+        sync_plugin_source_grants(&state);
+        return Err(e.message);
+    }
     // 落盘:源和 Emby 共用同一张账号表 —— 重启免登 + 多源并存全靠这一步。
     {
         let mut cfg = state.config.lock().unwrap();

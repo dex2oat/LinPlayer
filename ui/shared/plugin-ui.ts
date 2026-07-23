@@ -220,3 +220,59 @@ export function initialFormState(node: PluginNode | null): Record<string, string
   if (node) walk(node);
   return out;
 }
+
+/* ============================================================
+   ctx.ui.showForm / showList 的糖:折成同一棵描述树。
+   ------------------------------------------------------------
+   ★ 这两个函数原本长在 PluginHost.tsx 里,提到这一层是因为它们决定了
+     **插件作者写 fields 时的字段名**,而写错的后果是静默的:
+     `sanitizeTree` 遇到没有 `id` 的输入控件直接返回 null,于是整个表单
+     一片空白、日志里什么都没有。宿主自带的参考示例一度就教的是错的写法
+     (`key` / `default`),而那个示例的集成测试用假 host 硬编码返回值,
+     根本没跑到这段映射 —— 编译绿、单测绿、功能是坏的。
+     放在这里就能被 plugin-ui.test.mjs 用 node 直接跑。
+   ============================================================ */
+
+type Dict = Record<string, unknown>;
+
+/** showForm 的 fields -> 描述树。字段键是 **id** 和 **value**。 */
+export function formTree(args: Dict): unknown {
+  const fields = Array.isArray(args.fields) ? args.fields : [];
+  return {
+    t: "col",
+    children: fields.map((f) => {
+      const o = (f ?? {}) as Dict;
+      const type = String(o.type ?? "text");
+      if (type === "switch" || type === "bool")
+        return { t: "switch", id: o.id, label: o.label ?? o.id, value: o.value };
+      if (type === "select")
+        return { t: "select", id: o.id, label: o.label, value: o.value, options: o.options };
+      return {
+        t: "input",
+        id: o.id,
+        label: o.label,
+        placeholder: o.placeholder,
+        value: o.value,
+        password: type === "password",
+        multiline: type === "textarea",
+      };
+    }),
+  };
+}
+
+/** showList 的 items -> 描述树。选中时回的是条目的 id。 */
+export function listTree(args: Dict): unknown {
+  const items = Array.isArray(args.items) ? args.items : [];
+  return {
+    t: "list",
+    items: items.map((it) => {
+      const o = (it ?? {}) as Dict;
+      return {
+        id: String(o.id ?? o.value ?? o.title ?? ""),
+        title: o.title ?? o.label,
+        subtitle: o.subtitle,
+        handler: "pick",
+      };
+    }),
+  };
+}
