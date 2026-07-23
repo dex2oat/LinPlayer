@@ -121,7 +121,7 @@
 
 ## 开发与技术
 
-仓库结构、本地开发与构建、技术栈详见 **[开发文档 →](docs/DEVELOPMENT.md)**。
+仓库结构、本地开发与构建、技术栈详见 **[开发文档](docs/DEVELOPMENT.md)**。
 
 ## 免责声明
 
@@ -183,7 +183,7 @@
 ### 网络与代理
 
 - [rustls](https://github.com/rustls/rustls) — TLS 实现（按 host 白名单放行自签名证书）
-- [Cloudflare](https://www.cloudflare.com/) — 优选 IP 本地反代所依托的边缘网络
+- [CloudflareSpeedTest](https://github.com/XIU2/CloudflareSpeedTest) — 优选 IP 本地反代的灵感来自 XIU2 大佬的这个项目
 
 ### 脚本与工具
 
@@ -200,7 +200,7 @@
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="https://291277.xyz/star/history.svg?theme=dark" />
    <source media="(prefers-color-scheme: light)" srcset="https://291277.xyz/star/history.svg" />
-   <img alt="Star History Chart" src="https://291277.xyz/star/history.svg" />
+   <img alt="Star History Chart" src="https://291277.xyz/star/history.svg" width="100%" />
  </picture>
 </a>
 
