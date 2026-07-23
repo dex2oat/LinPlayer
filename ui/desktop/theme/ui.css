@@ -289,8 +289,24 @@
 .btn:hover { background: var(--panel-2); border-color: var(--ink-3); }
 .btn:active { transform: translateY(1px); }
 .btn.primary { background: var(--accent); border-color: transparent; color: var(--accent-ink); font-weight: 700; }
+/* 不可逆操作(删服务器等)。原生 confirm 的两个按钮长得一样,危险动作不该和「取消」同权重。 */
+.btn.danger { border-color: color-mix(in srgb, var(--danger) 55%, transparent); color: var(--danger); }
+.btn.danger:hover { background: var(--danger); border-color: transparent; color: #fff; }
+/* 动作成功后**就地**变成回执(登录闸口的「测试连接 → ✓ 连接成功」)。
+   ★ 比另起一块回执强的地方不只是好看:回执块一出现会把它下面的主按钮整体推下去,
+     点击目标在用户眼皮底下跳一格。答案回到问题所在的位置,布局一动不动。 */
+.btn.ok {
+  border-color: color-mix(in srgb, var(--good) 45%, transparent);
+  background: color-mix(in srgb, var(--good) 12%, transparent);
+  color: var(--good);
+  font-weight: 640;
+}
+.btn.ok:hover { border-color: color-mix(in srgb, var(--good) 70%, transparent); background: color-mix(in srgb, var(--good) 18%, transparent); }
 .btn.primary:hover { filter: brightness(1.06); background: var(--accent); }
-.btn.big { height: 44px; padding: 0 22px; font-size: 14px; border-radius: 10px; }
+/* ★ 圆角跟 .btn 一致(原来是 10px)。用户 2026-07-23:「一下圆角一下矩形的,统一矩形」——
+   .btn 8px / .btn.big 10px 这 2px 差没人说得出理由,却让同一行里的两个按钮肉眼可见地不一样。
+   全局改,不只改登录页:同一套按钮在别的页也不该有两种圆角。 */
+.btn.big { height: 44px; padding: 0 22px; font-size: 14px; border-radius: var(--r-sm); }
 .btn.sm { height: 30px; padding: 0 13px; font-size: 12px; }
 .btn:disabled { opacity: 0.55; cursor: default; }
 
@@ -308,6 +324,48 @@
 }
 .field::placeholder { color: var(--ink-3); }
 .field:focus { border-color: var(--accent); }
+
+/* ---------- 原生表单控件的收编 ----------
+
+   ★ `<input>` / `<select>` / `<button>` / `<textarea>` **默认不继承 font**
+     —— 它们各自吃浏览器的系统字体栈。所以哪怕外框已经是 .field 的样子,
+     框里的字仍是 Windows 的 UI 字体,和旁边一行文案对不上:这就是用户说的
+     「有些地方还是原生样式,看着很突兀」。一行 font: inherit 收编。
+
+   ★ select 更明显:光给它 .field 只换了**外框**,Chromium 仍然在框里画自己的
+     下拉箭头(系统配色、系统间距),等于自绘框套系统控件。必须 appearance:none
+     把原生外观整个关掉,再自己画一个 chevron 背景图。
+     (箭头用内联 SVG data URI —— 打包后不落外部请求,颜色跟 currentColor 走不了,
+      故按主题各给一份。)
+
+   ★ 只收 family + size:整条 `font: inherit` 会连 line-height 一起重置,
+     按钮里的文字会整体往上跳一格 —— 治了字体又弄歪了排版,不划算。 */
+input, select, textarea, button { font-family: inherit; font-size: inherit; }
+
+select.field {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 32px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%239aa4b4' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+}
+/* 箭头颜色写死在 data URI 里(SVG 背景图吃不到 currentColor),浅色主题另给一份,
+   否则米黄纸背景上是一道几乎看不见的浅灰。 */
+:root[data-theme="light"] select.field {
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%236b6152' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+}
+/* 展开后的列表是**原生弹窗**,能改的只有配色 —— 至少别在暗色 UI 上闪一片系统白。 */
+select.field option { background: var(--panel-2); color: var(--ink); }
+
+/* 勾选框:原生方框在暗色下是一块系统蓝/系统灰,和强调色对不上。
+   accent-color 是收编原生 checkbox 最省的一招(不用自绘伪元素,
+   还保留键盘可达性和 :indeterminate 等原生行为)。 */
+input[type="checkbox"], input[type="radio"] {
+  accent-color: var(--accent);
+  width: 15px; height: 15px;
+  cursor: pointer;
+}
 textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family: var(--mono); font-size: 12px; }
 
 /* ---------- 占位斜纹(草稿 .ph) + 海报 ---------- */
@@ -382,8 +440,24 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
 .pcap { font-size: 12.5px; color: var(--ink); font-weight: 500; margin-top: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pcap .sub { display: block; font-size: 11px; color: var(--ink-3); font-weight: 400; }
 
-/* 海报卡包装(卡+标题) */
+/* 海报卡包装(卡+标题)
+
+   ★ content-visibility:媒体库一页 120 条、翻两页就是 240 个卡片节点全在 DOM 里,
+     浏览器每次滚动都要为**全部**节点排版/绘制 —— 这是「浏览卡卡的」最直接的一份。
+     开了之后屏幕外的卡片跳过 layout/paint,只按 contain-intrinsic-size 占位。
+     ServersPage 早就这么干了(见 ServersPage.css 的同名注释),这里补上。
+     取 contain-intrinsic-size 而不是上 react-window:不引库、不改一行 TSX,
+     滚动条长度也不会因为估算而跳。占位尺寸 = 150px 宽的 2:3 海报 + 标题两行。 */
 .pitem { display: flex; flex-direction: column; }
+/* ★ 只给**网格**里的卡片开,不给 .rail 里的。
+   横向轨道靠 scrollWidth 算左右箭头显隐(见 HomePage 的 Rail),
+   content-visibility 会让屏外项的尺寸变成估算值,把那个计算带歪。
+   网格是纵向流式布局,没有这个耦合。 */
+.dense-grid > .pitem,
+.lib-grid > .lib-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 260px;
+}
 
 /* 密集海报网格(草稿 7 列自适应)。封顶居中 ⇒ 一次治好 媒体库 + 收藏 + 搜索浮层内网格。
    (搜索浮层自身宽 min(760px,92vw),这里的封顶对它是 no-op,不影响。) */
@@ -612,15 +686,22 @@ textarea.field { height: auto; padding: 10px 12px; resize: vertical; font-family
 .ctxmenu .mi-div { height: 1px; margin: 5px 4px; background: var(--line); }
 .ctxmenu .mi.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 
-/* ---------- 登录页 ---------- */
-.login-wrap { height: 100%; display: flex; align-items: center; justify-content: center; padding-top: var(--titlebar-h); }
-.login-card { width: 360px; padding: 40px 34px; border-radius: var(--r-xl); background: var(--panel); border: 1px solid var(--line); box-shadow: var(--card-shadow); display: flex; flex-direction: column; gap: 9px; }
-.brand { font-size: 30px; font-weight: 760; letter-spacing: -0.5px; color: var(--ink); }
-.brand span { color: var(--accent); }
-.brand-sub { font-size: 12px; color: var(--ink-3); margin-bottom: 16px; }
-.lbl { font-size: 12px; color: var(--ink-2); margin-top: 8px; font-weight: 600; }
-.login-card .btn { margin-top: 20px; justify-content: center; }
-.login-err { color: var(--danger); font-size: 13px; margin-top: 10px; }
+/* ---------- 登录页 ----------
+   版式已整体重做,搬到 pages/LoginPage.css(前缀 .lg-)。
+   原来的 .login-wrap/.login-card/.brand/.brand-sub/.lbl/.login-err 全部随之删除 ——
+   它们只被那一个页面用,留着就是下一次改样式时的假线索。 */
+
+/* 进门动画:登录闸口淡出之后,主界面接着淡入上浮。
+   两段拼起来才是一次"进入",只做一头会显得前半段有动画后半段是硬切。
+   只对首帧生效(both + 一次性),之后所有页内切换都不受影响。 */
+.app-root.entering { animation: app-enter 0.34s var(--ease-emph) both; }
+@keyframes app-enter {
+  from { opacity: 0; transform: translateY(10px) scale(0.994); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-root.entering { animation: none; }
+}
 
 /* 页面崩溃卡(PageBoundary)。观感对齐 .panel;错误原文用等宽,方便截图/复制给开发者。
    窗口是透明的 → 不给它一个实心底,崩溃信息会飘在 mpv 画面上看不清。 */

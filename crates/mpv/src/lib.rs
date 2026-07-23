@@ -12,7 +12,7 @@
 use linplayer_core::media::Track;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -625,6 +625,34 @@ pub struct Player {
     subs: Arc<std::sync::Mutex<SubState>>,
     running: Arc<AtomicBool>,
     event_thread: Option<JoinHandle<()>>,
+    /* 最后一次**读到过**的播放位置/时长(f64 的位模式)。
+       ★ 为什么要记账:`time-pos` / `duration` 不是「一直有值」的属性 —— seek 进行中、
+         换片解码就绪前、缓冲饥饿时,mpv 会返回 MPV_ERROR_PROPERTY_UNAVAILABLE。
+         老代码的 get_f64 **不看返回值**,失败时把栈上初值 0.0 原样交出去,于是界面
+         每隔几拍就收到一个 time=0 —— 进度条抽回开头再弹回来,和画面完全对不上。
+         属性暂时读不到 ≠ 播放位置变成 0,所以读不到就沿用上一次读到的值。 */
+    last_pos: Arc<AtomicU64>,
+    last_dur: Arc<AtomicU64>,
+    /* seek 闩:(目标位置, 发出时刻)。见 [`Player::seek_abs`] / [`Player::status`]。 */
+    seek_latch: Arc<std::sync::Mutex<Option<(f64, std::time::Instant)>>>,
+}
+
+/// 认为 seek 已到位的容差。比一个 GOP 略宽 —— mpv 默认按关键帧落点,
+/// 精确落在请求秒数上是例外而不是常态。
+const SEEK_SETTLE_SECS: f64 = 1.5;
+/// seek 闩最长压制多久。超时就放行真值,免得一次 seek 失败把进度条永久钉在目标位置上
+/// (那是把「弹回旧位置」换成了更难查的「永远不动」)。
+const SEEK_LATCH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(2500);
+
+/// seek 闩的判定本体。抽成自由函数是为了能**脱离 libmpv 单测** ——
+/// Player::new 要建叠加窗口、要桌面会话,CI 上跑不了。
+fn apply_seek_latch(latch: &mut Option<(f64, std::time::Instant)>, reported: f64) -> f64 {
+    let Some((target, at)) = *latch else { return reported };
+    if (reported - target).abs() <= SEEK_SETTLE_SECS || at.elapsed() >= SEEK_LATCH_TIMEOUT {
+        *latch = None; // 到位/等够了 -> 之后一律用真值
+        return reported;
+    }
+    target
 }
 unsafe impl Send for Player {}
 
@@ -833,6 +861,9 @@ impl Player {
                 subs,
                 running,
                 event_thread: Some(event_thread),
+                last_pos: Arc::new(AtomicU64::new(0)),
+                last_dur: Arc::new(AtomicU64::new(0)),
+                seek_latch: Arc::new(std::sync::Mutex::new(None)),
             })
         }
     }
@@ -867,13 +898,34 @@ impl Player {
         }
     }
 
-    fn get_f64(&self, name: &str) -> f64 {
+    /* ★ 必须看 mpv_get_property 的返回值。
+       它 < 0 时**不写** out —— 老写法把栈上初值 0.0 当成「位置=0」交出去了。
+       time-pos/duration 在 seek 中、换片解码就绪前、缓冲饥饿时都会返回
+       MPV_ERROR_PROPERTY_UNAVAILABLE(-10),属于常态而非异常。 */
+    fn try_f64(&self, name: &str) -> Option<f64> {
         let n = CString::new(name).unwrap();
         let mut out: f64 = 0.0;
-        unsafe {
-            mpv_get_property(self.ctx, n.as_ptr(), MPV_FORMAT_DOUBLE, &mut out as *mut f64 as *mut c_void);
+        let rc = unsafe {
+            mpv_get_property(self.ctx, n.as_ptr(), MPV_FORMAT_DOUBLE, &mut out as *mut f64 as *mut c_void)
+        };
+        // NaN 也当读不到:mpv 偶尔会在换片瞬间给出 NaN,直接吐给前端会变成 JSON null。
+        (rc >= 0 && out.is_finite()).then_some(out)
+    }
+
+    fn get_f64(&self, name: &str) -> f64 {
+        self.try_f64(name).unwrap_or(0.0)
+    }
+
+    /// 读一个「读不到就沿用上次」的属性。用于 time-pos / duration 这类
+    /// **暂时不可用 ≠ 值变成 0** 的属性。
+    fn sticky_f64(&self, name: &str, cell: &AtomicU64) -> f64 {
+        match self.try_f64(name) {
+            Some(v) => {
+                cell.store(v.to_bits(), Ordering::Relaxed);
+                v
+            }
+            None => f64::from_bits(cell.load(Ordering::Relaxed)),
         }
-        out
     }
 
     /// 设置/清除 mpv HTTP 代理(media 走代理时用;空串=直连)。SOCKS 不被 mpv 支持,只传 http://。
@@ -920,6 +972,12 @@ impl Player {
         // 换片先清 eof —— 否则上一集播完的标志会被下一集的第一次轮询读到,
         // 刚起播就被判成「已看完」。
         self.eof.store(false, Ordering::Relaxed);
+        /* 位置/时长的记账跟着换片一起清:不清的话新片刚 loadfile、time-pos 还没就绪的
+           那几拍会把**上一集的位置**当成本集位置吐出去(进度条一起播就停在别人的进度上)。
+           起点直接落 start_secs,续播时第一拍就是对的。 */
+        self.last_pos.store(start_secs.max(0.0).to_bits(), Ordering::Relaxed);
+        self.last_dur.store(0f64.to_bits(), Ordering::Relaxed);
+        *self.seek_latch.lock().unwrap() = None; // 上一集没落地的 seek 别压制新片的位置
         /* 字幕状态跟着换片一起复位:loaded 不清的话,下一集的 set_external_subs 会
            以为文件已经开好而立刻 sub-add(其实新文件还没加载完,又回到 -12);
            pending 不清的话,上一集没挂成的字幕会漏到这一集。 */
@@ -964,14 +1022,37 @@ impl Player {
             Err(e) => poclog(&format!("外挂字幕挂载失败({title}): {e}")),
         }
     }
+    /* ★ 先把目标位置记账,再发 seek。
+       mpv 的 seek 是**排队命令**:cmd 返回只代表「收到」,time-pos 要等解码器真跳过去
+       才更新(网络流上 50~500ms)。这中间的每一次 status 轮询读到的都还是**旧位置** ——
+       界面于是把刚拖到的位置弹回原处,而画面已经跳走了,这就是「条和画面对不上」。
+       记账放在发命令**之前**:seek 失败最坏是记了个没到达的位置,下一拍就被真值盖掉;
+       放在之后则会和「命令已生效、属性已更新」的那一拍抢写,把新值又盖回旧值。 */
     pub fn seek_abs(&self, secs: f64) -> Result<(), String> {
+        let t = secs.max(0.0);
+        self.last_pos.store(t.to_bits(), Ordering::Relaxed);
+        *self.seek_latch.lock().unwrap() = Some((t, std::time::Instant::now()));
         self.cmd(&["seek", &secs.to_string(), "absolute"])
     }
+    /* seek 之后、mpv 真正跳过去之前,`time-pos` 仍**报得出**旧位置(不是读不到)。
+       轮询正好落在这个窗口里,界面就会把用户刚拖到的位置弹回原处 —— 而画面已经跳走了。
+       这就是「拖完进度条自己跳回去、条和画面对不上」的直接来源。
+       所以在 seek 到位之前一律报目标位置;到位(或等超时)就立刻放行真值。 */
+    fn latched_time(&self, reported: f64) -> f64 {
+        let out = apply_seek_latch(&mut self.seek_latch.lock().unwrap(), reported);
+        self.last_pos.store(out.to_bits(), Ordering::Relaxed);
+        out
+    }
+
     pub fn status(&self) -> Status {
+        let reported = self.sticky_f64("time-pos", &self.last_pos);
         Status {
-            time: self.get_f64("time-pos"),
-            duration: self.get_f64("duration"),
+            time: self.latched_time(reported),
+            duration: self.sticky_f64("duration", &self.last_dur),
             paused: self.get_str("pause").as_deref() == Some("yes"),
+            /* demuxer-cache-time 是**已缓冲数据的最后一个时间戳(绝对)**,不是时长
+               (那是 demuxer-cache-duration)。界面按 buffered/duration 画缓冲条,
+               口径正是绝对位置,别顺手改成 duration 版。 */
             buffered: self.get_f64("demuxer-cache-time"),
             /* ★ 用 `eof-reached` 属性判播完,**不能**只靠 END_FILE 事件:
                我们开着 keep-open=yes,mpv 到结尾时是「暂停在最后一帧」而**不卸载文件**,
@@ -1372,5 +1453,40 @@ mod tests {
             "挂上了但标题丢了 —— 字幕列表里会是一条空白项,等于选不了。实到:{:?}",
             subs.iter().map(|t| &t.title).collect::<Vec<_>>()
         );
+    }
+
+    /* 用户报的「拖完进度条自己跳回去 / 条和画面对不上」的回归钉。
+
+       时序:seek(600) 发出后,mpv 的 time-pos **仍报得出**旧位置 120s(不是读不到),
+       要等解码器真跳过去才变。前端每 250ms 轮询一次,必然打进这个窗口 ——
+       没有闩的话界面就把 120 画上去,而画面已经在 600 了。
+
+       反向验证:把 status() 里的 `self.latched_time(reported)` 改回 `reported`,
+       第一条断言立刻红(1000 != 600)。 */
+    #[test]
+    fn seek_latch_reports_target_until_mpv_catches_up() {
+        let now = std::time::Instant::now();
+        let mut latch = Some((600.0, now));
+
+        // 刚发完 seek,mpv 还报旧位置 -> 必须报目标位,不能弹回旧位置。
+        assert_eq!(apply_seek_latch(&mut latch, 120.0), 600.0);
+        assert!(latch.is_some(), "还没到位,闩不能提前松");
+
+        // mpv 落到最近关键帧(599.2,差 0.8s < 容差)-> 算到位,放行真值并松闩。
+        assert_eq!(apply_seek_latch(&mut latch, 599.2), 599.2);
+        assert!(latch.is_none(), "到位后必须松闩,否则真值永远出不来");
+
+        // 松闩之后一律透传,进度条继续正常走。
+        assert_eq!(apply_seek_latch(&mut latch, 601.5), 601.5);
+    }
+
+    /* 闩必须有超时。seek 失败(网络流跳不过去)时若一直压制,
+       现象会从「弹回旧位置」变成更难查的「进度条永远不动」—— 那是拿一个 bug 换另一个。 */
+    #[test]
+    fn seek_latch_gives_up_after_timeout() {
+        let stale = std::time::Instant::now() - SEEK_LATCH_TIMEOUT - std::time::Duration::from_millis(1);
+        let mut latch = Some((600.0, stale));
+        assert_eq!(apply_seek_latch(&mut latch, 120.0), 120.0, "超时后必须放行真值");
+        assert!(latch.is_none());
     }
 }

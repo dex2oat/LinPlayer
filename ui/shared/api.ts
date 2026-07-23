@@ -117,6 +117,10 @@ export type StreamInfo = {
   channel_layout: string | null;
   frame_rate: number | null;
   video_range: string | null;
+  /** Emby 的 VideoRangeType(新版直接给 `DOVI`/`HDR10`/`SDR` 的结论)。
+   *  核层 `is_dolby_vision` 的第一判据就是它 —— 这里原先漏了这一行,
+   *  于是前端拿到的 StreamInfo 上**没有这个字段**(TS 侧压根看不见,不报错)。 */
+  video_range_type: string | null;
   is_default: boolean;
   /** 外挂字幕(服务器上的独立 .ass/.srt 文件)。核层起播时用 sub-add 挂载,
    *  它**不会**出现在 mpv 的 track-list 里 —— 除非挂上了。 */
@@ -464,6 +468,15 @@ export type TraktPollResult = {
 // ---------- Emby ----------
 export const currentSession = () =>
   invoke<LoginResult | null>("current_session");
+
+/** 当前活跃的**文件浏览型**源(夸克/OpenList/飞牛/Ani-RSS/Stremio/插件源)。
+ *
+ *  ★ 必须和 currentSession 一起看:`current_session` 在核层是
+ *    `.filter(|a| !a.is_file_browse())` —— 只连了网盘的用户在那边**永远返回 null**。
+ *    宿主只判 session 的话,这类用户加完源仍被挡在登录页外,加一次挡一次。
+ *    这个命令 2026-07 就在核层了,前端一直没接(见 [[stale-waijie-lies]])。 */
+export const currentSource = () =>
+  invoke<AccountInfo | null>("current_source");
 
 /** 重新登录:**不用填地址**,核层拿账号当前生效的那条线路去认证,只换 token/账号。
  *  名称/备注/图标/线路/生效线路一律不动。

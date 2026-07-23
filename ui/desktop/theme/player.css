@@ -108,6 +108,16 @@
 .p-scrub .buf { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(255, 255, 255, 0.22); border-radius: 3px; }
 .p-scrub .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; }
 .p-scrub .knob { position: absolute; top: 50%; width: 13px; height: 13px; border-radius: 50%; background: #fff; transform: translate(-50%, -50%); box-shadow: 0 0 8px rgba(0, 0, 0, 0.5); }
+/* 状态是轮询来的(250ms 一拍),直接照着画就是一秒四格的顿挫 ——「进度不走」的观感
+   有一半来自这里。补间交给 CSS 而**不是** rAF + setState:后者每帧重渲染整个播放页
+   (App 是个上千行的单组件),等于拿卡顿换顺滑。linear 且时长≈轮询间隔,
+   两拍之间正好接上,不会出现走走停停。拖动中禁用过渡,否则滑块黏着手指后面走。 */
+.p-scrub .fill { transition: width 260ms linear; }
+.p-scrub .knob { transition: left 260ms linear; }
+.p-scrub.dragging .fill, .p-scrub.dragging .knob { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .p-scrub .fill, .p-scrub .knob { transition: none; }
+}
 .p-scrub input { position: absolute; inset: -6px 0; width: 100%; opacity: 0; cursor: pointer; }
 /* 悬停预览气泡(草稿 pin 18 的 .prev):时间读数 +(有则)服务端章节图缩略图。
    有图时是竖排(图在上、时间在下),没图时只剩时间读数 —— 布局两种情况都得成立,

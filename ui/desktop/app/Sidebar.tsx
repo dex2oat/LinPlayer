@@ -140,9 +140,15 @@ export default function Sidebar({
     }
   }
 
+  /* ★ 原来这里是 `window.confirm(...)`。它是**系统原生对话框** —— Windows 自己的
+     灰底白框、系统字体、系统按钮,和整套暗色 UI 完全不在一个世界里,一弹出来就出戏。
+     换成设计系统自己的 .scrim>.dlg(和右键菜单里其它弹窗同一套壳)。
+     顺带把「删除」做成危险色按钮:原生 confirm 的两个按钮长得一模一样,
+     删服务器这种不可逆操作不该和「取消」等权重。 */
+  const [delTarget, setDelTarget] = useState<AccountInfo | null>(null);
+
   async function del(a: AccountInfo) {
-    setCtx(null);
-    if (!window.confirm(`删除服务器「${a.name || hostOf(a.server)}」?\n本地凭据会一并清除。`)) return;
+    setDelTarget(null);
     try {
       await removeAccount(a.server);
       await load();
@@ -332,8 +338,28 @@ export default function Sidebar({
           >
             重新登录
           </div>
-          <div className="mi danger" onClick={() => void del(ctx.acc)}>
+          <div className="mi danger" onClick={() => { setDelTarget(ctx.acc); setCtx(null); }}>
             删除
+          </div>
+        </div>
+      )}
+
+      {delTarget && (
+        <div className="scrim" onClick={() => setDelTarget(null)}>
+          <div className="dlg" style={{ maxWidth: 380 }} onClick={(e) => e.stopPropagation()}>
+            <div className="dhd">
+              删除服务器
+              <button className="x" onClick={() => setDelTarget(null)} aria-label="关闭">✕</button>
+            </div>
+            <div className="dbd">
+              确定删除「{delTarget.name || hostOf(delTarget.server)}」?
+              <br />
+              本地保存的凭据会一并清除。
+            </div>
+            <div className="dft">
+              <button className="btn" onClick={() => setDelTarget(null)}>取消</button>
+              <button className="btn danger" onClick={() => void del(delTarget)}>删除</button>
+            </div>
           </div>
         </div>
       )}

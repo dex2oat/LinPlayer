@@ -25,6 +25,7 @@ userdata/
 # --- 本地工作材料(用户 2026-07-15 明确不入库)---------------------------------
 docs/desktop-drafts.html
 docs/tv-drafts.html
+docs/login-drafts.html
 scripts/pack-portable.ps1
 
 # --- 密钥 / 凭据 -------------------------------------------------------------

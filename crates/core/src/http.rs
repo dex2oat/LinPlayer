@@ -226,24 +226,45 @@ static PRELOAD_CLIENT: std::sync::RwLock<Option<reqwest::Client>> = std::sync::R
 ///   Emby 用 [`emby_client`]、预取用 [`preload_client`],三条口径仍然分开(见上面注释),
 ///   这里只是把"第三方"这条从"无名氏"改成"报上名号"。
 pub fn client() -> reqwest::Client {
-    cached(&CLIENT, Some(api_user_agent()))
+    cached(&CLIENT, Some(api_user_agent()), Compress::Yes)
 }
 
 /// 访问 Emby 的客户端(UA = `LinPlayer/{版本}`)。
 pub fn emby_client() -> reqwest::Client {
-    cached(&EMBY_CLIENT, Some(user_agent()))
+    cached(&EMBY_CLIENT, Some(user_agent()), Compress::Yes)
 }
 
 /// 多线程加载 / 预加载拉上游的客户端(UA = `LinPlayerPreload/{版本}`)。
 pub fn preload_client() -> reqwest::Client {
-    cached(&PRELOAD_CLIENT, Some(preload_user_agent()))
+    cached(&PRELOAD_CLIENT, Some(preload_user_agent()), Compress::No)
 }
 
-fn cached(slot: &std::sync::RwLock<Option<reqwest::Client>>, ua: Option<String>) -> reqwest::Client {
+/* 要不要协商内容编码。
+   ★ 这是**分客户端**的,不能一把全开:
+     - API 那两条拉的是 JSON。媒体库列表动辄几百 KB 到几 MB 的重复结构,gzip 后常剩
+       10~20%。原来 reqwest 是 `default-features = false` 且没勾 gzip/brotli ——
+       等于 **Accept-Encoding 一个字节都不发**,Emby 只好原样吐明文。
+     - 预取代理拉的是**视频字节流**。它靠 Content-Length 和 Range 语义对齐分段偏移,
+       而透明解压会把 Content-Length 变成"解压后长度"甚至直接抹掉 —— 分段会错位。
+       视频容器本来也压不动,开了纯亏。所以这条显式关掉,不是"忘了开"。 */
+enum Compress {
+    Yes,
+    No,
+}
+
+fn cached(
+    slot: &std::sync::RwLock<Option<reqwest::Client>>,
+    ua: Option<String>,
+    compress: Compress,
+) -> reqwest::Client {
     if let Some(c) = slot.read().ok().and_then(|g| g.clone()) {
         return c;
     }
     let mut b = reqwest::Client::builder().use_preconfigured_tls(tls_config());
+    b = match compress {
+        Compress::Yes => b.gzip(true).brotli(true),
+        Compress::No => b.gzip(false).brotli(false),
+    };
     if let Some(ua) = ua {
         b = b.user_agent(ua);
     }
@@ -474,5 +495,63 @@ Content-Length: 5
         assert!(EMBY_CLIENT.read().unwrap().is_none(), "Emby 客户端没跟着换代理");
         assert!(PRELOAD_CLIENT.read().unwrap().is_none(), "预取客户端没跟着换代理");
         set_proxy(None);
+    }
+
+    /* 内容编码的口径钉子(见 cached 的 Compress)。
+
+       为什么必须端到端发一次真请求、而不是"看一眼 builder 上有没有 .gzip(true)":
+       reqwest 的 `gzip(true)` 只有在 **crate feature 也勾了** 的前提下才会真的发
+       Accept-Encoding —— 少勾一个 feature,代码照编、测试照过、请求里一个字节都没有。
+       这正是这条改动之前的状态:Emby 的 JSON 全程明文传输,而没有任何地方会报错。
+
+       反向验证:把 Cargo.toml 的 "gzip"/"brotli" feature 去掉(或把 Compress::Yes
+       那一支改成 gzip(false)),第一条断言立刻红。 */
+    #[tokio::test]
+    async fn api_clients_negotiate_compression_but_media_client_does_not() {
+        let _g = lock_globals();
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        // 收一次请求,把请求头原样还回来。
+        async fn capture(l: TcpListener) -> String {
+            let (mut c, _) = l.accept().await.unwrap();
+            let mut buf = vec![0u8; 2048];
+            let n = c.read(&mut buf).await.unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            let _ = c
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await;
+            req
+        }
+
+        for (name, mk, want_gzip) in [
+            ("emby", emby_client as fn() -> reqwest::Client, true),
+            ("第三方 API", client as fn() -> reqwest::Client, true),
+            ("预取", preload_client as fn() -> reqwest::Client, false),
+        ] {
+            let l = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let port = l.local_addr().unwrap().port();
+            let srv = tokio::spawn(capture(l));
+            let _ = mk().get(format!("http://127.0.0.1:{port}/x")).send().await;
+            let req = srv.await.unwrap().to_ascii_lowercase();
+
+            let ae = req
+                .lines()
+                .find(|l| l.starts_with("accept-encoding:"))
+                .unwrap_or("")
+                .to_string();
+            if want_gzip {
+                assert!(
+                    ae.contains("gzip"),
+                    "{name} 客户端没协商压缩 —— Emby 的列表 JSON 会全程明文传。实到请求头:\n{req}"
+                );
+            } else {
+                assert!(
+                    !ae.contains("gzip") && !ae.contains("br"),
+                    "{name} 客户端开了透明解压 —— Content-Length 会变成解压后长度,\
+                     预取代理按它算分段偏移会错位。实到:{ae:?}"
+                );
+            }
+        }
     }
 }

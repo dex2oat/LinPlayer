@@ -31,6 +31,8 @@ import PageBoundary from "./PageBoundary";
 
 type Props = {
   session: LoginResult;
+  /** 首屏落在哪一页。只连了网盘的用户没有 Emby 媒体库,首页是空的 → 直接进文件浏览。 */
+  initialPage?: PageId;
   /** 第二参 = 详情页版本选择器选中的 MediaSource id,必须一路透传到 play()。 */
   onPlay: (it: Item, mediaSourceId?: string | null) => void;
   onPlaySource: (entry: SourceEntry) => void;
@@ -47,6 +49,7 @@ type Props = {
    状态点从来没反映过现实。已删。真状态由 Sidebar 自己 probeAccounts() 探(草稿标注 3/25 三态点)。 */
 export default function Shell({
   session,
+  initialPage,
   onPlay,
   onPlaySource,
   onPlayDownload,
@@ -56,7 +59,7 @@ export default function Shell({
   onCloseSearch,
 }: Props) {
   const { theme, setTheme, toggle } = useTheme();
-  const [page, setPage] = useState<PageId>("home");
+  const [page, setPage] = useState<PageId>(initialPage ?? "home");
   const [collapsed, setCollapsed] = useState(false);
   /* 当前打开的插件整页界面(侧栏的插件入口 / 插件详情页的「打开」都写它)。
      插件被停用时这里会留着一个指向不存在贡献点的引用 —— PluginSlot 查不到就画空,

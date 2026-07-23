@@ -18,6 +18,7 @@ import {
   addSubtitle,
   applyPrefs,
   currentSession,
+  currentSource,
   danmakuAutoLoad,
   danmakuEpisodes,
   danmakuLoad,
@@ -209,6 +210,11 @@ const normHwdec = (h: string) =>
 export default function App() {
   const [booted, setBooted] = useState(false);
   const [session, setSession] = useState<LoginResult | null>(null);
+  /** 活跃的文件浏览型源(网盘/Stremio/插件源)。见下面 reloadEntry 的注释。 */
+  const [srcAcc, setSrcAcc] = useState<AccountInfo | null>(null);
+  /** 刚从登录闸口进来 —— 给主界面挂一次入场动画(见 ui.css 的 .app-root.entering)。 */
+  const [entering, setEntering] = useState(false);
+  const enterTimer = useRef<number | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
 
   const [playing, setPlaying] = useState<Item | null>(null);
@@ -216,6 +222,9 @@ export default function App() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [prefs, setPrefs2] = useState<Prefs>({ audio_lang: null, sub_lang: null, sub_enabled: true, detail_blur: 40 });
   const [seeking, setSeeking] = useState<number | null>(null);
+  /* 拖动中的值同时存一份 ref:提交动作挂在 window 上(见下面那个 effect),
+     而 window 监听器闭包里读到的 state 是注册那一刻的快照,只有 ref 是最新的。 */
+  const seekingRef = useRef<number | null>(null);
   const [panel, setPanel] = useState<Panel>(null);
   const [idle, setIdle] = useState(false);
   /* 视频出第一帧前:黑屏 + 加载动画,不露上一段残帧(用户 2026-07-16)。
@@ -223,6 +232,10 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const timer = useRef<number | null>(null);
   const tick = useRef(0);
+  /// status 轮询连续失败的拍数。见轮询里的 catch —— 用来把「一直读不到」说出来。
+  const statusFail = useRef(0);
+  /// status 的最新值。给那些**不该因为进度走动而重建**的回调用(键盘快捷键)。
+  const statusRef = useRef<Status>({ time: 0, duration: 0, paused: false, buffered: 0, eof: false });
   /** 本片是否已按 eof 收过尾。见轮询里的 eof 分支 —— 一片只准触发一次。 */
   const ended = useRef(false);
   const idleTimer = useRef<number | null>(null);
@@ -348,8 +361,7 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
-      const s = await currentSession().catch(() => null);
-      if (s) setSession(s);
+      await reloadEntry(); // 会话 + 活跃文件源一起拉,只拉一个会把网盘用户挡在门外
       getPrefs().then(setPrefs2).catch(() => {});
       /* 这里原本 invoke<DmConfig>("get_danmaku_config") 把 Vec<DanmakuServer> 读成单对象
          (api_url 恒 undefined),而弹幕源的增删改现已归设置页 —— 播放器不需要读它,直接删。
@@ -596,7 +608,10 @@ export default function App() {
       setStatus({ time: resume, duration: it.runtime_secs, paused: false, buffered: 0, eof: false });
       afterStart(it);
     } catch (e) {
-      alert(String(e));
+      /* ★ 原来是 alert():Windows 原生模态框,和整套暗色 UI 完全不搭,而且**阻塞**——
+         起播失败本就该继续留在原页面重试,弹个必须点确定的系统框只是添堵。
+         走自家 .toast(和其它所有失败提示同一条口径,见 fail()) */
+      say(`播放失败:${e}`);
     }
   }
 
@@ -618,7 +633,7 @@ export default function App() {
       setStatus({ time: resume, duration: 0, paused: false, buffered: 0, eof: false });
       afterStart(synth);
     } catch (e) {
-      alert(String(e));
+      say(`播放下载文件失败:${e}`);
     }
   }
 
@@ -632,7 +647,7 @@ export default function App() {
       setStatus({ time: start, duration: 0, paused: false, buffered: 0, eof: false });
       afterStart(synth);
     } catch (e) {
-      alert(String(e));
+      say(`播放失败:${e}`);
     }
   }
 
@@ -641,6 +656,29 @@ export default function App() {
     setSession(s);
   }
 
+  /** 会话 + 活跃文件源一起拉。**两个都要**:核层把它们分在两个命令里
+   *  (current_session 只认 Emby 型,current_source 只认文件浏览型),
+   *  只刷一个的话切到另一类账号时界面会停在上一类的状态上。 */
+  async function reloadEntry() {
+    const [s, a] = await Promise.all([
+      currentSession().catch(() => null),
+      currentSource().catch(() => null),
+    ]);
+    setSession(s);
+    setSrcAcc(a);
+  }
+
+  /* 登录闸口交棒:它自己先放 260ms 退场,这里接上主界面的入场。
+     两段拼起来才是一次完整的"进入" —— 只做一头会显得前半段有动画、后半段是硬切。
+     动画类挂一次就摘,不能常驻:留着的话之后每次重渲染都可能重放。 */
+  async function enterFromLogin() {
+    await reloadEntry();
+    setEntering(true);
+    if (enterTimer.current) window.clearTimeout(enterTimer.current);
+    enterTimer.current = window.setTimeout(() => setEntering(false), 420);
+  }
+  useEffect(() => () => { if (enterTimer.current) window.clearTimeout(enterTimer.current); }, []);
+
   async function togglePause() {
     const p = !status.paused;
     await setPause(p).catch(() => {});
@@ -648,6 +686,35 @@ export default function App() {
     reportProgress(status.time, p);
   }
   const doSeek = (t: number) => { const v = Math.max(0, Math.min(status.duration || t, t)); seekApi(v); setStatus((s) => ({ ...s, time: v })); };
+
+  /* ★ 进度条的「松手提交」必须挂在 **window** 上,不能挂在 <input> 自己身上。
+
+     老写法是 `<input ... onMouseUp={...}>`。拖着滑块移出进度条(移出播放器、移出
+     整个窗口都很常见)再松手时,input 收不到 mouseup —— `setSeeking(null)` 不执行,
+     `seeking` 就永远停在最后拖到的那个值。而 `curTime = seeking ?? status.time`,
+     于是进度条被**永久钉死**:画面照走、时间读数不动、条也不动。
+     这就是用户报的「正常播放进度不走」——它不是轮询坏了,是一次拖拽把界面锁死了。
+
+     pointerup 覆盖鼠标/触控/笔;pointercancel 管手势被系统接管;blur 管拖到一半
+     Alt-Tab 走人(那时连 pointerup 都不会来)。三条任意一条到了就收工。 */
+  useEffect(() => {
+    if (seeking == null) return;
+    const commit = () => {
+      const v = seekingRef.current;
+      seekingRef.current = null;
+      setSeeking(null);
+      if (v != null) seekApi(v).catch(() => {});
+    };
+    window.addEventListener("pointerup", commit);
+    window.addEventListener("pointercancel", commit);
+    window.addEventListener("blur", commit);
+    return () => {
+      window.removeEventListener("pointerup", commit);
+      window.removeEventListener("pointercancel", commit);
+      window.removeEventListener("blur", commit);
+    };
+    // 只关心「在不在拖」,不关心拖到哪 —— 拖动中的每一帧都重注册监听器纯属浪费。
+  }, [seeking == null]);
 
   /** pos 省略 = 用当前进度。**播完(eof)必须显式传 st.duration**:
       status 是 state,轮询回调里读到的是闭包快照,靠它落库会把进度记成播放前的旧值,
@@ -742,17 +809,21 @@ export default function App() {
       return;
     }
     tick.current = 0;
+    statusFail.current = 0;
     ended.current = false; // 换片必须解锁,否则第二部片播完不会自动收尾
     // 兜底:4s 后无论如何放行黑屏(暂停起播 st.time 不动,不能永远黑着)。
     const readyFallback = window.setTimeout(() => setReady(true), 4000);
     timer.current = window.setInterval(async () => {
       try {
         const st = await statusApi();
+        statusRef.current = st;
         setStatus(st);
         if (st.time > 0) setReady(true); // 时间开始走 = 已出画,撤黑屏
         timeSync.current = { base: st.time, stamp: performance.now(), paused: st.paused };
+        statusFail.current = 0;
         tick.current++;
-        if (tick.current % 10 === 0) reportProgress(st.time, st.paused);
+        // 轮询提到 250ms 后,每 20 拍仍是 5s 上报一次 —— 别跟着轮询一起加倍打服务器。
+        if (tick.current % 20 === 0) reportProgress(st.time, st.paused);
         sourceWatchdog(st.time);
         autoSkip(st.time);
         /* 正常播到结尾:走和用户手动点「返回」完全同一条路(closePlayer → stopPlayback),
@@ -765,8 +836,16 @@ export default function App() {
           // 已经是本片能拿到的最大进度;传 0 会把刚看完的片记成「没看」。
           await closePlayer(st.duration || st.time);
         }
-      } catch { /* 未就绪忽略 */ }
-    }, 500);
+      } catch (e) {
+        /* ★ 原来这里是空 catch(「未就绪忽略」)。起播头几拍确实会失败,忽略是对的 ——
+           但它同时把**持续失败**也一并咽了:status 一直取不到时 status.time 就永远停在
+           起播时塞进去的续播位置,界面表现为「进度条停在上次看到的地方一动不动」,
+           而画面在正常播。这类故障之所以只能靠猜,就是因为它一声不吭。
+           前 8 拍(2s)照旧静默,之后说一次。只说一次,不刷屏。 */
+        statusFail.current++;
+        if (statusFail.current === 8) say(`播放状态读取失败,进度条可能不准:${e}`);
+      }
+    }, 250);
     return () => { if (timer.current) window.clearInterval(timer.current); window.clearTimeout(readyFallback); };
   }, [playing]);
 
@@ -1111,8 +1190,10 @@ export default function App() {
 
       switch (e.key) {
         case " ": e.preventDefault(); togglePause(); break;
-        case "ArrowLeft": e.preventDefault(); doSeek(status.time - 10); break;
-        case "ArrowRight": e.preventDefault(); doSeek(status.time + 10); break;
+        // 位置从 ref 取,不从 state ——「快捷键要用到 status」是这个 effect 依赖 status
+        // 的唯一理由,而 status 每 250ms 换一个新对象,依赖它 = 每秒 4 次卸载重装监听器。
+        case "ArrowLeft": e.preventDefault(); doSeek(statusRef.current.time - 10); break;
+        case "ArrowRight": e.preventDefault(); doSeek(statusRef.current.time + 10); break;
         case "ArrowUp":
         case "ArrowDown": {
           e.preventDefault();
@@ -1140,7 +1221,10 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [playing, status, panel, vbar, ctx, prevEp, nextEp, volume, muted, speed]);
+    // ★ 依赖里**去掉了 status**:它每 250ms 就是一个新对象,留着等于每秒把
+    //   keydown 监听器卸载重装 4 次(还连带重建整个 onKey 闭包)。真正要用到的
+    //   只有 status.time,已改走 statusRef。其余几项都是低频状态,留着无妨。
+  }, [playing, panel, vbar, ctx, prevEp, nextEp, volume, muted, speed]);
 
   /* ★ danmaku_search 回的是 Vec<DanmakuSourceGroup>(一源一组),**不是**番剧数组:
      曾经这里按 {anime_id, anime_title, episodes} 收,渲染时 a.episodes.map() 直接
@@ -1170,7 +1254,12 @@ export default function App() {
   }
 
   if (!booted) return null;
-  if (!session) return (<><Titlebar /><LoginPage onLoggedIn={setSession} /></>);
+  /* ★ 进不进得了门,看的是「有没有活跃账号」,不是「有没有 Emby 会话」。
+     核层的 current_session 会 `.filter(|a| !a.is_file_browse())` —— 只连了网盘/Stremio/
+     插件源的用户在那边**永远返回 null**。老登录页只能连 Emby,所以这条一直没暴露;
+     新的登录闸口把六类源全摆出来了,再只判 session 就会出现「加成功了还是回登录页,
+     加一次挡一次」。 */
+  if (!session && !srcAcc) return (<><Titlebar /><LoginPage onLoggedIn={enterFromLogin} /></>);
 
   const audio = tracks.filter((t) => t.kind === "audio");
   const subs = tracks.filter((t) => t.kind === "sub");
@@ -1225,9 +1314,14 @@ export default function App() {
     <>
       {/* 自绘标题栏:播放时不渲染(让 mpv 全屏铺满,且不与播放器顶栏冲突)。 */}
       {!playing && <Titlebar />}
-      <div className={`app-root${playing ? " hidden" : ""}`}>
+      <div className={`app-root${playing ? " hidden" : ""}${entering ? " entering" : ""}`}>
         <Shell
-          session={session}
+          /* 只连了网盘/Stremio/插件源时没有 Emby 会话 —— 用活跃源顶一个上去。
+             Shell 只拿 session.server 当「当前服务器」的标识(侧栏高亮 + 切换判断),
+             token/user_id 那两条路对文件浏览型源本来就走不到(它们不打 Emby API)。 */
+          session={session ?? { server: srcAcc!.server, token: "", user_id: "", user_name: srcAcc!.name }}
+          /* 网盘源没有 Emby 媒体库,首页会是空的 —— 直接落文件浏览页。 */
+          initialPage={!session && srcAcc ? "netdisk" : undefined}
           onPlay={playItem}
           onPlaySource={playSource}
           onPlayDownload={playDownload}
@@ -1340,7 +1434,7 @@ export default function App() {
                   精度也如实说:章节图每章一张(通常几分钟一张),不是逐秒的 trickplay 雪碧图,
                   悬停到哪就取**不晚于该时间点**的那一张。 */}
               <div
-                className="p-scrub"
+                className={`p-scrub${seeking != null ? " dragging" : ""}`}
                 onMouseMove={(e) => {
                   const r = e.currentTarget.getBoundingClientRect();
                   const x = Math.max(0, Math.min(r.width, e.clientX - r.left));
@@ -1372,8 +1466,8 @@ export default function App() {
                 <input
                   type="range" min={0} max={Math.max(1, status.duration)} step={0.5}
                   value={curTime}
-                  onChange={(e) => setSeeking(Number(e.target.value))}
-                  onMouseUp={() => { if (seeking != null) { seekApi(seeking); setSeeking(null); } }}
+                  onChange={(e) => { const v = Number(e.target.value); seekingRef.current = v; setSeeking(v); }}
+                  // 提交在 window 的 pointerup/pointercancel/blur 上,见 doSeek 下面那个 effect。
                 />
               </div>
               <span className="p-tc">{fmtTime(status.duration)}</span>
@@ -1466,7 +1560,9 @@ export default function App() {
                       onClick={() => { if (ep.id !== playing.id) goEpisode(ep, "下"); }}
                     >
                       <span className="thumb">
-                        {ep.has_primary && <img src={posterUrl(session, ep.id, 120)} alt="" loading="lazy" />}
+                        {/* session 可能为空(只连了网盘的用户没有 Emby 会话)——
+                            分集缩略图是 Emby 的图,没会话时不取,留占位方块。 */}
+                        {ep.has_primary && session && <img src={posterUrl(session, ep.id, 120)} alt="" loading="lazy" />}
                       </span>
                       <span className="col">
                         <span className="t1">{ep.episode_no != null ? `E${ep.episode_no} ` : ""}{ep.name}</span>
