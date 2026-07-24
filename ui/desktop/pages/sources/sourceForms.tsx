@@ -199,8 +199,8 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
   const [baiduWay, setBaiduWay] = useState<"scan" | "cookie">("scan");
   // 天翼189 三路线:扫码 / 账密(手机号+密码) / 短信验证码。默认扫码。
   const [pan189Way, setPan189Way] = useState<"scan" | "password" | "sms">("scan");
-  // 移动云139 三路线:短信验证码 / 手机号密码 / 手动粘 Authorization。默认短信。
-  const [pan139Way, setPan139Way] = useState<"sms" | "password" | "manual">("sms");
+  // 移动云139 四路线:扫码 / 短信验证码 / 手机号密码 / 手动粘 Authorization。默认扫码。
+  const [pan139Way, setPan139Way] = useState<"scan" | "sms" | "password" | "manual">("scan");
   // 短信登录两步交互:发码拿到的 ctx + 用户填的验证码 + 发码冷却秒数。
   const [smsCtx, setSmsCtx] = useState<string | null>(null);
   const [smsCode, setSmsCode] = useState("");
@@ -461,13 +461,14 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
     const scanning =
       sel === "aliyundrive" ||
       (sel === "pan189" && pan189Way === "scan") ||
+      (sel === "pan139" && pan139Way === "scan") ||
       (sel === "baidu" && baiduWay === "scan");
     if (!scanning) {
       stopQrPoll();
       setQr(null);
       setQrMsg("");
     }
-  }, [sel, baiduWay, pan189Way, stopQrPoll]);
+  }, [sel, baiduWay, pan189Way, pan139Way, stopQrPoll]);
 
   /** 通用扫码:core 出码 → 每 2s 轮询 → confirmed 时把 credentials 塞进 source_login 落库。 */
   const startSourceScan = (kind: string) =>
@@ -691,7 +692,7 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
       ],
       pan139: [
         "移动云盘",
-        <>用<b>手机号 + 短信验证码</b>或<b>手机号 + 密码</b>登录；也可手动粘贴浏览器 Authorization。</>,
+        <>用<b>移动云盘 App</b> 扫码登录；也可用手机号 + 短信/密码，或手动粘贴 Authorization。</>,
       ],
       stremio: [
         "Stremio",
@@ -888,13 +889,15 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
           <>
             {nameField("我的移动云盘")}
             <div className="seg" style={{ marginBottom: 14 }}>
-              {(["sms", "password", "manual"] as const).map((w) => (
+              {(["scan", "sms", "password", "manual"] as const).map((w) => (
                 <span key={w} className={pan139Way === w ? "on" : ""} onClick={() => setPan139Way(w)}>
-                  {w === "sms" ? "短信验证码" : w === "password" ? "手机号密码" : "手动粘贴"}
+                  {w === "scan" ? "扫码登录" : w === "sms" ? "短信验证码" : w === "password" ? "手机号密码" : "手动粘贴"}
                 </span>
               ))}
             </div>
-            {pan139Way === "sms" ? (
+            {pan139Way === "scan" ? (
+              scanBox("pan139", "移动云盘 App")
+            ) : pan139Way === "sms" ? (
               smsFields("pan139")
             ) : pan139Way === "password" ? (
               pwdFields
@@ -1211,6 +1214,7 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
           </button>
         );
       case "pan139":
+        if (pan139Way === "scan") return null; // 扫码按钮在二维码旁
         if (pan139Way === "sms")
           return (
             <button

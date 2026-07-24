@@ -3184,6 +3184,7 @@ async fn source_qr_start(state: State<'_, AppState>, kind: SourceKind) -> Result
         SourceKind::BAIDU => baidu::qr_start(http).await,
         SourceKind::ALIYUNDRIVE => aliyundrive::qr_start(http).await,
         SourceKind::PAN189 => pan189::qr_start(http).await,
+        SourceKind::PAN139 => pan139::qr_start(http).await,
         _ => return Err("该源不支持扫码登录".to_string()),
     }
     .map_err(|e| e.message)
@@ -3201,6 +3202,7 @@ async fn source_qr_poll(
         SourceKind::BAIDU => baidu::qr_poll(http, &ctx).await,
         SourceKind::ALIYUNDRIVE => aliyundrive::qr_poll(http, &ctx).await,
         SourceKind::PAN189 => pan189::qr_poll(http, &ctx).await,
+        SourceKind::PAN139 => pan139::qr_poll(http, &ctx).await,
         _ => return Err("该源不支持扫码登录".to_string()),
     }
     .map_err(|e| e.message)

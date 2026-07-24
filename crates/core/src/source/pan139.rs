@@ -18,8 +18,8 @@
 // ponytail:扫码登录(thirdlogin type=5,dycpwd=qrcSessionID)139 也有,但二维码会话端点未抠全,
 //   暂不做;短信/密码已覆盖。token 过期(有 expireTime)无刷新端点,过期即重新登录。
 use super::{
-    is_video_file_name, sort_entries, MediaSourceBackend, ResolvedPlay, SourceEntry, SourceError,
-    SourceKind, SourceServer,
+    is_video_file_name, sort_entries, MediaSourceBackend, QrPoll, QrStart, ResolvedPlay,
+    SourceEntry, SourceError, SourceKind, SourceServer,
 };
 use md5::{Digest, Md5};
 use rand::RngCore;
@@ -384,6 +384,93 @@ async fn third_login(
     Ok(HashMap::from([("authorization".to_string(), auth)]))
 }
 
+// ---------- 扫码登录 ----------
+//
+// 逆向自 chunk-23496a60(登录组件 createLoginQrcode/queryQrcLoginResult):
+//   - sID 是**客户端自生成**的随机串(服务端不下发),二维码内容:
+//       https://yun.139.com/w/#/qrcLogin?sID={sID}&dID={设备id}&cType=9
+//   - 手机 App 扫这个 URL 确认后,PC 端反复 POST /thirdlogin(type=5→pintype=21,dycpwd=sID)拿 token。
+//   - 轮询状态 data.result.resultCode:200059548=已扫待确认(继续)、200059542=已失效、200059549=已取消。
+//   - 扫码登录的手机号从响应 encryptAccount(base64 的真实手机号)解出,再算 Authorization。
+
+const QR_URL_BASE: &str = "https://yun.139.com/w/#/qrcLogin";
+
+/// 出码:sID 客户端自生成,无需请求服务端。ctx 带 sID 回传给 qr_poll。
+pub async fn qr_start(_http: &reqwest::Client) -> Result<QrStart, SourceError> {
+    let sid = gen_rand_str();
+    let did = gen_rand_str();
+    let text = format!("{QR_URL_BASE}?sID={sid}&dID={did}&cType=9");
+    let image = super::qr_svg_data_uri(&text)?;
+    let ctx = json!({ "sID": sid }).to_string();
+    Ok(QrStart { image, ctx })
+}
+
+/// 轮询一次:POST /thirdlogin(type=5)。confirmed 时算出 Authorization 作凭据。
+pub async fn qr_poll(http: &reqwest::Client, ctx: &str) -> Result<QrPoll, SourceError> {
+    let c: Value =
+        serde_json::from_str(ctx).map_err(|_| SourceError::msg("扫码上下文损坏，请重新获取二维码"))?;
+    let sid = c["sID"].as_str().unwrap_or("");
+    if sid.is_empty() {
+        return Err(SourceError::msg("扫码上下文缺少会话 ID"));
+    }
+    let v = login_post(
+        http,
+        "/thirdlogin",
+        json!({
+            "msisdn": "",
+            "random": "",
+            "dycpwd": sid,
+            "cpid": CP_ID,
+            "clienttype": CLIENT_TYPE_139,
+            "version": VERSION_139,
+            "pintype": 21,
+            "secinfo": sha1_upper(&format!("fetion.com.cn:{sid}")),
+            "verType": 2,
+            "loginMode": "0",
+            "extInfo": {},
+        }),
+    )
+    .await?;
+    // 成功:token + encryptAccount(base64 手机号)算 Authorization。
+    let token = v["data"]["token"]
+        .as_str()
+        .or_else(|| v["token"].as_str())
+        .unwrap_or("");
+    if resp_ok(&v) && !token.is_empty() {
+        let phone = decode_encrypt_account(&v);
+        let auth = compute_authorization(&phone, token);
+        return Ok(QrPoll::Confirmed {
+            credentials: HashMap::from([("authorization".to_string(), auth)]),
+        });
+    }
+    // 状态码判定(resultCode 可能是字符串或数字)。
+    let code = match &v["data"]["result"]["resultCode"] {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    };
+    match code.as_str() {
+        "200059542" | "200059549" => Ok(QrPoll::Expired),
+        _ => Ok(QrPoll::Pending), // 200059548 已扫待确认 / 待扫 / 其它一律继续等
+    }
+}
+
+/// 从响应 encryptAccount(base64 的真实手机号)解出手机号;失败退回 simplifyAccount(脱敏,不理想但不空)。
+fn decode_encrypt_account(v: &Value) -> String {
+    use base64::Engine;
+    let enc = v["data"]["encryptAccount"].as_str().unwrap_or("");
+    if !enc.is_empty() {
+        if let Ok(b) = base64::engine::general_purpose::STANDARD.decode(enc) {
+            if let Ok(s) = String::from_utf8(b) {
+                if !s.is_empty() {
+                    return s;
+                }
+            }
+        }
+    }
+    v["data"]["simplifyAccount"].as_str().unwrap_or("").to_string()
+}
+
 // ---------- mcloud-sign ----------
 
 fn md5_hex(data: &[u8]) -> String {
@@ -498,6 +585,18 @@ mod tests {
         let b64 = a.strip_prefix("Basic ").unwrap();
         let raw = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
         assert_eq!(String::from_utf8(raw).unwrap(), "pc:13800138000:TOK123");
+    }
+
+    /// 扫码手机号从 encryptAccount(base64 真实手机号)解;缺失退回 simplifyAccount。
+    #[test]
+    fn decode_encrypt_account_from_base64() {
+        use base64::Engine;
+        let enc = base64::engine::general_purpose::STANDARD.encode("13800138000");
+        let v = json!({"data": {"encryptAccount": enc, "simplifyAccount": "138****8000"}});
+        assert_eq!(decode_encrypt_account(&v), "13800138000");
+        // 无 encryptAccount 时退脱敏号(不空即可,总比空手机号强)。
+        let v2 = json!({"data": {"simplifyAccount": "138****8000"}});
+        assert_eq!(decode_encrypt_account(&v2), "138****8000");
     }
 
     /// resp_ok:success 布尔优先,其次 code 的多种 0 写法;无 code 不算失败。
