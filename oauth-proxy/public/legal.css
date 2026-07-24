@@ -1,0 +1,17 @@
+/* 隐私政策 / 服务条款共用样式 */
+:root { color-scheme: dark; }
+body { font-family: -apple-system, "Segoe UI", "Noto Sans JP", "Noto Sans SC", Roboto, Arial, sans-serif;
+  background: #0f1115; color: #e8eaed; margin: 0; line-height: 1.75; }
+main { max-width: 760px; margin: 0 auto; padding: 48px 20px 80px; }
+h1 { font-size: 28px; margin: 0 0 4px; }
+h2 { font-size: 19px; margin: 32px 0 8px; color: #cdd3dc; }
+p, li { color: #b9c0cb; }
+li { margin: 4px 0; }
+code { background: #1b1e25; padding: 2px 6px; border-radius: 6px; font-size: 90%; }
+a { color: #5b8def; }
+.date { color: #7c8593; font-size: 14px; margin-top: 0; }
+.langs { display: flex; gap: 8px; margin-bottom: 28px; }
+.langs button { font: inherit; font-size: 14px; padding: 6px 14px; border-radius: 999px; cursor: pointer;
+  background: #1b1e25; color: #b9c0cb; border: 1px solid #2a2f3a; }
+.langs button.on { background: #5b8def; color: #fff; border-color: #5b8def; }
+.foot { margin-top: 48px; padding-top: 16px; border-top: 1px solid #23272f; font-size: 14px; color: #7c8593; }

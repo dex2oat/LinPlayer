@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LinPlayer 隐私政策 / プライバシーポリシー / Privacy Policy</title>
+<link rel="stylesheet" href="/legal.css" />
+</head>
+<body>
+<main>
+  <div class="langs">
+    <button data-l="zh">中文</button><button data-l="ja">日本語</button><button data-l="en">English</button>
+  </div>
+
+  <article lang="zh">
+    <h1>LinPlayer 隐私政策</h1>
+    <p class="date">生效日期：2026 年 7 月 24 日</p>
+
+    <h2>1. 概述</h2>
+    <p>LinPlayer（以下称“本应用”）是一款开源的媒体播放器，用于播放<strong>你自己的</strong>媒体服务器（Emby / Jellyfin 等）与<strong>你自己的</strong>云盘中的视频。本应用没有账号体系，也不运营任何存放用户内容的后端服务。你配置的服务器地址、账号密码与授权令牌只保存在你自己的设备上，开发者无法访问。</p>
+
+    <h2>2. 我们处理的信息</h2>
+    <ul>
+      <li><strong>仅保存在你设备本地</strong>（我们无法读取）：服务器地址与凭据、OAuth 令牌、播放进度与历史、收藏、封面与视频分片缓存、应用设置。</li>
+      <li><strong>崩溃与稳定性数据</strong>：应用崩溃时会通过 Sentry 上报错误堆栈、操作系统与应用版本，以及一个随机生成的匿名安装标识（用于统计活跃设备数）。其中不含你的文件名、账号、令牌或观看内容。</li>
+      <li><strong>我们不收集</strong>：姓名、邮箱、电话号码、精确位置、通讯录、广告标识符。</li>
+    </ul>
+
+    <h2>3. Google 用户数据（Google Drive）</h2>
+    <p>仅在你主动连接 Google Drive 时适用：</p>
+    <ul>
+      <li><strong>申请的权限</strong>：<code>https://www.googleapis.com/auth/drive.readonly</code>（只读）。</li>
+      <li><strong>用途</strong>：仅用于在应用内列出你的文件夹与视频文件、读取文件名 / 大小 / 时长 / 缩略图，并将视频流从 Google 服务器直接传输到你的设备上播放。本应用不会修改或删除你的 Drive 文件。</li>
+      <li><strong>数据流向</strong>：应用直接与 Google API 通信，文件内容不经过开发者的任何服务器；我们不存储、不备份、不分析你的 Drive 内容。</li>
+      <li><strong>令牌</strong>：访问令牌与刷新令牌只保存在你的设备本地。你可以随时在应用内断开连接，或前往 <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a> 撤销授权。</li>
+      <li><strong>Limited Use 声明</strong>：本应用对从 Google API 获得的信息的使用与传输，遵守 <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API 服务用户数据政策</a>，包括其中的 Limited Use 要求。我们不会将 Google 用户数据用于广告，不出售给第三方，不用于训练通用人工智能 / 机器学习模型，也不会由人工读取——除非获得你的明示同意、为安全目的所必需、为遵守法律所必需，或数据已被聚合并匿名化。</li>
+    </ul>
+
+    <h2>4. 第三方服务</h2>
+    <p>以下服务只在你主动启用后才会被连接，各自的隐私政策适用于其自身：你自建的 Emby / Jellyfin 服务器；Google Drive、OneDrive、Dropbox、阿里云盘、百度网盘、115、夸克等网盘；Trakt、Bangumi（同步观看记录）；弹弹play（弹幕）、TMDB（元数据）。</p>
+    <p>我们运行一个<strong>无状态的令牌交换代理</strong>（Cloudflare Pages），仅用于在 OAuth 流程中把授权码换成令牌，从而避免把应用密钥内置进客户端。该代理不保存令牌，也不记录你的文件或观看内容。</p>
+
+    <h2>5. 数据保留与删除</h2>
+    <ul>
+      <li>本地数据随应用卸载一并删除，也可在应用设置中清除缓存或移除账号。</li>
+      <li>Google 授权可随时按第 3 节所述撤销。</li>
+      <li>崩溃数据按 Sentry 的保留策略存放（默认最长 90 天）后自动删除。</li>
+      <li>其他数据删除请求可通过第 8 节的邮箱联系我们。</li>
+    </ul>
+
+    <h2>6. 儿童</h2>
+    <p>本应用不面向 13 岁以下儿童，也不会有意收集儿童的个人信息。</p>
+
+    <h2>7. 政策变更</h2>
+    <p>政策如有更新，我们会修改本页面内容与顶部的生效日期。重大变更会在应用内或项目发布说明中提示。</p>
+
+    <h2>8. 联系我们</h2>
+    <p>邮箱：<a href="mailto:ai@osow.net">ai@osow.net</a>　项目地址：<a href="https://github.com/zzzwannasleep/LinPlayer" target="_blank" rel="noopener">github.com/zzzwannasleep/LinPlayer</a></p>
+
+    <p class="foot"><a href="/terms/">服务条款</a> · <a href="/">首页</a></p>
+  </article>
+
+  <article lang="ja" hidden>
+    <h1>LinPlayer プライバシーポリシー</h1>
+    <p class="date">発効日：2026 年 7 月 24 日</p>
+
+    <h2>1. 概要</h2>
+    <p>LinPlayer（以下「本アプリ」）は、<strong>お客様ご自身の</strong>メディアサーバー（Emby / Jellyfin など）および<strong>お客様ご自身の</strong>クラウドストレージにある動画を再生するための、オープンソースのメディアプレーヤーです。本アプリにはアカウント機能がなく、ユーザーのコンテンツを保管するバックエンドも運用していません。設定したサーバーアドレス、認証情報、アクセストークンはお客様の端末内にのみ保存され、開発者がアクセスすることはできません。</p>
+
+    <h2>2. 取り扱う情報</h2>
+    <ul>
+      <li><strong>端末内にのみ保存されるもの</strong>（当方は読み取れません）：サーバーアドレスと認証情報、OAuth トークン、再生位置と履歴、お気に入り、サムネイルおよび動画セグメントのキャッシュ、アプリ設定。</li>
+      <li><strong>クラッシュ・安定性データ</strong>：クラッシュ発生時に Sentry を通じて、エラーのスタックトレース、OS とアプリのバージョン、ならびにランダム生成された匿名のインストール識別子（アクティブ端末数の集計用）を送信します。ファイル名、アカウント、トークン、視聴内容は含まれません。</li>
+      <li><strong>収集しないもの</strong>：氏名、メールアドレス、電話番号、正確な位置情報、連絡先、広告識別子。</li>
+    </ul>
+
+    <h2>3. Google ユーザーデータ（Google ドライブ）</h2>
+    <p>お客様が自ら Google ドライブを接続した場合にのみ適用されます。</p>
+    <ul>
+      <li><strong>要求するスコープ</strong>：<code>https://www.googleapis.com/auth/drive.readonly</code>（読み取り専用）。</li>
+      <li><strong>利用目的</strong>：アプリ内でフォルダと動画ファイルを一覧表示し、ファイル名・サイズ・再生時間・サムネイルを取得し、動画ストリームを Google のサーバーからお客様の端末へ直接転送して再生するためだけに使用します。本アプリがドライブ内のファイルを変更・削除することはありません。</li>
+      <li><strong>データの流れ</strong>：アプリは Google API と直接通信し、ファイルの内容が開発者のサーバーを経由することはありません。ドライブの内容を保存・バックアップ・分析することもありません。</li>
+      <li><strong>トークン</strong>：アクセストークンとリフレッシュトークンは端末内にのみ保存されます。アプリ内でいつでも接続を解除でき、<a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a> から認可を取り消すこともできます。</li>
+      <li><strong>限定的使用（Limited Use）に関する表明</strong>：本アプリが Google API から受け取る情報の使用および転送は、<a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API サービスのユーザーデータに関するポリシー</a>（限定的使用の要件を含む）を遵守します。Google ユーザーデータを広告に利用せず、第三者に販売せず、汎用的な AI / 機械学習モデルの学習にも使用しません。また、お客様の明示的な同意がある場合、セキュリティ上必要な場合、法令遵守のために必要な場合、または集計・匿名化されている場合を除き、人間が閲覧することはありません。</li>
+    </ul>
+
+    <h2>4. 第三者サービス</h2>
+    <p>以下のサービスは、お客様が有効化した場合にのみ接続されます。各サービスにはそれぞれのプライバシーポリシーが適用されます：お客様の Emby / Jellyfin サーバー、Google ドライブ・OneDrive・Dropbox・阿里云盘・百度网盘・115・夸克などのクラウドストレージ、Trakt・Bangumi（視聴履歴の同期）、弾弾play（コメント）、TMDB（メタデータ）。</p>
+    <p>当方は<strong>ステートレスなトークン交換プロキシ</strong>（Cloudflare Pages）を運用しています。これは OAuth の認可コードをトークンに交換し、アプリ側にクライアントシークレットを埋め込まずに済ませるためだけのものです。トークンを保存せず、ファイルや視聴内容を記録することもありません。</p>
+
+    <h2>5. データの保持と削除</h2>
+    <ul>
+      <li>端末内のデータはアプリのアンインストールで削除されます。設定画面からキャッシュの削除やアカウントの解除も可能です。</li>
+      <li>Google の認可は第 3 節の方法でいつでも取り消せます。</li>
+      <li>クラッシュデータは Sentry の保持ポリシー（既定で最長 90 日）に従って自動削除されます。</li>
+      <li>その他の削除のご依頼は第 8 節のメールアドレスまでご連絡ください。</li>
+    </ul>
+
+    <h2>6. 子どもについて</h2>
+    <p>本アプリは 13 歳未満の子どもを対象としておらず、子どもの個人情報を意図的に収集することはありません。</p>
+
+    <h2>7. 本ポリシーの変更</h2>
+    <p>本ポリシーを更新する場合は、本ページの内容と冒頭の発効日を改訂します。重要な変更はアプリ内またはリリースノートでお知らせします。</p>
+
+    <h2>8. お問い合わせ</h2>
+    <p>メール：<a href="mailto:ai@osow.net">ai@osow.net</a>　プロジェクト：<a href="https://github.com/zzzwannasleep/LinPlayer" target="_blank" rel="noopener">github.com/zzzwannasleep/LinPlayer</a></p>
+
+    <p class="foot"><a href="/terms/">利用規約</a> · <a href="/">ホーム</a></p>
+  </article>
+
+  <article lang="en" hidden>
+    <h1>LinPlayer Privacy Policy</h1>
+    <p class="date">Effective date: July 24, 2026</p>
+
+    <h2>1. Overview</h2>
+    <p>LinPlayer (the “App”) is an open-source media player for watching videos that live on <strong>your own</strong> media server (Emby / Jellyfin and similar) and <strong>your own</strong> cloud storage. The App has no user accounts and we operate no backend that stores your content. Server addresses, credentials and access tokens you configure are kept only on your device, where the developer cannot reach them.</p>
+
+    <h2>2. Information we handle</h2>
+    <ul>
+      <li><strong>Stored only on your device</strong> (we cannot read it): server addresses and credentials, OAuth tokens, playback positions and history, favorites, artwork and video-segment caches, app settings.</li>
+      <li><strong>Crash and stability data</strong>: when the App crashes it reports, via Sentry, the error stack trace, operating-system and app version, and a randomly generated anonymous install identifier used to count active devices. It contains no file names, accounts, tokens or viewing content.</li>
+      <li><strong>We do not collect</strong>: name, email address, phone number, precise location, contacts, or advertising identifiers.</li>
+    </ul>
+
+    <h2>3. Google user data (Google Drive)</h2>
+    <p>This section applies only if you choose to connect Google Drive.</p>
+    <ul>
+      <li><strong>Scope requested</strong>: <code>https://www.googleapis.com/auth/drive.readonly</code> (read-only).</li>
+      <li><strong>How it is used</strong>: solely to list your folders and video files in the App, read file name / size / duration / thumbnail, and stream video directly from Google’s servers to your device for playback. The App never modifies or deletes files in your Drive.</li>
+      <li><strong>Where it goes</strong>: the App talks to the Google API directly; file content never passes through any server operated by the developer. We do not store, back up or analyse your Drive content.</li>
+      <li><strong>Tokens</strong>: access and refresh tokens are stored only on your device. You can disconnect at any time inside the App, or revoke access at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>.</li>
+      <li><strong>Limited Use disclosure</strong>: LinPlayer’s use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API Services User Data Policy</a>, including the Limited Use requirements. We do not use Google user data for advertising, do not sell it to third parties, do not use it to develop, improve or train generalized AI/ML models, and do not allow humans to read it — except with your explicit consent, where necessary for security purposes, to comply with applicable law, or when the data is aggregated and anonymized.</li>
+    </ul>
+
+    <h2>4. Third-party services</h2>
+    <p>The following are contacted only after you enable them, and each is governed by its own privacy policy: your own Emby / Jellyfin server; cloud storage providers including Google Drive, OneDrive, Dropbox, Aliyun Drive, Baidu Netdisk, 115 and Quark; Trakt and Bangumi (watch-history sync); Dandanplay (danmaku comments) and TMDB (metadata).</p>
+    <p>We run a <strong>stateless token-exchange proxy</strong> (on Cloudflare Pages) whose only job is to exchange OAuth authorization codes for tokens so that client secrets need not be embedded in the App. It does not store tokens and does not log your files or viewing activity.</p>
+
+    <h2>5. Retention and deletion</h2>
+    <ul>
+      <li>Local data is removed when you uninstall the App; you can also clear caches and remove accounts in Settings.</li>
+      <li>Google authorization can be revoked at any time as described in section 3.</li>
+      <li>Crash data is deleted automatically according to Sentry’s retention policy (up to 90 days by default).</li>
+      <li>For any other deletion request, contact us at the address in section 8.</li>
+    </ul>
+
+    <h2>6. Children</h2>
+    <p>The App is not directed to children under 13 and we do not knowingly collect personal information from them.</p>
+
+    <h2>7. Changes to this policy</h2>
+    <p>If this policy changes we will update this page and the effective date above. Material changes will be announced in the App or in the project’s release notes.</p>
+
+    <h2>8. Contact</h2>
+    <p>Email: <a href="mailto:ai@osow.net">ai@osow.net</a> · Project: <a href="https://github.com/zzzwannasleep/LinPlayer" target="_blank" rel="noopener">github.com/zzzwannasleep/LinPlayer</a></p>
+
+    <p class="foot"><a href="/terms/">Terms of Service</a> · <a href="/">Home</a></p>
+  </article>
+</main>
+<script src="/legal.js"></script>
+</body>
+</html>
