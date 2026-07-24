@@ -17,8 +17,11 @@ import {
   quarkScanPoll,
   quarkScanStart,
   sourceLogin,
+  sourcePasswordLogin,
   sourceQrPoll,
   sourceQrStart,
+  sourceSmsLogin,
+  sourceSmsSend,
   startupDeepLink,
   testConnection,
   updateAccount,
@@ -194,6 +197,15 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
   const [stremio, setStremio] = useState(STREMIO_DEFAULT);
   // 百度双路线:扫码 / Cookie。默认扫码。
   const [baiduWay, setBaiduWay] = useState<"scan" | "cookie">("scan");
+  // 天翼189 三路线:扫码 / 账密(手机号+密码) / 短信验证码。默认扫码。
+  const [pan189Way, setPan189Way] = useState<"scan" | "password" | "sms">("scan");
+  // 移动云139 三路线:短信验证码 / 手机号密码 / 手动粘 Authorization。默认短信。
+  const [pan139Way, setPan139Way] = useState<"sms" | "password" | "manual">("sms");
+  // 短信登录两步交互:发码拿到的 ctx + 用户填的验证码 + 发码冷却秒数。
+  const [smsCtx, setSmsCtx] = useState<string | null>(null);
+  const [smsCode, setSmsCode] = useState("");
+  const [smsCooldown, setSmsCooldown] = useState(0);
+  const smsTimerRef = useRef<number | null>(null);
   const [batchText, setBatchText] = useState("");
   const [qrPayload, setQrPayload] = useState("");
   const [exportText, setExportText] = useState("");
@@ -447,13 +459,15 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
   useEffect(() => {
     // 只有扫码型源在扫码分支时才留轮询;切走一律停 + 清码。
     const scanning =
-      sel === "aliyundrive" || sel === "pan189" || (sel === "baidu" && baiduWay === "scan");
+      sel === "aliyundrive" ||
+      (sel === "pan189" && pan189Way === "scan") ||
+      (sel === "baidu" && baiduWay === "scan");
     if (!scanning) {
       stopQrPoll();
       setQr(null);
       setQrMsg("");
     }
-  }, [sel, baiduWay, stopQrPoll]);
+  }, [sel, baiduWay, pan189Way, stopQrPoll]);
 
   /** 通用扫码:core 出码 → 每 2s 轮询 → confirmed 时把 credentials 塞进 source_login 落库。 */
   const startSourceScan = (kind: string) =>
@@ -490,6 +504,49 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
     run(async () => {
       if (!cookie.trim()) throw new Error("请粘贴凭据");
       await sourceLogin(kind, "", "", "", cookie.trim());
+      await nameActiveSource();
+      onDone("netdisk");
+    });
+
+  /** 账密登录(天翼189):手机号+密码换令牌 → 令牌塞进 source_login 落库。 */
+  const submitPasswordLogin = (kind: string) =>
+    run(async () => {
+      if (!username.trim() || !password) throw new Error("请填写手机号和密码");
+      const creds = await sourcePasswordLogin(kind, username.trim(), password);
+      await sourceLogin(kind, "", "", "", null, creds);
+      await nameActiveSource();
+      onDone("netdisk");
+    });
+
+  const stopSmsTimer = useCallback(() => {
+    if (smsTimerRef.current != null) window.clearInterval(smsTimerRef.current);
+    smsTimerRef.current = null;
+  }, []);
+  useEffect(() => stopSmsTimer, [stopSmsTimer]);
+
+  /** 短信登录第一步:发验证码,拿 ctx,起 60s 冷却。 */
+  const doSmsSend = (kind: string) =>
+    run(async () => {
+      if (!username.trim()) throw new Error("请填写手机号");
+      const ctx = await sourceSmsSend(kind, username.trim());
+      setSmsCtx(ctx);
+      setSmsCooldown(60);
+      stopSmsTimer();
+      smsTimerRef.current = window.setInterval(() => {
+        setSmsCooldown((s) => {
+          if (s <= 1) stopSmsTimer();
+          return s - 1;
+        });
+      }, 1000);
+    });
+
+  /** 短信登录第二步:提交手机号+短信码 → 令牌塞进 source_login 落库。 */
+  const submitSmsLogin = (kind: string) =>
+    run(async () => {
+      if (!smsCtx) throw new Error("请先获取验证码");
+      if (!smsCode.trim()) throw new Error("请填写短信验证码");
+      const creds = await sourceSmsLogin(kind, smsCtx, smsCode.trim());
+      await sourceLogin(kind, "", "", "", null, creds);
       await nameActiveSource();
       onDone("netdisk");
     });
@@ -630,14 +687,11 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
       ],
       pan189: [
         "天翼云盘",
-        <>用<b>天翼云盘 App</b> 扫码登录，确认后自动完成。</>,
+        <>用<b>天翼云盘 App</b> 扫码登录；也可用<b>手机号 + 密码</b>直接登录。</>,
       ],
       pan139: [
         "移动云盘",
-        <>
-          浏览器登录 <b>yun.139.com</b> 后，从开发者工具 Network 里复制请求头
-          <b> Authorization</b>（Basic 开头那串）粘到下方。移动云无扫码登录接口。
-        </>,
+        <>用<b>手机号 + 短信验证码</b>或<b>手机号 + 密码</b>登录；也可手动粘贴浏览器 Authorization。</>,
       ],
       stremio: [
         "Stremio",
@@ -714,6 +768,71 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
       </div>
     );
 
+    // 手机号+密码子表单(天翼189 / 移动云139 共用)。
+    const pwdFields = (
+      <>
+        <p className="hint">用网盘账号的手机号和登录密码。若提示需要图形验证码，请改用其它登录方式或稍后再试。</p>
+        <div className="fld">
+          <label>手机号</label>
+          <input
+            className="field"
+            autoComplete="off"
+            placeholder="13800138000"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
+        </div>
+        <div className="fld">
+          <label>密码</label>
+          <input
+            className="field"
+            type="password"
+            autoComplete="off"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </div>
+      </>
+    );
+
+    // 手机号+短信验证码子表单(天翼189 / 移动云139 共用)。发码按 kind 分派。
+    const smsFields = (kind: string) => (
+      <>
+        <p className="hint">用注册手机号接收短信验证码登录。若提示需要图形验证码，请改用其它登录方式或稍后再试。</p>
+        <div className="fld">
+          <label>手机号</label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              className="field"
+              style={{ flex: 1 }}
+              autoComplete="off"
+              placeholder="13800138000"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+            <button
+              className="btn"
+              disabled={busy || smsCooldown > 0 || !username.trim()}
+              onClick={() => doSmsSend(kind)}
+            >
+              {smsCooldown > 0 ? `${smsCooldown}s` : "获取验证码"}
+            </button>
+          </div>
+        </div>
+        <div className="fld">
+          <label>短信验证码</label>
+          <input
+            className="field"
+            autoComplete="off"
+            inputMode="numeric"
+            placeholder="6 位验证码"
+            value={smsCode}
+            onChange={(e) => setSmsCode(e.target.value)}
+          />
+        </div>
+      </>
+    );
+
     switch (sel) {
       case "emby":
         return (
@@ -749,7 +868,18 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
         return (
           <>
             {nameField("我的天翼云盘")}
-            {scanBox("pan189", "天翼云盘 App")}
+            <div className="seg" style={{ marginBottom: 14 }}>
+              {(["scan", "password", "sms"] as const).map((w) => (
+                <span key={w} className={pan189Way === w ? "on" : ""} onClick={() => setPan189Way(w)}>
+                  {w === "scan" ? "扫码登录" : w === "password" ? "手机号密码" : "短信验证码"}
+                </span>
+              ))}
+            </div>
+            {pan189Way === "scan"
+              ? scanBox("pan189", "天翼云盘 App")
+              : pan189Way === "password"
+                ? pwdFields
+                : smsFields("pan189")}
           </>
         );
 
@@ -757,21 +887,36 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
         return (
           <>
             {nameField("我的移动云盘")}
-            <p className="hint">
-              移动云盘无扫码接口。浏览器登录 yun.139.com 后，从开发者工具 Network
-              里复制任一请求的 <b>Authorization</b> 头（Basic 开头那串）粘到下方。
-            </p>
-            <div className="fld">
-              <label>Authorization</label>
-              <textarea
-                className="field"
-                rows={4}
-                spellCheck={false}
-                placeholder="Basic MTA3MDE6..."
-                value={cookie}
-                onChange={(e) => setCookie(e.target.value)}
-              />
+            <div className="seg" style={{ marginBottom: 14 }}>
+              {(["sms", "password", "manual"] as const).map((w) => (
+                <span key={w} className={pan139Way === w ? "on" : ""} onClick={() => setPan139Way(w)}>
+                  {w === "sms" ? "短信验证码" : w === "password" ? "手机号密码" : "手动粘贴"}
+                </span>
+              ))}
             </div>
+            {pan139Way === "sms" ? (
+              smsFields("pan139")
+            ) : pan139Way === "password" ? (
+              pwdFields
+            ) : (
+              <>
+                <p className="hint">
+                  浏览器登录 yun.139.com 后，从开发者工具 Network 里复制任一请求的
+                  <b> Authorization</b> 头（Basic 开头那串）粘到下方。
+                </p>
+                <div className="fld">
+                  <label>Authorization</label>
+                  <textarea
+                    className="field"
+                    rows={4}
+                    spellCheck={false}
+                    placeholder="Basic MTA3MDE6..."
+                    value={cookie}
+                    onChange={(e) => setCookie(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
           </>
         );
 
@@ -1033,9 +1178,31 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
             {spin(label)}
           </button>
         );
-      // 阿里/天翼189:扫码那一路的按钮长在二维码旁边(见 fields),这里无主按钮。
+      // 阿里:扫码按钮长在二维码旁边(见 fields),这里无主按钮。
       case "aliyundrive":
+        return null;
+      // 天翼189:扫码那一路按钮在二维码旁;账密/短信两路需要底部主按钮。
       case "pan189":
+        if (pan189Way === "password")
+          return (
+            <button
+              className="btn primary big"
+              disabled={busy || !username.trim() || !password}
+              onClick={() => submitPasswordLogin("pan189")}
+            >
+              {spin(label)}
+            </button>
+          );
+        if (pan189Way === "sms")
+          return (
+            <button
+              className="btn primary big"
+              disabled={busy || !smsCtx || !smsCode.trim()}
+              onClick={() => submitSmsLogin("pan189")}
+            >
+              {spin(label)}
+            </button>
+          );
         return null;
       case "pan115":
         return (
@@ -1044,6 +1211,26 @@ export function useSourceForms({ onDone, exclude = [] }: Options) {
           </button>
         );
       case "pan139":
+        if (pan139Way === "sms")
+          return (
+            <button
+              className="btn primary big"
+              disabled={busy || !smsCtx || !smsCode.trim()}
+              onClick={() => submitSmsLogin("pan139")}
+            >
+              {spin(label)}
+            </button>
+          );
+        if (pan139Way === "password")
+          return (
+            <button
+              className="btn primary big"
+              disabled={busy || !username.trim() || !password}
+              onClick={() => submitPasswordLogin("pan139")}
+            >
+              {spin(label)}
+            </button>
+          );
         return (
           <button className="btn primary big" disabled={busy || !cookie.trim()} onClick={() => submitCookieSource("pan139")}>
             {spin(label)}

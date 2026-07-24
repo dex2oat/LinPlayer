@@ -875,6 +875,17 @@ export const sourceQrStart = (kind: string) => invoke<QrStart>("source_qr_start"
 export const sourceQrPoll = (kind: string, ctx: string) =>
   invoke<QrPoll>("source_qr_poll", { kind, ctx });
 
+/** 账密登录:手机号+密码换令牌,返回的凭据原样塞进 sourceLogin 的 extra 落库。目前仅 pan189。 */
+export const sourcePasswordLogin = (kind: string, username: string, password: string) =>
+  invoke<Record<string, string>>("source_password_login", { kind, username, password });
+
+/** 短信登录第一步:发验证码,返回 ctx 原样回传给 sourceSmsLogin。目前仅 pan189。 */
+export const sourceSmsSend = (kind: string, phone: string) =>
+  invoke<string>("source_sms_send", { kind, phone });
+/** 短信登录第二步:提交手机号+短信码,返回凭据塞进 sourceLogin 落库。 */
+export const sourceSmsLogin = (kind: string, ctx: string, code: string) =>
+  invoke<Record<string, string>>("source_sms_login", { kind, ctx, code });
+
 export const sourceListDir = (dirId: string | null) =>
   invoke<SourceEntry[]>("source_list_dir", { dirId });
 

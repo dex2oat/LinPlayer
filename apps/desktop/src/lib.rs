@@ -39,7 +39,7 @@ use linplayer_core::source::baidu::{self, BaiduBackend};
 use linplayer_core::source::feiniu::FeiniuBackend;
 use linplayer_core::source::openlist::OpenListBackend;
 use linplayer_core::source::pan115::Pan115Backend;
-use linplayer_core::source::pan139::Pan139Backend;
+use linplayer_core::source::pan139::{self, Pan139Backend};
 use linplayer_core::source::pan189::{self, Pan189Backend};
 use linplayer_core::source::quark::QuarkBackend;
 use linplayer_core::source::quark_tv;
@@ -3206,6 +3206,57 @@ async fn source_qr_poll(
     .map_err(|e| e.message)
 }
 
+/// 账密登录:手机号(或邮箱)+ 密码换取令牌。返回的 credentials 由前端塞进 source_login 落库。
+/// 目前仅天翼189 支持(开源里无短信登录,账密是可稳做的手机号登录路径)。
+#[tauri::command]
+async fn source_password_login(
+    state: State<'_, AppState>,
+    kind: SourceKind,
+    username: String,
+    password: String,
+) -> Result<HashMap<String, String>, String> {
+    let http = &state.http;
+    match kind.as_str() {
+        SourceKind::PAN189 => pan189::password_login(http, &username, &password).await,
+        SourceKind::PAN139 => pan139::password_login(http, &username, &password).await,
+        _ => return Err("该源不支持账密登录".to_string()),
+    }
+    .map_err(|e| e.message)
+}
+
+/// 短信登录第一步:发验证码。返回的 ctx 原样回传给 source_sms_login。天翼189 / 移动云139。
+#[tauri::command]
+async fn source_sms_send(
+    state: State<'_, AppState>,
+    kind: SourceKind,
+    phone: String,
+) -> Result<String, String> {
+    let http = &state.http;
+    match kind.as_str() {
+        SourceKind::PAN189 => pan189::sms_send(http, &phone).await,
+        SourceKind::PAN139 => pan139::sms_send(http, &phone).await,
+        _ => return Err("该源不支持短信登录".to_string()),
+    }
+    .map_err(|e| e.message)
+}
+
+/// 短信登录第二步:提交手机号+短信码。返回的 credentials 由前端塞进 source_login 落库。
+#[tauri::command]
+async fn source_sms_login(
+    state: State<'_, AppState>,
+    kind: SourceKind,
+    ctx: String,
+    code: String,
+) -> Result<HashMap<String, String>, String> {
+    let http = &state.http;
+    match kind.as_str() {
+        SourceKind::PAN189 => pan189::sms_login(http, &ctx, &code).await,
+        SourceKind::PAN139 => pan139::sms_login(http, &ctx, &code).await,
+        _ => return Err("该源不支持短信登录".to_string()),
+    }
+    .map_err(|e| e.message)
+}
+
 /// 后端轮换出的新凭据落盘 + 更新内存里的活跃源。
 ///
 /// 不做这件事的后果:阿里云盘/天翼189 的 refresh_token 是**一次性的**,刷新一次旧值当场作废。
@@ -5048,6 +5099,9 @@ pub fn run() {
             source_login,
             source_qr_start,
             source_qr_poll,
+            source_password_login,
+            source_sms_send,
+            source_sms_login,
             source_list_dir,
             source_search,
             source_play,

@@ -30,7 +30,7 @@ use linplayer_core::source::baidu::{self, BaiduBackend};
 use linplayer_core::source::feiniu::FeiniuBackend;
 use linplayer_core::source::openlist::OpenListBackend;
 use linplayer_core::source::pan115::Pan115Backend;
-use linplayer_core::source::pan139::Pan139Backend;
+use linplayer_core::source::pan139::{self, Pan139Backend};
 use linplayer_core::source::pan189::{self, Pan189Backend};
 use linplayer_core::source::quark::QuarkBackend;
 use linplayer_core::source::stremio::StremioBackend;
@@ -1543,6 +1543,56 @@ async fn source_qr_poll(
     .map_err(|e| e.message)
 }
 
+/// 账密登录:手机号+密码换令牌。与 `apps/desktop/src/lib.rs::source_password_login` 同构。
+#[tauri::command]
+async fn source_password_login(
+    state: State<'_, AppState>,
+    kind: SourceKind,
+    username: String,
+    password: String,
+) -> Result<HashMap<String, String>, String> {
+    let http = &state.http;
+    match kind.as_str() {
+        SourceKind::PAN189 => pan189::password_login(http, &username, &password).await,
+        SourceKind::PAN139 => pan139::password_login(http, &username, &password).await,
+        _ => return Err("该源不支持账密登录".to_string()),
+    }
+    .map_err(|e| e.message)
+}
+
+/// 短信登录第一步:发验证码。与 `apps/desktop/src/lib.rs::source_sms_send` 同构。
+#[tauri::command]
+async fn source_sms_send(
+    state: State<'_, AppState>,
+    kind: SourceKind,
+    phone: String,
+) -> Result<String, String> {
+    let http = &state.http;
+    match kind.as_str() {
+        SourceKind::PAN189 => pan189::sms_send(http, &phone).await,
+        SourceKind::PAN139 => pan139::sms_send(http, &phone).await,
+        _ => return Err("该源不支持短信登录".to_string()),
+    }
+    .map_err(|e| e.message)
+}
+
+/// 短信登录第二步:提交手机号+短信码。与 `apps/desktop/src/lib.rs::source_sms_login` 同构。
+#[tauri::command]
+async fn source_sms_login(
+    state: State<'_, AppState>,
+    kind: SourceKind,
+    ctx: String,
+    code: String,
+) -> Result<HashMap<String, String>, String> {
+    let http = &state.http;
+    match kind.as_str() {
+        SourceKind::PAN189 => pan189::sms_login(http, &ctx, &code).await,
+        SourceKind::PAN139 => pan139::sms_login(http, &ctx, &code).await,
+        _ => return Err("该源不支持短信登录".to_string()),
+    }
+    .map_err(|e| e.message)
+}
+
 /// 后端轮换出的新凭据落盘。与 `apps/desktop/src/lib.rs::persist_rotated` 同构 ——
 /// 少了它,一次性 refresh_token 的源(阿里云盘/天翼189/夸克扫码)重启后必掉登录且不报错。
 fn persist_rotated(
@@ -2151,6 +2201,9 @@ pub fn run() {
             source_login,
             source_qr_start,
             source_qr_poll,
+            source_password_login,
+            source_sms_send,
+            source_sms_login,
             source_list_dir,
             source_search,
             // --- 设置 / 数据 / 更新 ---
