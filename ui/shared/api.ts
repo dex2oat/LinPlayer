@@ -273,12 +273,11 @@ export type SourceKind =
   | "anirss"
   | "feiniu"
   | "stremio"
-  | "onedrive"
-  | "googledrive"
-  | "dropbox"
   | "aliyundrive"
   | "baidu"
   | "pan115"
+  | "pan189"
+  | "pan139"
   | (string & {});
 
 /** 连通状态三态。unknown = 还没探过(按灰显示),与 down「探过确实不通」同色不同义。 */
@@ -859,9 +858,22 @@ export const sourceLogin = (
   username: string,
   password: string,
   cookie: string | null,
-  /** 令牌系源用它带 refresh_token 之外的可选覆盖(oplist_api / oplist_driver_txt)。 */
+  /** 令牌/Cookie 系源用它带 refresh_token / cookie / authorization 等凭据(扫码确认后原样回传)。 */
   extra?: Record<string, string> | null,
 ) => invoke<void>("source_login", { kind, baseUrl, username, password, cookie, extra: extra ?? null });
+
+/** 扫码登录:出码。image 可直接当 `<img src>`,ctx 原样回传给 sourceQrPoll。 */
+export type QrStart = { image: string; ctx: string };
+/** 扫码登录:轮询结果。confirmed 时 credentials 原样塞进 sourceLogin 的 extra 落库。 */
+export type QrPoll =
+  | { state: "pending" }
+  | { state: "expired" }
+  | { state: "confirmed"; credentials: Record<string, string> };
+
+/** 只有扫码型源(baidu / aliyundrive / pan189)支持。 */
+export const sourceQrStart = (kind: string) => invoke<QrStart>("source_qr_start", { kind });
+export const sourceQrPoll = (kind: string, ctx: string) =>
+  invoke<QrPoll>("source_qr_poll", { kind, ctx });
 
 export const sourceListDir = (dirId: string | null) =>
   invoke<SourceEntry[]>("source_list_dir", { dirId });

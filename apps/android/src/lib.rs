@@ -24,18 +24,19 @@ use linplayer_core::config::{Account, AppConfig, Prefs};
 use linplayer_core::emby::{self, Item, LoginResult, Session};
 use linplayer_core::http;
 use linplayer_core::media::Track;
-use linplayer_core::source::aliyundrive::AliyunDriveBackend;
+use linplayer_core::source::aliyundrive::{self, AliyunDriveBackend};
 use linplayer_core::source::anirss::AniRssBackend;
-use linplayer_core::source::baidu::BaiduBackend;
-use linplayer_core::source::dropbox::DropboxBackend;
+use linplayer_core::source::baidu::{self, BaiduBackend};
 use linplayer_core::source::feiniu::FeiniuBackend;
-use linplayer_core::source::googledrive::GoogleDriveBackend;
-use linplayer_core::source::onedrive::OneDriveBackend;
 use linplayer_core::source::openlist::OpenListBackend;
 use linplayer_core::source::pan115::Pan115Backend;
+use linplayer_core::source::pan139::Pan139Backend;
+use linplayer_core::source::pan189::{self, Pan189Backend};
 use linplayer_core::source::quark::QuarkBackend;
 use linplayer_core::source::stremio::StremioBackend;
-use linplayer_core::source::{MediaSourceBackend, SourceEntry, SourceKind, SourceServer};
+use linplayer_core::source::{
+    MediaSourceBackend, QrPoll, QrStart, SourceEntry, SourceKind, SourceServer,
+};
 use linplayer_core::sync::{bangumi, trakt};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -1512,8 +1513,38 @@ fn source_backend(
         .ok_or_else(|| "该源类型暂未接入".to_string())
 }
 
+/// 扫码登录:出码。与 `apps/desktop/src/lib.rs::source_qr_start` 同构。
+#[tauri::command]
+async fn source_qr_start(state: State<'_, AppState>, kind: SourceKind) -> Result<QrStart, String> {
+    let http = &state.http;
+    match kind.as_str() {
+        SourceKind::BAIDU => baidu::qr_start(http).await,
+        SourceKind::ALIYUNDRIVE => aliyundrive::qr_start(http).await,
+        SourceKind::PAN189 => pan189::qr_start(http).await,
+        _ => return Err("该源不支持扫码登录".to_string()),
+    }
+    .map_err(|e| e.message)
+}
+
+/// 扫码登录:轮询一次。Confirmed 的 credentials 由前端塞进 source_login 的 extra 落库。
+#[tauri::command]
+async fn source_qr_poll(
+    state: State<'_, AppState>,
+    kind: SourceKind,
+    ctx: String,
+) -> Result<QrPoll, String> {
+    let http = &state.http;
+    match kind.as_str() {
+        SourceKind::BAIDU => baidu::qr_poll(http, &ctx).await,
+        SourceKind::ALIYUNDRIVE => aliyundrive::qr_poll(http, &ctx).await,
+        SourceKind::PAN189 => pan189::qr_poll(http, &ctx).await,
+        _ => return Err("该源不支持扫码登录".to_string()),
+    }
+    .map_err(|e| e.message)
+}
+
 /// 后端轮换出的新凭据落盘。与 `apps/desktop/src/lib.rs::persist_rotated` 同构 ——
-/// 少了它,一次性 refresh_token 的源(oplist 系/阿里云盘/夸克扫码)重启后必掉登录且不报错。
+/// 少了它,一次性 refresh_token 的源(阿里云盘/天翼189/夸克扫码)重启后必掉登录且不报错。
 fn persist_rotated(
     state: &State<'_, AppState>,
     kind: &SourceKind,
@@ -2027,14 +2058,13 @@ pub fn run() {
             source_backends.insert(SourceKind::quark(), Arc::new(QuarkBackend::new()));
             // 与 apps/desktop/src/lib.rs 的同名表必须逐条对齐,漏一条那一端就静默不可用。
             source_backends.insert(SourceKind::stremio(), Arc::new(StremioBackend::new()));
-            source_backends.insert(SourceKind::onedrive(), Arc::new(OneDriveBackend::new()));
-            source_backends
-                .insert(SourceKind::googledrive(), Arc::new(GoogleDriveBackend::new()));
-            source_backends.insert(SourceKind::dropbox(), Arc::new(DropboxBackend::new()));
+            // 国内网盘(扫码/Cookie 登录,不依赖任何在线令牌中继 —— oplist 已作废)。
             source_backends
                 .insert(SourceKind::aliyundrive(), Arc::new(AliyunDriveBackend::new()));
             source_backends.insert(SourceKind::baidu(), Arc::new(BaiduBackend::new()));
             source_backends.insert(SourceKind::pan115(), Arc::new(Pan115Backend::new()));
+            source_backends.insert(SourceKind::pan189(), Arc::new(Pan189Backend::new()));
+            source_backends.insert(SourceKind::pan139(), Arc::new(Pan139Backend::new()));
 
             // 有活跃账号 -> 用存盘凭据重建会话/源(重启免登)。Emby 与浏览型源互斥。
             let active = config.active_account();
@@ -2119,6 +2149,8 @@ pub fn run() {
             account_icon,
             // --- 源 ---
             source_login,
+            source_qr_start,
+            source_qr_poll,
             source_list_dir,
             source_search,
             // --- 设置 / 数据 / 更新 ---

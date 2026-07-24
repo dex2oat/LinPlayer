@@ -33,20 +33,21 @@ use linplayer_core::emby::{self, Item, LoginResult, PlaybackTarget, Session};
 use linplayer_core::http;
 use linplayer_core::media::{pick_tracks, Track};
 use linplayer_core::net::cf;
-use linplayer_core::source::aliyundrive::AliyunDriveBackend;
+use linplayer_core::source::aliyundrive::{self, AliyunDriveBackend};
 use linplayer_core::source::anirss::AniRssBackend;
-use linplayer_core::source::baidu::BaiduBackend;
-use linplayer_core::source::dropbox::DropboxBackend;
+use linplayer_core::source::baidu::{self, BaiduBackend};
 use linplayer_core::source::feiniu::FeiniuBackend;
-use linplayer_core::source::googledrive::GoogleDriveBackend;
-use linplayer_core::source::onedrive::OneDriveBackend;
 use linplayer_core::source::openlist::OpenListBackend;
 use linplayer_core::source::pan115::Pan115Backend;
+use linplayer_core::source::pan139::Pan139Backend;
+use linplayer_core::source::pan189::{self, Pan189Backend};
 use linplayer_core::source::quark::QuarkBackend;
 use linplayer_core::source::quark_tv;
 use linplayer_core::source::stremio::StremioBackend;
 use linplayer_core::source::plugin_source::PluginSourceBackend;
-use linplayer_core::source::{MediaSourceBackend, SourceEntry, SourceKind, SourceServer};
+use linplayer_core::source::{
+    MediaSourceBackend, QrPoll, QrStart, SourceEntry, SourceKind, SourceServer,
+};
 use mpv::{Player, Status};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::collections::HashMap;
@@ -3174,9 +3175,40 @@ async fn source_login(
     Ok(())
 }
 
+/// 扫码登录:出码。返回二维码(data URI 或图 URL)+ 轮询上下文。
+/// 只有扫码型源(百度/阿里/天翼189)支持;其余源用 source_login 表单登录。
+#[tauri::command]
+async fn source_qr_start(state: State<'_, AppState>, kind: SourceKind) -> Result<QrStart, String> {
+    let http = &state.http;
+    match kind.as_str() {
+        SourceKind::BAIDU => baidu::qr_start(http).await,
+        SourceKind::ALIYUNDRIVE => aliyundrive::qr_start(http).await,
+        SourceKind::PAN189 => pan189::qr_start(http).await,
+        _ => return Err("该源不支持扫码登录".to_string()),
+    }
+    .map_err(|e| e.message)
+}
+
+/// 扫码登录:轮询一次。Confirmed 时返回的 credentials 由前端原样塞进 source_login 的 extra 落库。
+#[tauri::command]
+async fn source_qr_poll(
+    state: State<'_, AppState>,
+    kind: SourceKind,
+    ctx: String,
+) -> Result<QrPoll, String> {
+    let http = &state.http;
+    match kind.as_str() {
+        SourceKind::BAIDU => baidu::qr_poll(http, &ctx).await,
+        SourceKind::ALIYUNDRIVE => aliyundrive::qr_poll(http, &ctx).await,
+        SourceKind::PAN189 => pan189::qr_poll(http, &ctx).await,
+        _ => return Err("该源不支持扫码登录".to_string()),
+    }
+    .map_err(|e| e.message)
+}
+
 /// 后端轮换出的新凭据落盘 + 更新内存里的活跃源。
 ///
-/// 不做这件事的后果:oplist 系与阿里云盘的 refresh_token 是**一次性的**,刷新一次旧值当场作废。
+/// 不做这件事的后果:阿里云盘/天翼189 的 refresh_token 是**一次性的**,刷新一次旧值当场作废。
 /// 会话内因为有内存缓存看不出问题,一重启就拿着死 token 去刷 —— 表现为「用得好好的,
 /// 重开就要重新授权」,而且不会报任何错。夸克扫码登录此前就欠着这一笔。
 fn persist_rotated(
@@ -4773,14 +4805,14 @@ pub fn run() {
     // ★ 这张表安卓侧(apps/android/src/lib.rs)有一份**独立的拷贝**。只加这边,
     //   安卓上的表现是「源加得进去、点进去报『该源类型暂未接入』」,而且编译全绿。
     source_backends.insert(SourceKind::stremio(), Arc::new(StremioBackend::new()));
-    // oplist 令牌系(四家):令牌走 api.oplist.org,接口全是各家官方有文档的 API。
-    source_backends.insert(SourceKind::onedrive(), Arc::new(OneDriveBackend::new()));
-    source_backends.insert(SourceKind::googledrive(), Arc::new(GoogleDriveBackend::new()));
-    source_backends.insert(SourceKind::dropbox(), Arc::new(DropboxBackend::new()));
+    // 国内网盘(全部扫码/Cookie 登录,不依赖任何在线令牌中继 —— oplist 已作废):
+    //   阿里=扫码→网页版 API + secp256k1 签名;百度=扫码→BDUSS Cookie;
+    //   115=Cookie + 私有编解码;天翼189=扫码→会话签名;移动云139=粘贴 Authorization + mcloud-sign。
     source_backends.insert(SourceKind::aliyundrive(), Arc::new(AliyunDriveBackend::new()));
-    // 百度双路线(令牌/Cookie),115 走 Cookie + 私有编解码。
     source_backends.insert(SourceKind::baidu(), Arc::new(BaiduBackend::new()));
     source_backends.insert(SourceKind::pan115(), Arc::new(Pan115Backend::new()));
+    source_backends.insert(SourceKind::pan189(), Arc::new(Pan189Backend::new()));
+    source_backends.insert(SourceKind::pan139(), Arc::new(Pan139Backend::new()));
 
     // 有活跃账号 -> 用存盘凭据重建会话/源(重启免登)。
     // 活跃的是 Emby 就装 session,是浏览型源就装 source —— 两者互斥,别同时留着。
@@ -5014,6 +5046,8 @@ pub fn run() {
             check_update,
             download_and_apply_update,
             source_login,
+            source_qr_start,
+            source_qr_poll,
             source_list_dir,
             source_search,
             source_play,

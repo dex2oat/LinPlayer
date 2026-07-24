@@ -6,14 +6,12 @@ use std::collections::HashMap;
 pub mod aliyundrive;
 pub mod anirss;
 pub mod baidu;
-pub mod dropbox;
 pub mod feiniu;
-pub mod googledrive;
-pub mod onedrive;
 pub mod openlist;
-pub mod oplist;
 pub mod pan115;
 pub mod pan115_crypto;
+pub mod pan139;
+pub mod pan189;
 pub mod plugin_source;
 pub mod quark;
 pub mod quark_tv;
@@ -44,12 +42,11 @@ impl SourceKind {
     pub const ANIRSS: &'static str = "anirss";
     pub const FEINIU: &'static str = "feiniu";
     pub const STREMIO: &'static str = "stremio";
-    pub const ONEDRIVE: &'static str = "onedrive";
-    pub const GOOGLEDRIVE: &'static str = "googledrive";
-    pub const DROPBOX: &'static str = "dropbox";
     pub const ALIYUNDRIVE: &'static str = "aliyundrive";
     pub const BAIDU: &'static str = "baidu";
     pub const PAN115: &'static str = "pan115";
+    pub const PAN189: &'static str = "pan189";
+    pub const PAN139: &'static str = "pan139";
 
     /// 插件源键前缀。插件贡献的源统一形如 `plugin:com.example.foo/mysrc`。
     const PLUGIN_PREFIX: &'static str = "plugin:";
@@ -58,8 +55,8 @@ impl SourceKind {
     pub const BUILTIN: &'static [&'static str] = &[
         Self::EMBY, Self::OPENLIST, Self::QUARK,
         Self::ANIRSS, Self::FEINIU, Self::STREMIO,
-        Self::ONEDRIVE, Self::GOOGLEDRIVE, Self::DROPBOX,
         Self::ALIYUNDRIVE, Self::BAIDU, Self::PAN115,
+        Self::PAN189, Self::PAN139,
     ];
 
     pub fn is_builtin(&self) -> bool {
@@ -91,15 +88,6 @@ impl SourceKind {
     pub fn stremio() -> Self {
         Self::new(Self::STREMIO)
     }
-    pub fn onedrive() -> Self {
-        Self::new(Self::ONEDRIVE)
-    }
-    pub fn googledrive() -> Self {
-        Self::new(Self::GOOGLEDRIVE)
-    }
-    pub fn dropbox() -> Self {
-        Self::new(Self::DROPBOX)
-    }
     pub fn aliyundrive() -> Self {
         Self::new(Self::ALIYUNDRIVE)
     }
@@ -108,6 +96,12 @@ impl SourceKind {
     }
     pub fn pan115() -> Self {
         Self::new(Self::PAN115)
+    }
+    pub fn pan189() -> Self {
+        Self::new(Self::PAN189)
+    }
+    pub fn pan139() -> Self {
+        Self::new(Self::PAN139)
     }
 
     /// Emby 是唯一的非「文件浏览型」源,全仓多处靠它分叉。
@@ -216,6 +210,27 @@ impl ResolvedPlay {
             selected_quality_id: None,
         }
     }
+}
+
+/// 扫码登录:开始。返回给前端展示的二维码 + 一段不透明上下文(原样回传给 poll)。
+/// image 既可能是 data URI(自己画的二维码 PNG),也可能是一个图片 URL(网盘直接给图)。
+#[derive(Serialize, Clone)]
+pub struct QrStart {
+    pub image: String,
+    /// 轮询要用的上下文(uuid/sign/sid…),JSON 字符串,前端不解读只回传。
+    pub ctx: String,
+}
+
+/// 扫码登录:轮询一次的结果。
+#[derive(Serialize, Clone)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum QrPoll {
+    /// 还没扫 / 已扫未确认 —— 前端继续轮询。
+    Pending,
+    /// 已确认,凭据到手。这张 map 直接并进新建 SourceServer 的 extra 后落盘。
+    Confirmed { credentials: HashMap<String, String> },
+    /// 二维码过期,前端要重新 start。
+    Expired,
 }
 
 /// 源后端统一错误。is_auth=鉴权失效(UI 可引导重登)。
@@ -331,6 +346,24 @@ pub fn normalize_base_url(raw: &str) -> String {
     url
 }
 
+/// 把扫码内容(一段 URL/字符串)渲成二维码 SVG 的 data URI,前端 `<img src>` 直显。
+/// 阿里/189 的出码接口给的是待渲染字符串而非图片,统一在这里渲染,前端不必带 JS 二维码库。
+pub fn qr_svg_data_uri(content: &str) -> Result<String, SourceError> {
+    use qrcode::render::svg;
+    use qrcode::QrCode;
+    let code = QrCode::new(content.as_bytes())
+        .map_err(|e| SourceError::msg(format!("二维码生成失败: {e}")))?;
+    let svg = code
+        .render::<svg::Color>()
+        .min_dimensions(240, 240)
+        .quiet_zone(true)
+        .build();
+    Ok(format!(
+        "data:image/svg+xml;base64,{}",
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, svg.as_bytes())
+    ))
+}
+
 /// 视频扩展名判定(各后端列目录时标记 is_video)。
 pub fn is_video_file_name(name: &str) -> bool {
     match name.rsplit_once('.') {
@@ -385,12 +418,11 @@ mod tests {
             (SourceKind::anirss(), "anirss"),
             (SourceKind::feiniu(), "feiniu"),
             (SourceKind::stremio(), "stremio"),
-            (SourceKind::onedrive(), "onedrive"),
-            (SourceKind::googledrive(), "googledrive"),
-            (SourceKind::dropbox(), "dropbox"),
             (SourceKind::aliyundrive(), "aliyundrive"),
             (SourceKind::baidu(), "baidu"),
             (SourceKind::pan115(), "pan115"),
+            (SourceKind::pan189(), "pan189"),
+            (SourceKind::pan139(), "pan139"),
         ];
         // 这张表必须与 BUILTIN 一一对应 —— 新增源只加常量不补这里,
         // 下面的逐条断言就完全跑不到它,等于没有守卫。
@@ -462,14 +494,13 @@ mod tests {
             (SourceKind::anirss(), "Anirss"),
             (SourceKind::feiniu(), "Feiniu"),
             (SourceKind::stremio(), "Stremio"),
-            // 下面 6 个没有"老 enum"可兼容,但它们同样靠这个标签当**账号 id**
+            // 下面几个没有"老 enum"可兼容,但它们同样靠这个标签当**账号 id**
             // (base_url 为空的源),所以一旦发版就同样不能再改。
-            (SourceKind::onedrive(), "Onedrive"),
-            (SourceKind::googledrive(), "Googledrive"),
-            (SourceKind::dropbox(), "Dropbox"),
             (SourceKind::aliyundrive(), "Aliyundrive"),
             (SourceKind::baidu(), "Baidu"),
             (SourceKind::pan115(), "Pan115"),
+            (SourceKind::pan189(), "Pan189"),
+            (SourceKind::pan139(), "Pan139"),
         ];
         assert_eq!(expected.len(), SourceKind::BUILTIN.len(), "新增源未补进本表");
         for (k, old_debug) in expected {

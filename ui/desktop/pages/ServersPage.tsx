@@ -53,12 +53,11 @@ const KIND_LABEL: Record<string, string> = {
   anirss: "RSS",
   feiniu: "飞牛",
   stremio: "Stremio",
-  onedrive: "OneDrive",
-  googledrive: "Google Drive",
-  dropbox: "Dropbox",
   aliyundrive: "阿里云盘",
   baidu: "百度",
   pan115: "115",
+  pan189: "天翼云盘",
+  pan139: "移动云盘",
 };
 
 /** 插件贡献的源是 `plugin:<插件id>/<源id>`,不在上表里 —— 统一打「插件」。 */
